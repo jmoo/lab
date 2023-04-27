@@ -1,3 +1,4 @@
+# Config for the guake terminal for gnome
 { config, pkgs, lib, ... }:
 
 with lib;

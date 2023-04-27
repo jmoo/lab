@@ -18,16 +18,20 @@ with builtins;
   };
 
   home.packages = with pkgs; [
-    # utm
     weechat
-    iterm2
     git
     gh
     ubuntu_font_family
     btop
-    karabiner-elements
+
+    # reverse engineering tools
     binwalk
     radare2
+
+    # desktop apps
+    iterm2
+    karabiner-elements
+    # utm
   ];
 
   home.file.iterm2-plist = {

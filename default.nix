@@ -1,6 +1,5 @@
 # export home-manager config as regular nix expressions for tinkering
-# this repo lives as a submodule in a private git repo I use that has all of my projects on one place
-# that explains the relative paths to nowhere
+# This file references files in my monorepo that this repo is a submodule of
 
 with builtins;
 

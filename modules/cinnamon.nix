@@ -1,3 +1,4 @@
+# My cinnamon desktop configuration for linux mint machines
 { config, pkgs, lib, ... }:
 
 with lib;

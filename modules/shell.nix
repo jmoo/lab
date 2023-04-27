@@ -1,3 +1,5 @@
+# Shared shell config for bash and zsh so I don't have to configure them twice for simple things like
+# aliases and basic init scripts.
 { config, pkgs, lib, ... }:
 
 with lib;

@@ -1,3 +1,4 @@
+# AstroNvim config. Right now I'm just cloning the default config and making zero changes.
 { config, pkgs, lib, ... }:
 
 with lib;

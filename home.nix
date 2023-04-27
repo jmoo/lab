@@ -6,6 +6,7 @@ with lib;
 with builtins;
 
 {
+  # Make all of the custom submoules available to nodes
   imports = [
     ./modules/cinnamon.nix
     ./modules/karabiner.nix
@@ -19,7 +20,6 @@ with builtins;
 
   home.stateVersion = mkDefault "22.11";
 
-  # Packages
   home.packages = with pkgs; [ jq yq nixfmt ];
 
   programs.home-manager.enable = mkDefault true;
