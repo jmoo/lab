@@ -5,6 +5,10 @@
 with lib;
 with builtins;
 
+let
+  youtube-dl = import ../packages/youtube-dl.nix { inherit pkgs lib; };
+in
+
 {
   imports = [ ../home.nix ];
 
@@ -23,6 +27,7 @@ with builtins;
     gh
     ubuntu_font_family
     btop
+    youtube-dl
 
     # reverse engineering tools
     binwalk
