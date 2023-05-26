@@ -101,6 +101,10 @@ in {
   };
 
   config.lab.shell.init = ''
+    if ! command -v nix > /dev/null 2> /dev/null; then
+      export PATH="$PATH:/nix/var/nix/profiles/default/bin"
+    fi
+
     mnx() {
       nix \
         --extra-experimental-features nix-command \
