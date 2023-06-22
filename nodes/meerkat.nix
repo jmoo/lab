@@ -37,6 +37,7 @@ in
     iterm2
     karabiner-elements
     # utm
+    # element-desktop
   ];
 
   home.file.iterm2-plist = {
