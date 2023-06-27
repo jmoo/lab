@@ -21,8 +21,7 @@ in (fetchTarball (with lock.nodes.home-manager.locked; {
       home = ./nodes/home.nix;
       falcon = ./nodes/falcon.nix;
       lynx = ./nodes/lynx.nix;
-      macaw = ./nodes/macaw.nix;
-      meerkat = ./nodes/meerkat.nix;
+      meerkat = ./nodes/meerkat/home.nix;
       mink = ./nodes/mink.nix;
     };
 }

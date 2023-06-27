@@ -14,6 +14,9 @@ with builtins;
     ./modules/guake.nix
     ./modules/nuphy75.nix
     ./modules/astronvim.nix
+    ./modules/sublime.nix
+    ./modules/youtube.nix
+    ./modules/iterm2.nix
   ];
 
   lab.shell.enable = mkDefault true;

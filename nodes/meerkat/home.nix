@@ -5,16 +5,17 @@
 with lib;
 with builtins;
 
-let
-  youtube-dl = import ../packages/youtube-dl.nix { inherit pkgs lib; };
-in
-
 {
-  imports = [ ../home.nix ];
+  imports = [ ../../home.nix ];
+
+  home.stateVersion = "23.05";
 
   lab.karabiner.enable = true;
   lab.nuphy75.enable = true;
   lab.astronvim.enable = true;
+  lab.sublime.enable = true;
+  lab.youtube.enable = true;
+  lab.iterm2.enable = true;
 
   lab.shell.aliases = {
     vi = "nvim";
@@ -27,24 +28,9 @@ in
     gh
     ubuntu_font_family
     btop
-    youtube-dl
-
-    # reverse engineering tools
     binwalk
     radare2
-
-    # desktop apps
-    iterm2
-    karabiner-elements
-    # utm
-    # element-desktop
   ];
-
-  home.file.iterm2-plist = {
-    executable = false;
-    source = ../dotfiles/iterm2.plist;
-    target = ".config/iterm2/com.googlecode.iterm2.plist";
-  };
 
   lab.shell.init = ''
     # NOTE: homebrew reorders your PATH! Make changes to path after homebrew init.
