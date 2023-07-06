@@ -48,6 +48,7 @@ in {
         (import ../packages/sublime-rust-analyzer.nix { inherit pkgs; })
         (import ../packages/sublime-typescript.nix { inherit pkgs; })
         (import ../packages/sublime-toml.nix { inherit pkgs; })
+        (import ../packages/sublime-sidebar-enhancements.nix { inherit pkgs; })
       ];
     };
 
@@ -121,7 +122,10 @@ in {
           installed_packages = map (package: replaceStrings [".sublime-package"] [""] package.pname) config.lab.sublime.packages;
         };
 
-        language-ids = { "source.nix" = "nix"; };
+        language-ids = { 
+          "source.nix" = "nix"; 
+          "flake.lock" = "JSON";
+        };
       };
     };
 

@@ -14,6 +14,7 @@ with builtins;
   lab.nuphy75.enable = true;
   lab.astronvim.enable = true;
   lab.sublime.enable = true;
+  lab.sublime-merge.enable = true;
   lab.youtube.enable = true;
   lab.iterm2.enable = true;
 

@@ -17,6 +17,7 @@ with builtins;
     ./modules/sublime.nix
     ./modules/youtube.nix
     ./modules/iterm2.nix
+    ./modules/sublime-merge.nix
   ];
 
   lab.shell.enable = mkDefault true;
