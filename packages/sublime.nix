@@ -4,16 +4,14 @@
 with builtins;
 with pkgs;
 
-if
-  stdenv.isDarwin
-then
+if stdenv.isDarwin then
   stdenvNoCC.mkDerivation {
     pname = "sublime-text";
     version = "4150";
 
     src = fetchzip {
       url = "https://download.sublimetext.com/sublime_text_build_4150_mac.zip";
-      sha256 = "sha256-IyePV9I3JCQOP2VAYsBwpzP26wLcdKEtjieqgeyFlk4=";
+      sha256 = "sha256-7Wkxc7FuQpRfVFpD2nwRo10ftQjfQ6aQVSO1F5WC2CE=";
     };
 
     nativeBuildInputs = [ makeWrapper ];

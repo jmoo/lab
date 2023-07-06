@@ -15,11 +15,7 @@ stdenvNoCC.mkDerivation {
     hash = "sha256-KzsA7SzA9Ye5NRN4eZZ6nzBlqireuF1wFd+AI7/Ifvg=";
   };
 
-  buildInputs = [
-    python3
-    pandoc
-    zip
-  ];
+  buildInputs = [ python3 pandoc zip ];
 
   buildPhase = ''
     runHook preBuild

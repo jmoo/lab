@@ -4,14 +4,10 @@ with builtins;
 with lib;
 
 {
-  options.lab.iterm2 = {
-    enable = mkEnableOption "iterm2";
-  };
+  options.lab.iterm2 = { enable = mkEnableOption "iterm2"; };
 
   config.home = mkIf config.lab.iterm2.enable {
-    packages = with pkgs; [
-      iterm2
-    ];
+    packages = with pkgs; [ iterm2 ];
 
     file.iterm2-plist = {
       executable = false;

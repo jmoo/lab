@@ -1,6 +1,6 @@
 # home-manager switch --flake ./lab/nodes/meerkat
 {
-  description = "Home Manager configuration";
+  description = "meerkat";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/release-23.05";
@@ -15,18 +15,17 @@
     let
       pkgs = import nixpkgs {
         system = "aarch64-darwin";
-
-        config = {
-          allowUnfree = true;
-        };
+        config = { allowUnfree = true; };
       };
     in {
-      homeConfigurations.jmoore= home-manager.lib.homeManagerConfiguration {
+      homeConfigurations.jmoore = home-manager.lib.homeManagerConfiguration {
         inherit pkgs;
 
-        modules = [
-          ./home.nix
-        ];
+        modules = [ ./home.nix ];
+      };
+
+      devShells.aarch64-darwin.default = pkgs.mkShell {
+        packages = with pkgs; [ nil nixfmt ];
       };
     };
 }
