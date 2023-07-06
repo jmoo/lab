@@ -4,7 +4,7 @@ with builtins;
 with pkgs;
 
 stdenvNoCC.mkDerivation {
-  pname = "SideBarEnhancements";
+  pname = "SideBarEnhancements.sublime-package";
   version = "5.0.49";
 
   src = pkgs.fetchFromGitHub {
