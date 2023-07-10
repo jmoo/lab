@@ -114,6 +114,7 @@ in {
           font_face = "";
           font_size = 13;
           save_on_focus_lost = true;
+          find_selected_text = true;
         };
 
         "Package Control" = {
