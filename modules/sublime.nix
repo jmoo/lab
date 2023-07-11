@@ -43,6 +43,7 @@ in {
       default = [
         (import ../packages/sublime-package-control.nix { inherit pkgs; })
         (import ../packages/sublime-lsp.nix { inherit pkgs; })
+        (import ../packages/sublime-bash.nix { inherit pkgs; })
         (import ../packages/sublime-nix.nix { inherit pkgs; })
         (import ../packages/sublime-copilot.nix { inherit pkgs; })
         (import ../packages/sublime-rust-analyzer.nix { inherit pkgs; })
@@ -103,7 +104,11 @@ in {
       default = {
         LSP = {
           clients = {
-            nix = { enabled = true; command = ["nil"]; selector = "source.nix"; };
+            nix = { 
+              enabled = true; 
+              command = ["${pkgs.nil}/bin/nil"]; 
+              selector = "source.nix"; 
+            };
           };
         };
 
@@ -123,9 +128,15 @@ in {
           installed_packages = map (package: replaceStrings [".sublime-package"] [""] package.pname) config.lab.sublime.packages;
         };
 
+        JSON = {
+          extensions = [
+            "flake.lock"
+            "package.lock"
+          ];
+        };
+        
         language-ids = { 
           "source.nix" = "nix"; 
-          "flake.lock" = "JSON";
         };
       };
     };
@@ -140,7 +151,7 @@ in {
   };
 
   config.home = mkIf config.lab.sublime.enable {
-    packages = [ config.lab.sublime.package ];
+    packages = [ config.lab.sublime.package pkgs.shellcheck ];
 
     file = 
       # Map package files
