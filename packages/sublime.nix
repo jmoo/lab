@@ -25,10 +25,6 @@ if stdenv.isDarwin then
 
       makeWrapper "$out/Applications/Sublime Text.app/Contents/MacOS/sublime_text" "$out/bin/sublime_text"
 
-      # 'sublime' will open a new sublime text instance inside of a nix shell
-      echo -e "#!/usr/bin/env bash\nnix develop -c sublime_text . &" > $out/bin/sublime
-      chmod +x $out/bin/sublime
-
       runHook postInstall
     '';
   }

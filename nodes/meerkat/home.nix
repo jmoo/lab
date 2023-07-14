@@ -53,5 +53,9 @@ with builtins;
     # https://gist.github.com/Linerre/f11ad4a6a934dcf01ee8415c9457e7b2
     # https://github.com/NixOS/nix/issues/4169
     export PATH=~/.nix-profile/bin:$PATH
+
+    switch() {
+      home-manager switch --flake /Users/jmoore/Repos/homelab/lab/nodes/meerkat
+    }
   '';
 }

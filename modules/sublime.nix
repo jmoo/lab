@@ -19,6 +19,18 @@ let
       };
     }) attrs;
 
+  mkAdapter = name: def: (
+    if def.enable && config.lab.sublime.debugger.enable then
+     {
+       "sublime-debugger-${name}" = {
+         recursive = true;
+         source = def.package;
+         target = "${config.lab.sublime.userDirectory}/../SublimeDebugger/data/${name}";
+      };
+    } 
+    else {}
+  );
+
 in {
   options.lab.sublime = { 
     enable = mkEnableOption "sublime"; 
@@ -50,7 +62,104 @@ in {
         (import ../packages/sublime-typescript.nix { inherit pkgs; })
         (import ../packages/sublime-toml.nix { inherit pkgs; })
         (import ../packages/sublime-sidebar-enhancements.nix { inherit pkgs; })
+        (import ../packages/sublime-pylsp.nix { inherit pkgs; })
       ];
+    };
+
+    debugger = mkOption {
+      type = types.submodule {
+        options = {
+          enable = mkOption {
+            type = types.bool;
+          };
+          
+          package = mkOption {
+            type = types.package;
+          };
+
+          settings = mkOption {
+            type = types.submodule { freeformType = json; };
+          };
+
+          lldb = mkOption {
+            type = types.submodule {
+              options = {
+                enable = mkOption {
+                  type = types.bool;
+                };
+
+                package = mkOption {
+                  type = types.package;
+                };
+
+                settings = mkOption {
+                  type = types.submodule { freeformType = json; };
+                };
+              };
+            };
+          };
+          
+          python = mkOption {
+            type = types.submodule {
+              options = {
+                enable = mkOption {
+                  type = types.bool;
+                };
+
+                package = mkOption {
+                  type = types.package;
+                };
+
+                settings = mkOption {
+                  type = types.submodule { freeformType = json; };
+                };
+              };
+            };
+          };
+
+          js = mkOption {
+            type = types.submodule {
+              options = {
+                enable = mkOption {
+                  type = types.bool;
+                };
+
+                package = mkOption {
+                  type = types.package;
+                };
+
+                settings = mkOption {
+                  type = types.submodule { freeformType = json; };
+                };
+              };
+            };
+          };
+        };
+      };
+
+      default = {
+        enable = mkDefault true;
+        package = mkDefault (import ../packages/sublime-debugger.nix { inherit pkgs; });
+        settings = {};
+
+        lldb = {
+          enable = mkDefault true;
+          package = mkDefault (import ../packages/codelldb.nix { inherit pkgs; });
+          settings = {};
+        };
+
+        js = {
+          enable = mkDefault true;
+          package = mkDefault (import ../packages/vscode-js-debug.nix { inherit pkgs; });
+          settings = {};
+        };
+
+        python = {
+          enable = mkDefault true;
+          package = mkDefault (import ../packages/vscode-python-debug.nix { inherit pkgs; });
+          settings = {};
+        };
+      };
     };
 
     keymaps = mkOption {
@@ -125,13 +234,17 @@ in {
         "Package Control" = {
           bootstrapped = true;
           in_process_packages = [ ];
-          installed_packages = map (package: replaceStrings [".sublime-package"] [""] package.pname) config.lab.sublime.packages;
+          installed_packages = (
+            map (package: replaceStrings [".sublime-package"] [""] package.pname) config.lab.sublime.packages) ++ (
+              if config.lab.sublime.debugger.enable then [ "SublimeDebugger" ] else [ ]
+            );
         };
 
         JSON = {
           extensions = [
             "flake.lock"
             "package.lock"
+            ".sublime-project"
           ];
         };
         
@@ -161,7 +274,16 @@ in {
           source = package;
           target = "${config.lab.sublime.packageDirectory}/${package.pname}";
         }; 
-      }) config.lab.sublime.packages))
+      }) 
+
+        (config.lab.sublime.packages ++ (
+          if config.lab.sublime.debugger.enable then
+            [ config.lab.sublime.debugger.package ]
+          else 
+            []
+          )
+        ) 
+      ))
       
       # Map user files
       // (mapAttrs (name: value: { 
@@ -173,6 +295,33 @@ in {
       // (mkConfigFiles "sublime-keymap" config.lab.sublime.keymaps)
       // (mkConfigFiles "sublime-settings" config.lab.sublime.settings)
       // (mkConfigFiles "sublime-theme" config.lab.sublime.themes)
-      // (mkConfigFiles "sublime-color-scheme" config.lab.sublime.schemes);
+      // (mkConfigFiles "sublime-color-scheme" config.lab.sublime.schemes)
+
+      # Map debugger files
+      // (if config.lab.sublime.debugger.enable then {
+        sublime-debugger-adapter-config = {
+          source = ../dotfiles/sublime/debugger/sublime-package.json;
+          target = "${config.lab.sublime.userDirectory}/../SublimeDebugger/sublime-package.json";
+        };
+      
+        sublime-debugger-data-keep = {
+          source = ../dotfiles/sublime/debugger/.gitkeep;
+          target = "${config.lab.sublime.userDirectory}/../SublimeDebugger/data/.gitkeep";
+        };
+      
+        sublime-debugger-config = {
+          source = pkgs.writeTextFile {
+            name = "Debugger.sublime-settings";
+            text = toJSON config.lab.sublime.debugger.settings;
+          };
+      
+          target = "${config.lab.sublime.userDirectory}/Debugger.sublime-settings";
+        };
+      } else {})
+
+      # Map debugger adapters
+      // (mkAdapter "lldb" config.lab.sublime.debugger.lldb)
+      // (mkAdapter "python" config.lab.sublime.debugger.python)
+      // (mkAdapter "js" config.lab.sublime.debugger.js);
   };
 }

@@ -114,6 +114,39 @@ in {
           "path:$HOMELAB_ROOT/projects/mononix" -c mononix "$@"
     }
 
+    find-up () {
+      path=$(pwd)
+      while [[ "$path" != "" && ! -e "$path/$1" ]]; do
+        path=''${path%/*}
+      done
+      echo "$path"
+    }
+
+    sublime() {
+      local cmd="sublime_text"
+      local args=()
+
+      local flake="$(find-up flake.nix)"
+      local name="$(basename "$(pwd)")"
+
+      if [[ "$flake" != "" ]]; then
+        cmd="nix"
+        args=(develop -c sublime_text)
+      fi
+
+      if [ "$#" -gt 0 ]; then
+        args+=("$@")
+
+      elif [ -f ~/Repos/homelab/projects/"$name".sublime-project ]; then
+        args+=(--project ~/Repos/homelab/projects/"$name".sublime-project)
+
+      else
+        args+=(".")
+      fi
+
+      $cmd "''${args[@]}" &
+    }
+
     kill() {
       if [ "$#" -gt 0 ]; then
         command kill "$@";
