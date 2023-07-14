@@ -129,7 +129,7 @@ in {
       local flake="$(find-up flake.nix)"
       local name="$(basename "$(pwd)")"
 
-      if [[ "$flake" != "" ]]; then
+      if [[ "$#" = "0" ]] && [[ "$flake" != "" ]]; then
         cmd="nix"
         args=(develop -c sublime_text)
       fi
