@@ -183,6 +183,26 @@ in {
             command = "lsp_hover";
             args = { };
           }
+          {
+            keys = [ "home" ];
+            command = "move_to";
+            args = {to = "bol";};
+          }
+          { 
+            keys = [ "end" ];
+            command = "move_to";
+            args = {to = "eol";};
+          }
+          {
+            keys = [ "shift+home" ];
+            command = "move_to";
+            args = {to = "bol"; extend = true;};
+          }
+          { 
+            keys = [ "shift+end" ];
+            command = "move_to";
+            args = {to = "eol"; extend = true;};
+          }
         ];
       };
     };
