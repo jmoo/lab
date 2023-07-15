@@ -229,6 +229,7 @@ in {
           font_size = 13;
           save_on_focus_lost = true;
           find_selected_text = true;
+          translate_tabs_to_spaces = true;
         };
 
         "Package Control" = {
