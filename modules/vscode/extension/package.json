@@ -10,18 +10,28 @@
     "Themes"
   ],
   "contributes": {
+    "iconThemes": [
+      {
+        "id": "jmoo-dark-icons",
+        "label": "jmoo-dark-icons",
+        "path": "./themes/jmoo-dark-icons.json"
+      }
+    ],
     "themes": [
       {
+        "id": "jmoo-dark",
         "label": "jmoo-dark",
         "uiTheme": "vs-dark",
         "path": "./themes/jmoo-dark.json"
       },
       {
+        "id": "jmoo-template",
         "label": "jmoo-template",
         "uiTheme": "vs-dark",
         "path": "./themes/jmoo-template.json"
       },
       {
+        "id": "yarra-valley",
         "label": "yarra-valley",
         "uiTheme": "vs-dark",
         "path": "./themes/yarra-valley.json"

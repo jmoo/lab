@@ -78,6 +78,7 @@ with lib;
       "editor.lineHeight" = 1.2;
       "workbench.colorTheme" = "jmoo-dark";
       "editor.semanticHighlighting.enabled" = true;
+      "workbench.tree.indent" = 20;
     };
   };
 }
