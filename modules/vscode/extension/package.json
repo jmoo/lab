@@ -1,0 +1,31 @@
+{
+  "name": "jmoo-vscode",
+  "displayName": "jmoo-vscode",
+  "description": "",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.81.0"
+  },
+  "categories": [
+    "Themes"
+  ],
+  "contributes": {
+    "themes": [
+      {
+        "label": "jmoo-dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/jmoo-dark.json"
+      },
+      {
+        "label": "jmoo-template",
+        "uiTheme": "vs-dark",
+        "path": "./themes/jmoo-template.json"
+      },
+      {
+        "label": "yarra-valley",
+        "uiTheme": "vs-dark",
+        "path": "./themes/yarra-valley.json"
+      }
+    ]
+  }
+}

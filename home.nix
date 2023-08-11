@@ -18,6 +18,7 @@ with builtins;
     ./modules/youtube.nix
     ./modules/iterm2.nix
     ./modules/sublime-merge.nix
+    ./modules/vscode
   ];
 
   lab.shell.enable = mkDefault true;

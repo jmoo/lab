@@ -17,6 +17,7 @@ with builtins;
   lab.sublime-merge.enable = true;
   lab.youtube.enable = true;
   lab.iterm2.enable = true;
+  lab.vscode.enable = true;
 
   lab.shell.aliases = {
     vi = "nvim";
