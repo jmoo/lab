@@ -11,6 +11,9 @@
 		"workbench.colorTheme": "jmoo-dark",
 		"workbench.iconTheme": "jmoo-dark-icons",
 		"editor.semanticHighlighting.enabled": true,
-		"workbench.tree.indent": 20
+		"workbench.tree.indent": 20,
+		"workbench.colorCustomizations": {
+
+		}
 	}
 }

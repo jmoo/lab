@@ -77,8 +77,13 @@ with lib;
       "editor.fontSize" = 14;
       "editor.lineHeight" = 1.2;
       "workbench.colorTheme" = "jmoo-dark";
+      "workbench.iconTheme" = "jmoo-dark-icons";
       "editor.semanticHighlighting.enabled" = true;
       "workbench.tree.indent" = 20;
+      "editor.semanticTokenColorCustomizations" = {
+        enabled = true;
+        rules = { "*.mutable" = { "underline" = false; }; };
+      };
     };
   };
 }
