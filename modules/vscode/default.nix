@@ -3,14 +3,11 @@
 with builtins;
 with lib;
 
+let
+  customExtension = (import ./extension/default.nix { inherit pkgs; });
+in
 {
   options.lab.vscode = { enable = mkEnableOption "vscode"; };
-
-  config.programs.direnv = mkIf config.lab.vscode.enable {
-    enable = true;
-    enableBashIntegration = true;
-    nix-direnv.enable = true;
-  };
 
   config.home.packages = with pkgs;
     mkIf config.lab.vscode.enable [ nil nixfmt shellcheck direnv ];
@@ -20,7 +17,7 @@ with lib;
 
     extensions = with pkgs.vscode-extensions;
       [
-        (import ./extension/default.nix { inherit pkgs; })
+        customExtension
         mkhl.direnv
         rust-lang.rust-analyzer
         ms-python.python
@@ -28,8 +25,11 @@ with lib;
         ms-vscode-remote.remote-ssh
         mads-hartmann.bash-ide-vscode
         ms-azuretools.vscode-docker
-        mskelton.one-dark-theme
-      ] ++ (if pkgs.stdenv.isDarwin then [ ] else [ ms-vscode.cpptools ]);
+        usernamehw.errorlens
+      ] ++ (if pkgs.stdenv.isAarch64 then [ ] else [ 
+        vadimcn.vscode-lldb
+        ms-vscode.cpptools 
+      ]);
 
     keybindings = [
       {
