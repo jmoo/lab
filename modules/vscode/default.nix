@@ -39,6 +39,7 @@ in {
         dbaeumer.vscode-eslint
         esbenp.prettier-vscode
         streetsidesoftware.code-spell-checker
+        tamasfe.even-better-toml
       ] ++ (if pkgs.stdenv.isDarwin then [
         llvm-vs-code-extensions.vscode-clangd
         codelldbDarwin
