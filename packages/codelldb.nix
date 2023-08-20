@@ -20,6 +20,6 @@ stdenvNoCC.mkDerivation {
 
   installPhase = ''
   	mkdir -p $out
-  	cp -r ./* $out
+  	cp -r ./extension/* $out
   '';
 }

@@ -142,12 +142,6 @@ in {
         package = mkDefault (import ../packages/sublime-debugger.nix { inherit pkgs; });
         settings = {};
 
-        lldb = {
-          enable = mkDefault true;
-          package = mkDefault (import ../packages/codelldb.nix { inherit pkgs; });
-          settings = {};
-        };
-
         js = {
           enable = mkDefault true;
           package = mkDefault (import ../packages/vscode-js-debug.nix { inherit pkgs; });
@@ -341,7 +335,6 @@ in {
       } else {})
 
       # Map debugger adapters
-      // (mkAdapter "lldb" config.lab.sublime.debugger.lldb)
       // (mkAdapter "python" config.lab.sublime.debugger.python)
       // (mkAdapter "js" config.lab.sublime.debugger.js);
   };

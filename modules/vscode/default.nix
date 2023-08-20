@@ -5,8 +5,18 @@ with lib;
 
 let
   customExtension = (import ./extension/default.nix { inherit pkgs; });
-in
-{
+
+  codelldbDarwin = let
+    name = "codelldb";
+    publisher = "vadimcn";
+    version = "v1.9.2";
+
+  in pkgs.vscode-utils.buildVscodeMarketplaceExtension {
+    vsix = import ../../packages/codelldb.nix { inherit pkgs; };
+    mktplcRef = { inherit name version publisher; };
+  };
+
+in {
   options.lab.vscode = { enable = mkEnableOption "vscode"; };
 
   config.home.packages = with pkgs;
@@ -23,12 +33,18 @@ in
         ms-python.python
         jnoortheen.nix-ide
         ms-vscode-remote.remote-ssh
-        mads-hartmann.bash-ide-vscode
         ms-azuretools.vscode-docker
         usernamehw.errorlens
-      ] ++ (if pkgs.stdenv.isAarch64 then [ ] else [ 
+        timonwong.shellcheck
+        dbaeumer.vscode-eslint
+        esbenp.prettier-vscode
+        streetsidesoftware.code-spell-checker
+      ] ++ (if pkgs.stdenv.isDarwin then [
+        llvm-vs-code-extensions.vscode-clangd
+        codelldbDarwin
+      ] else [
         vadimcn.vscode-lldb
-        ms-vscode.cpptools 
+        ms-vscode.cpptools
       ]);
 
     keybindings = [
@@ -59,6 +75,7 @@ in
     ];
 
     userSettings = {
+      extensions.autoUpdate = false;
       git.openRepositoryInParentFolders = "always";
       workbench.activityBar.visible = false;
 
