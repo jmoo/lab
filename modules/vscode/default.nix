@@ -35,11 +35,11 @@ in {
         ms-vscode-remote.remote-ssh
         ms-azuretools.vscode-docker
         usernamehw.errorlens
-        timonwong.shellcheck
         dbaeumer.vscode-eslint
         esbenp.prettier-vscode
         streetsidesoftware.code-spell-checker
         tamasfe.even-better-toml
+        mads-hartmann.bash-ide-vscode
       ] ++ (if pkgs.stdenv.isDarwin then [
         llvm-vs-code-extensions.vscode-clangd
         codelldbDarwin
