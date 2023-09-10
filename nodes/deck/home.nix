@@ -14,6 +14,7 @@ with builtins;
 
   home.packages = with pkgs; [
     tailscale
+    vim
   ];
 
   lab.shell.init = ''
