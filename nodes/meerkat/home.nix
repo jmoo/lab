@@ -5,6 +5,17 @@
 with lib;
 with builtins;
 
+let
+  codelldbDarwin = let
+    name = "codelldb";
+    publisher = "vadimcn";
+    version = "v1.9.2";
+
+  in pkgs.vscode-utils.buildVscodeMarketplaceExtension {
+    vsix = import ../../packages/codelldb.nix { inherit pkgs; };
+    mktplcRef = { inherit name version publisher; };
+  };
+in
 {
   imports = [ ../../home.nix ];
 
@@ -18,6 +29,14 @@ with builtins;
   lab.youtube.enable = true;
   lab.iterm2.enable = true;
   lab.vscode.enable = true;
+
+  programs.vscode = {
+    extensions = with pkgs.vscode-extensions; [
+      bradlc.vscode-tailwindcss
+      llvm-vs-code-extensions.vscode-clangd
+      codelldbDarwin
+    ];
+  };
 
   lab.shell.aliases = {
     vi = "nvim";

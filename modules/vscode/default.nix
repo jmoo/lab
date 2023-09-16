@@ -5,17 +5,6 @@ with lib;
 
 let
   customExtension = (import ./extension/default.nix { inherit pkgs; });
-
-  codelldbDarwin = let
-    name = "codelldb";
-    publisher = "vadimcn";
-    version = "v1.9.2";
-
-  in pkgs.vscode-utils.buildVscodeMarketplaceExtension {
-    vsix = import ../../packages/codelldb.nix { inherit pkgs; };
-    mktplcRef = { inherit name version publisher; };
-  };
-
 in {
   options.lab.vscode = { enable = mkEnableOption "vscode"; };
 
@@ -40,13 +29,7 @@ in {
         streetsidesoftware.code-spell-checker
         tamasfe.even-better-toml
         mads-hartmann.bash-ide-vscode
-      ] ++ (if pkgs.stdenv.isDarwin then [
-        llvm-vs-code-extensions.vscode-clangd
-        codelldbDarwin
-      ] else [
-        vadimcn.vscode-lldb
-        ms-vscode.cpptools
-      ]);
+      ];
 
     keybindings = [
       {
