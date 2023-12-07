@@ -61,7 +61,7 @@ in {
     userSettings = {
       extensions.autoUpdate = false;
       git.openRepositoryInParentFolders = "always";
-      workbench.activityBar.visible = false;
+      workbench.activityBar.location = "hidden";
 
       terminal.integrated.fontFamily = "MesloLGS NF";
       terminal.integrated.defaultProfile.osx = "zsh";
