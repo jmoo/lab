@@ -11,8 +11,8 @@ stdenvNoCC.mkDerivation {
   src = fetchFromGitHub {
     owner = "ytdl-org";
     repo = "youtube-dl";
-    rev = "d1c6c5c4d618fa950813c0c71aede34a5ac851e9";
-    hash = "sha256-KzsA7SzA9Ye5NRN4eZZ6nzBlqireuF1wFd+AI7/Ifvg=";
+    rev = "be008e657d79832642e2158557c899249c9e31cd";
+    hash = "sha256-iUYWKrJtEQPlFPHkkY6kYyESRbDys6+HRGkiN8Dg1o4=";
   };
 
   buildInputs = [ python3 pandoc zip ];

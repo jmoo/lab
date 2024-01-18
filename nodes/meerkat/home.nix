@@ -51,6 +51,8 @@ in
     btop
     binwalk
     radare2
+    # openscad
+    obsidian
   ];
 
   lab.shell.init = ''
