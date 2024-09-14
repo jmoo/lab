@@ -1,0 +1,86 @@
+{
+  "nodes": {
+    "home-manager": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1726308872,
+        "narHash": "sha256-d4vwO5N4RsLnCY7k5tY9xbdYDWQsY3RDMeUoIa4ms2A=",
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "rev": "6c1a461a444e6ccb3f3e42bb627b510c3a722a57",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "type": "github"
+      }
+    },
+    "lab": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1705617629,
+        "narHash": "sha256-A+nSUp4G1gD4fU5q1iDA52wKGhgx9LIPOPpEaT104Wg=",
+        "owner": "jmoo",
+        "repo": "lab",
+        "rev": "cc4d7dde35a19a40fccc1fe950bc085efe7bdf9f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jmoo",
+        "repo": "lab",
+        "type": "github"
+      }
+    },
+    "nix-darwin": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1726188813,
+        "narHash": "sha256-Vop/VRi6uCiScg/Ic+YlwsdIrLabWUJc57dNczp0eBc=",
+        "owner": "lnl7",
+        "repo": "nix-darwin",
+        "rev": "21fe31f26473c180390cfa81e3ea81aca0204c80",
+        "type": "github"
+      },
+      "original": {
+        "owner": "lnl7",
+        "repo": "nix-darwin",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1726062873,
+        "narHash": "sha256-IiA3jfbR7K/B5+9byVi9BZGWTD4VSbWe8VLpp9B/iYk=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "4f807e8940284ad7925ebd0a0993d2a1791acb2f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "home-manager": "home-manager",
+        "lab": "lab",
+        "nix-darwin": "nix-darwin",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
