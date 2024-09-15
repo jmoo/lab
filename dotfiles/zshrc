@@ -1,9 +1,0 @@
-if [ -f /etc/zshrc ] && ! command -v nix > /dev/null 2> /dev/null; then
-  source /etc/zshrc
-fi
-
-if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
-  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
-fi
-
-. ~/.nix-profile/share/zsh-powerlevel10k/powerlevel9k.zsh-theme
