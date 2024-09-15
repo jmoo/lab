@@ -9,7 +9,7 @@
       imports = [ ../../modules/home.nix ];
 
       home = {
-        homeDirectory = "/Users/jmoore";
+        homeDirectory = "/home/jmoore";
         username = "jmoore";
       };
     };
@@ -19,6 +19,6 @@
 
   users.users.jmoore = {
     name = "jmoore";
-    home = "/Users/jmoore";
+    home = "/home/jmoore";
   };
 }
