@@ -1,5 +1,5 @@
 # Karabiner config for my nuphy75 keyboard
-{ config, pkgs, lib, ... }:
+{ config, lib, ... }:
 
 with lib;
 with builtins;

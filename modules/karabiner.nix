@@ -1,6 +1,3 @@
-# This is a general use karabiner module for home-manager
-# there isn't anything custom in here for my personal use
-# I'm using it in 'nuphy75' to configure my keyboard
 { config, pkgs, lib, ... }:
 
 with lib;

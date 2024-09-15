@@ -4,8 +4,7 @@
 with lib;
 with builtins;
 
-let mkTuple = lib.hm.gvariant.mkTuple;
-in {
+{
   options.lab.guake.enable = mkEnableOption "guake";
 
   config.home = mkIf config.lab.guake.enable {
