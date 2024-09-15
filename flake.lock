@@ -20,22 +20,6 @@
         "type": "github"
       }
     },
-    "lab": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1705617629,
-        "narHash": "sha256-A+nSUp4G1gD4fU5q1iDA52wKGhgx9LIPOPpEaT104Wg=",
-        "owner": "jmoo",
-        "repo": "lab",
-        "rev": "cc4d7dde35a19a40fccc1fe950bc085efe7bdf9f",
-        "type": "github"
-      },
-      "original": {
-        "owner": "jmoo",
-        "repo": "lab",
-        "type": "github"
-      }
-    },
     "nix-darwin": {
       "inputs": {
         "nixpkgs": [
@@ -75,7 +59,6 @@
     "root": {
       "inputs": {
         "home-manager": "home-manager",
-        "lab": "lab",
         "nix-darwin": "nix-darwin",
         "nixpkgs": "nixpkgs"
       }

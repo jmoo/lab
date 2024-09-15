@@ -1,7 +1,15 @@
 { pkgs, lib, ... }:
 with lib; {
-  imports =
-    [ ./iterm2.nix ./shell.nix ./vscode.nix ../pkgs/vscode-nix-extensions/home-manager.nix ];
+  imports = [
+    ./direnv.nix
+    ./guake.nix
+    ./iterm2.nix
+    ./karabiner.nix
+    ./nuphy75.nix
+    ./shell.nix
+    ./vscode.nix
+    ../pkgs/vscode-nix-extensions/home-manager.nix
+  ];
 
   programs.home-manager.enable = mkDefault true;
 

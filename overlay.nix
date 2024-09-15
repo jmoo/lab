@@ -1,13 +1,12 @@
 inputs: final: prev: {
+  powerlevel10k-media = final.callPackage ./pkgs/powerlevel10k-media.nix { };
+
   vscode-extensions = prev.vscode-extensions // {
-    mkExtension = config:
-      final.vscode-extensions.vscode-extend.override {
+    mkVscodeNixExtension = config:
+      final.vscode-extensions.vscode-nix-extensions.override {
         vscodeExtensionModule = config;
       };
 
-    nix-vscode-extend =
-      final.callPackage ./pkgs/nix-vscode-extend/package.nix { };
-
-    vscode-extend = final.callPackage ./pkgs/vscode-extend { };
+    vscode-nix-extensions = final.callPackage ./pkgs/vscode-nix-extensions { };
   };
 }

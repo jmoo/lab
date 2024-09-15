@@ -1,13 +1,11 @@
 # Adapted from https://github.com/NixOS/nixpkgs/blob/nixos-unstable/pkgs/data/fonts/powerline-fonts/default.nix
-{ lib, pkgs }:
+{ stdenvNoCC, fetchFromGitHub, ... }:
 
-with builtins;
-
-pkgs.stdenvNoCC.mkDerivation {
+stdenvNoCC.mkDerivation {
   pname = "powerlevel10k-media";
   version = "unstable-389133f";
 
-  src = pkgs.fetchFromGitHub {
+  src = fetchFromGitHub {
     owner = "romkatv";
     repo = "powerlevel10k-media";
     rev = "389133fb8c9a2347929a23702ce3039aacc46c3d";
