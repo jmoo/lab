@@ -1,4 +1,9 @@
-{ config, pkgs, lib, ... }:
+{
+  config,
+  pkgs,
+  lib,
+  ...
+}:
 
 with lib;
 with builtins;
@@ -9,35 +14,50 @@ let
 
   # Simple function for easy key mapping
   mapKey = from: to: {
-    from = if isString from then {
-      key_code = from;
-    } else if isAttrs from then
-      from
-    else
-      throw "Invalid type for mapKey -> from";
+    from =
+      if isString from then
+        {
+          key_code = from;
+        }
+      else if isAttrs from then
+        from
+      else
+        throw "Invalid type for mapKey -> from";
 
-    to = if isList to then
-      (map (x:
-        if isAttrs x then
-          x
-        else if isString to then {
-          key_code = x;
-        } else
-          throw "Invalid type for mapKey -> to [x]") to)
-    else if isAttrs to then
-      [ to ]
-    else if isString to then [{
-      key_code = to;
-    }] else
-      throw "Invalid type for mapKey -> to";
+    to =
+      if isList to then
+        (map (
+          x:
+          if isAttrs x then
+            x
+          else if isString to then
+            {
+              key_code = x;
+            }
+          else
+            throw "Invalid type for mapKey -> to [x]"
+        ) to)
+      else if isAttrs to then
+        [ to ]
+      else if isString to then
+        [
+          {
+            key_code = to;
+          }
+        ]
+      else
+        throw "Invalid type for mapKey -> to";
   };
 
-  mapDefaults = defaults:
-    mapAttrs (name: value:
+  mapDefaults =
+    defaults:
+    mapAttrs (
+      name: value:
       mkOption {
         type = types.anything;
         default = value;
-      }) defaults;
+      }
+    ) defaults;
 
   # Default karabiner settings
   defaults = {
@@ -60,7 +80,9 @@ let
         "mouse_motion_to_scroll.speed" = 100;
       };
 
-      parameters = { delay_milliseconds_before_open_device = 1000; };
+      parameters = {
+        delay_milliseconds_before_open_device = 1000;
+      };
 
       virtual_hid_keyboard = {
         country_code = 0;
@@ -86,20 +108,19 @@ let
   kdevice = types.submodule {
     freeformType = json;
 
-    options =
-      (mapDefaults (removeAttrs defaults.profile.device [ "identifiers" ])) // {
-        identifiers = mkOption {
-          type = types.submodule {
-            freeformType = json;
+    options = (mapDefaults (removeAttrs defaults.profile.device [ "identifiers" ])) // {
+      identifiers = mkOption {
+        type = types.submodule {
+          freeformType = json;
 
-            options = (mapDefaults defaults.profile.device.identifiers) // {
-              product_id = mkOption { type = types.anything; };
+          options = (mapDefaults defaults.profile.device.identifiers) // {
+            product_id = mkOption { type = types.anything; };
 
-              vendor_id = mkOption { type = types.anything; };
-            };
+            vendor_id = mkOption { type = types.anything; };
           };
         };
       };
+    };
   };
 
   # Schema for a karabiner profile
@@ -119,8 +140,7 @@ let
             parameters = mkOption {
               type = types.submodule {
                 freeformType = json;
-                options =
-                  mapDefaults defaults.profile.complex_modifications.parameters;
+                options = mapDefaults defaults.profile.complex_modifications.parameters;
               };
 
               default = { };
@@ -191,8 +211,11 @@ let
     };
   };
 
-in {
-  config.lib.karabiner = { inherit mapKey; };
+in
+{
+  config.lib.karabiner = {
+    inherit mapKey;
+  };
 
   options.lab.karabiner = {
     enable = mkOption {

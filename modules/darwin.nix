@@ -1,4 +1,5 @@
-{ pkgs, inputs, ... }: {
+{ pkgs, inputs, ... }:
+{
   imports = [
     inputs.home-manager.darwinModules.home-manager
     ./nix.nix

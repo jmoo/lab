@@ -1,4 +1,5 @@
-{ ... }: {
+{ ... }:
+{
   imports = [ ../../modules/nixos.nix ];
 
   home-manager = {

@@ -1,4 +1,5 @@
-{ pkgs, ... }: {
+{ pkgs, ... }:
+{
   imports = [ ../../modules/darwin.nix ];
 
   environment.systemPackages = with pkgs; [ iterm2 ];
@@ -15,7 +16,11 @@
         # karabiner.enable = true;
         nuphy75.enable = true;
         shell.enable = true;
-        vscode.enable = true;
+
+        vscode = {
+          enable = true;
+          nix.formatter = pkgs.nixfmt-rfc-style;
+        };
       };
 
       home = {

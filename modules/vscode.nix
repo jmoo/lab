@@ -1,4 +1,9 @@
-{ pkgs, lib, config, ... }:
+{
+  pkgs,
+  lib,
+  config,
+  ...
+}:
 
 with builtins;
 with lib;
@@ -7,12 +12,18 @@ with lib;
   options.lab.vscode = {
     enable = mkEnableOption "vscode";
 
-    python.enable = mkEnableOption "python" // { default = true; };
+    python.enable = mkEnableOption "python" // {
+      default = true;
+    };
 
-    rust.enable = mkEnableOption "rust" // { default = true; };
+    rust.enable = mkEnableOption "rust" // {
+      default = true;
+    };
 
     nix = {
-      enable = mkEnableOption "nix" // { default = true; };
+      enable = mkEnableOption "nix" // {
+        default = true;
+      };
 
       formatter = mkOption {
         type = types.package;
@@ -25,7 +36,9 @@ with lib;
       };
     };
 
-    webdev.enable = mkEnableOption "js/ts" // { default = true; };
+    webdev.enable = mkEnableOption "js/ts" // {
+      default = true;
+    };
   };
 
   config = mkIf config.lab.vscode.enable (mkMerge [
@@ -45,10 +58,12 @@ with lib;
         ];
 
         nixExtensions.default = {
-          paths = [{
-            from = ../resources/icons;
-            to = "./nix/store/icons";
-          }];
+          paths = [
+            {
+              from = ../resources/icons;
+              to = "./nix/store/icons";
+            }
+          ];
 
           themes = {
             jmoo-dark = {
@@ -76,15 +91,13 @@ with lib;
           {
             key = "alt+enter";
             command = "editor.action.quickFix";
-            when =
-              "editorHasCodeActionsProvider && textInputFocus && !editorReadonly";
+            when = "editorHasCodeActionsProvider && textInputFocus && !editorReadonly";
           }
 
           {
             key = "alt+cmd+l";
             command = "editor.action.formatDocument";
-            when =
-              "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
+            when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
           }
 
           {
@@ -96,7 +109,9 @@ with lib;
 
         userSettings = {
           extensions.autoUpdate = false;
-          files.associations = { "*.json" = "jsonc"; };
+          files.associations = {
+            "*.json" = "jsonc";
+          };
           git.openRepositoryInParentFolders = "always";
 
           "editor.fontFamily" = "Ubuntu Mono";
@@ -105,7 +120,11 @@ with lib;
           "editor.semanticHighlighting.enabled" = true;
           "editor.semanticTokenColorCustomizations" = {
             enabled = true;
-            rules = { "*.mutable" = { "underline" = false; }; };
+            rules = {
+              "*.mutable" = {
+                "underline" = false;
+              };
+            };
           };
 
           terminal.integrated.fontFamily = "MesloLGS NF";
@@ -124,14 +143,15 @@ with lib;
 
     # Rust
     (mkIf config.lab.vscode.rust.enable {
-      programs.vscode.extensions = with pkgs.vscode-extensions;
-        [ rust-lang.rust-analyzer ];
+      programs.vscode.extensions = with pkgs.vscode-extensions; [ rust-lang.rust-analyzer ];
     })
 
     # Nix
     (mkIf config.lab.vscode.nix.enable {
-      home.packages =
-        [ config.lab.vscode.nix.formatter config.lab.vscode.nix.lsp ];
+      home.packages = [
+        config.lab.vscode.nix.formatter
+        config.lab.vscode.nix.lsp
+      ];
 
       programs.vscode = {
         extensions = with pkgs.vscode-extensions; [ jnoortheen.nix-ide ];
@@ -139,8 +159,7 @@ with lib;
         userSettings = {
           nix.enableLanguageServer = true;
           nix.serverPath = config.lab.vscode.nix.lsp.meta.mainProgram;
-          nix.serverSettings.nil.formatting.command =
-            [ config.lab.vscode.nix.formatter.meta.mainProgram ];
+          nix.serverSettings.nil.formatting.command = [ config.lab.vscode.nix.formatter.meta.mainProgram ];
         };
       };
     })
@@ -155,8 +174,7 @@ with lib;
 
     # Webdev
     (mkIf config.lab.vscode.webdev.enable {
-      programs.vscode.extensions = with pkgs.vscode-extensions;
-        [ rust-lang.rust-analyzer ];
+      programs.vscode.extensions = with pkgs.vscode-extensions; [ rust-lang.rust-analyzer ];
     })
   ]);
 }

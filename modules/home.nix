@@ -1,5 +1,6 @@
 { pkgs, lib, ... }:
-with lib; {
+with lib;
+{
   imports = [
     ./direnv.nix
     ./guake.nix

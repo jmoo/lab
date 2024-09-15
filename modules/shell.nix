@@ -1,6 +1,11 @@
 # Shared shell config for bash and zsh so I don't have to configure them twice for simple things like
 # aliases and basic init scripts.
-{ config, pkgs, lib, ... }:
+{
+  config,
+  pkgs,
+  lib,
+  ...
+}:
 
 with lib;
 with builtins;
@@ -77,25 +82,30 @@ with builtins;
           ${config.lab.shell.init}
         '';
 
-        shellOptions = [
-          # Append to history file rather than replacing it.
-          "histappend"
+        shellOptions =
+          [
+            # Append to history file rather than replacing it.
+            "histappend"
 
-          # check the window size after each command and, if
-          # necessary, update the values of LINES and COLUMNS.
-          "checkwinsize"
+            # check the window size after each command and, if
+            # necessary, update the values of LINES and COLUMNS.
+            "checkwinsize"
 
-          # Extended globbing.
-          "extglob"
-        ] ++ (if pkgs.stdenv.isDarwin then
-          [ ]
-        else [
-          # Extended globbing.
-          "globstar"
+            # Extended globbing.
+            "extglob"
+          ]
+          ++ (
+            if pkgs.stdenv.isDarwin then
+              [ ]
+            else
+              [
+                # Extended globbing.
+                "globstar"
 
-          # Warn if closing shell with running jobs.
-          "checkjobs"
-        ]);
+                # Warn if closing shell with running jobs.
+                "checkjobs"
+              ]
+          );
       };
 
       zsh = {

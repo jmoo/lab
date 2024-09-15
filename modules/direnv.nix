@@ -1,5 +1,11 @@
-{ pkgs, lib, config, ... }:
-with lib; {
+{
+  pkgs,
+  lib,
+  config,
+  ...
+}:
+with lib;
+{
   options.lab.direnv.enable = mkEnableOption "Enable direnv";
 
   config = mkIf config.lab.direnv.enable {
