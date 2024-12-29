@@ -27,6 +27,7 @@
         homeDirectory = "/Users/jmoore";
         username = "jmoore";
         packages = with pkgs; [ spotify ];
+        stateVersion = mkDefault "24.05";
         shellAliases = {
           switch = "darwin-rebuild switch --flake /Users/jmoore/Repos/lab";
         };

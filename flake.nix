@@ -31,8 +31,22 @@
 
       formatter = nixpkgs.lib.mapAttrs (_: pkgs: pkgs.nixfmt-rfc-style) legacyPackages;
 
+      nixosConfigurations = {
+        lynx = nixpkgs.lib.nixosSystem {
+          system = "x86_64-linux";
+          specialArgs = {
+            inherit inputs;
+          };
+          modules = [
+            ./hosts/lynx
+            { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
+          ];
+        };
+      };
+
       nixosModules = {
         axolotl = import ./hosts/axolotl/default.nix;
+        lynx = import ./hosts/lynx/default.nix;
         default = import ./modules/nixos.nix;
       };
 

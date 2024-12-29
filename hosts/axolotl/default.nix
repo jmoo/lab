@@ -7,7 +7,6 @@
     useUserPackages = true;
     users.jmoore = _: {
       imports = [ ../../modules/home.nix ];
-
       home = {
         homeDirectory = "/home/jmoore";
         username = "jmoore";
