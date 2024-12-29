@@ -1,6 +1,6 @@
 { pkgs, ... }:
 {
-  imports = [ 
+  imports = [
     ../../modules/nixos.nix
     ./hardware.nix
   ];
@@ -16,6 +16,7 @@
     useUserPackages = true;
     users.jmoore = _: {
       imports = [ ../../modules/home.nix ];
+
       home = {
         homeDirectory = "/home/jmoore";
         username = "jmoore";
@@ -23,6 +24,17 @@
           switch = "nixos-rebuild switch --flake /home/jmoore/Repos/jmoo/lab#lynx";
         };
       };
+
+      lab = {
+        direnv.enable = true;
+        shell.enable = true;
+        vscode = {
+          enable = true;
+          nix.formatter = pkgs.nixfmt-rfc-style;
+        };
+      };
+
+      programs.yt-dlp.enable = true;
     };
   };
 
@@ -33,7 +45,10 @@
     home = "/home/jmoore";
     isNormalUser = true;
     description = "John Moore";
-    extraGroups = [ "networkmanager" "wheel" ];
+    extraGroups = [
+      "networkmanager"
+      "wheel"
+    ];
   };
 
   # Enable sound with pipewire.

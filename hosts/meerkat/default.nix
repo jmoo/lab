@@ -1,4 +1,5 @@
-{ pkgs, ... }:
+{ pkgs, lib, ... }:
+with lib;
 {
   imports = [ ../../modules/darwin.nix ];
 
