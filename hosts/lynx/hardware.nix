@@ -29,6 +29,11 @@
       fsType = "vfat";
       options = [ "fmask=0077" "dmask=0077" ];
     };
+
+    "/media/ssd1" = { 
+      device = "/dev/disk/by-uuid/d2380b2a-d2e4-48c9-a504-3ed0d9726f9a";
+      fsType = "ext4";
+    };
   };
 
   boot.initrd.luks.devices = {

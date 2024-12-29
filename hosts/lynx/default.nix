@@ -21,7 +21,7 @@
         homeDirectory = "/home/jmoore";
         username = "jmoore";
         shellAliases = {
-          switch = "nixos-rebuild switch --flake /home/jmoore/Repos/jmoo/lab#lynx";
+          switch = "sudo nixos-rebuild switch --flake /home/jmoore/Repos/jmoo/lab#lynx";
         };
       };
 
