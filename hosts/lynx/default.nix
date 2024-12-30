@@ -12,7 +12,6 @@
   environment.systemPackages = with pkgs; [
     brave
     git
-    tailscale
     vim
   ];
 

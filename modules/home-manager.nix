@@ -1,5 +1,4 @@
 {
-  inputs,
   lib,
   config,
   ...
@@ -19,10 +18,6 @@ let
   ];
 in
 {
-  imports = [
-    inputs.home-manager.nixosModules.home-manager
-  ];
-
   options = {
     lab = genAttrs passthru (x: {
       enable = mkEnableOption "Enable ${x} configuration for all home-manager users";
@@ -73,9 +68,8 @@ in
           );
 
           home = {
-            homeDirectory = mkDefault "/home/${name}";
-            username = mkDefault name;
-            stateVersion = config.system.stateVersion;
+            homeDirectory = mkDefault config.users.users.${name}.home;
+            username = mkDefault config.users.users.${name}.name;
           };
 
           programs.home-manager.enable = false;

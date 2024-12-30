@@ -1,44 +1,36 @@
-{ pkgs, lib, ... }:
+{
+  pkgs,
+  lib,
+  mkHome,
+  ...
+}:
 with lib;
 {
   imports = [ ../../modules/darwin.nix ];
 
-  environment.systemPackages = with pkgs; [ iterm2 ];
+  environment.systemPackages = with pkgs; [ tailscale ];
 
-  home-manager = {
-    useGlobalPkgs = true;
-    useUserPackages = true;
-    users.jmoore = _: {
-      imports = [ ../../modules/home.nix ];
-
-      lab = {
-        direnv.enable = true;
-        iterm2.enable = true;
-        # karabiner.enable = true;
-        nuphy75.enable = true;
-        shell.enable = true;
-
-        vscode = {
-          enable = true;
-          nix.formatter = pkgs.nixfmt-rfc-style;
-        };
+  home-manager.users.jmoore = mkHome {
+    lab = {
+      direnv.enable = true;
+      iterm2.enable = true;
+      vscode = {
+        enable = true;
+        nix.formatter = pkgs.nixfmt-rfc-style;
       };
-
-      home = {
-        homeDirectory = "/Users/jmoore";
-        username = "jmoore";
-        packages = with pkgs; [ spotify ];
-        stateVersion = mkDefault "24.05";
-        shellAliases = {
-          switch = "darwin-rebuild switch --flake /Users/jmoore/Repos/lab";
-        };
-      };
-
-      programs.yt-dlp.enable = true;
     };
+
+    home.packages = with pkgs; [ spotify ];
+
+    programs.yt-dlp.enable = true;
   };
 
-  programs.zsh.enable = true;
+  lab = {
+    source = "/Users/jmoore/Repos/jmoo/lab";
+    shell.enable = true;
+  };
+
+  networking.hostName = "meerkat";
 
   users.users.jmoore = {
     name = "jmoore";

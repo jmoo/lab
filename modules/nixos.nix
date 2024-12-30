@@ -8,6 +8,7 @@
 with lib;
 {
   imports = [
+    inputs.home-manager.nixosModules.home-manager
     ./home-manager.nix
     ./k3s.nix
     ./nix.nix
@@ -30,8 +31,13 @@ with lib;
 
   config = mkMerge [
     {
-      home-manager.users.root = mkHome {
-        home.homeDirectory = "/root";
+      home-manager = {
+        common = {
+          home.stateVersion = mkDefault config.system.stateVersion;
+          programs.home-manager.enable = false;
+        };
+
+        users.root = mkHome { };
       };
 
       i18n.defaultLocale = "en_US.UTF-8";
