@@ -57,15 +57,20 @@ in
             ./home.nix
           ];
 
-          lab = filterAttrs (n: _: elem n passthru) (
-            mapAttrs (
-              n: v:
-              mkMerge [
-                { enable = mkDefault v.enable; }
-                v.common
-              ]
-            ) config.lab
-          );
+          lab =
+            (filterAttrs (n: _: elem n passthru) (
+              mapAttrs (
+                n: v:
+                mkMerge [
+                  { enable = mkDefault v.enable; }
+                  v.common
+                ]
+              ) config.lab
+            ))
+            // {
+              name = mkDefault config.lab.name;
+              source = mkDefault config.lab.source;
+            };
 
           home = {
             homeDirectory = mkDefault config.users.users.${name}.home;

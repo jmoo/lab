@@ -11,22 +11,13 @@ with lib;
     inputs.home-manager.nixosModules.home-manager
     ./home-manager.nix
     ./k3s.nix
+    ./lab.nix
     ./nix.nix
     ./ssh.nix
   ];
 
-  options = {
-    lab = {
-      name = mkOption {
-        type = types.str;
-        default = config.networking.hostName;
-      };
-
-      source = mkOption {
-        type = with types; nullOr str;
-        default = "github:jmoo/lab";
-      };
-    };
+  options.lab.name = mkOption {
+    default = config.networking.hostName;
   };
 
   config = mkMerge [

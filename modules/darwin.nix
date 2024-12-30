@@ -11,21 +11,12 @@ with lib;
   imports = [
     inputs.home-manager.darwinModules.home-manager
     ./home-manager.nix
+    ./lab.nix
     ./nix.nix
   ];
 
-  options = {
-    lab = {
-      name = mkOption {
-        type = types.str;
-        default = config.networking.hostName;
-      };
-
-      source = mkOption {
-        type = with types; nullOr str;
-        default = "github:jmoo/lab";
-      };
-    };
+  options.lab.name = mkOption {
+    default = config.networking.hostName;
   };
 
   config = mkMerge [
@@ -40,7 +31,7 @@ with lib;
       };
 
       users.users.root.home = "/var/root";
-      system.stateVersion = 5;
+      system.stateVersion = mkDefault 5;
       services.nix-daemon.enable = true;
       nixpkgs.hostPlatform = mkDefault "aarch64-darwin";
     }
