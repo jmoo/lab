@@ -13,6 +13,7 @@ let
     "iterm2"
     "karabiner"
     "nuphy75"
+    "pass"
     "shell"
     "vscode"
   ];
@@ -54,24 +55,31 @@ in
       useGlobalPkgs = true;
       useUserPackages = true;
 
-      common = _: {
-        imports = [
-          ./home.nix
-        ];
+      common =
+        { name, ... }:
+        {
+          imports = [
+            ./home.nix
+          ];
 
-        lab = filterAttrs (n: _: elem n passthru) (
-          mapAttrs (
-            n: v:
-            mkMerge [
-              { enable = mkDefault v.enable; }
-              v.common
-            ]
-          ) config.lab
-        );
+          lab = filterAttrs (n: _: elem n passthru) (
+            mapAttrs (
+              n: v:
+              mkMerge [
+                { enable = mkDefault v.enable; }
+                v.common
+              ]
+            ) config.lab
+          );
 
-        home.stateVersion = config.system.stateVersion;
-        programs.home-manager.enable = false;
-      };
+          home = {
+            homeDirectory = mkDefault "/home/${name}";
+            username = mkDefault name;
+            stateVersion = config.system.stateVersion;
+          };
+
+          programs.home-manager.enable = false;
+        };
     };
   };
 }

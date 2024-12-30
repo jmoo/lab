@@ -28,5 +28,10 @@
     "hyprland",
     "iterm2",
     "rlwrap",
-    "powerlevel"
+    "powerlevel",
+    "tailscale",
+    "oneshot",
+    "jellyfin",
+    "pinentry",
+    "keygen"
 ]

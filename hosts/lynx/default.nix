@@ -1,5 +1,4 @@
 {
-  config,
   pkgs,
   mkHome,
   ...
@@ -13,61 +12,44 @@
   environment.systemPackages = with pkgs; [
     brave
     git
+    tailscale
     vim
   ];
 
   hardware.pulseaudio.enable = false;
 
   home-manager.users.jmoore = mkHome {
-    home = with config.users.users.jmoore; {
-      homeDirectory = home;
-      username = name;
-      shellAliases = {
-        switch = "sudo nixos-rebuild switch --flake /home/jmoore/Repos/jmoo/lab#lynx";
+    lab = {
+      direnv.enable = true;
+      vscode = {
+        enable = true;
+        nix.formatter = pkgs.nixfmt-rfc-style;
       };
     };
 
-    programs = {
-      yt-dlp.enable = true;
-    };
+    programs.yt-dlp.enable = true;
   };
 
   lab = {
-    direnv.enable = true;
-    hyprland.enable = true;
+    source = "/home/jmoore/Repos/jmoo/lab";
+    # hyprland.enable = true;
     k3s.enable = true;
     shell.enable = true;
-    vscode = {
+    ssh = {
       enable = true;
-      common.nix.formatter = pkgs.nixfmt-rfc-style;
+      users = [ "jmoore" ];
     };
+    pass.enable = true;
   };
 
-  networking = {
-    firewall.allowedTCPPorts = [
-      22
-    ];
-    networkmanager = {
-      enable = true;
-    };
+  networking.networkmanager = {
+    enable = true;
   };
 
   services = {
     jellyfin = {
       enable = true;
       openFirewall = true;
-    };
-
-    openssh = {
-      enable = true;
-      ports = [ 22 ];
-      settings = {
-        PasswordAuthentication = true;
-        AllowUsers = [ "jmoore" ];
-        UseDns = true;
-        X11Forwarding = false;
-        PermitRootLogin = "no";
-      };
     };
 
     pipewire = {
@@ -79,6 +61,11 @@
 
     printing.enable = true;
 
+    tailscale = {
+      enable = true;
+      useRoutingFeatures = "server";
+    };
+
     xserver = {
       enable = true;
       displayManager.lightdm.enable = true;
@@ -89,17 +76,6 @@
       };
     };
   };
-
-  # systemd.services = {
-  #   jellyfin = {
-  #     serviceConfig = {
-  #       ReadWritePaths = [
-  #         "/media/ssd1/Movies"
-  #         "/media/ssd1/Shows"
-  #       ];
-  #     };
-  #   };
-  # };
 
   programs = {
     steam = {

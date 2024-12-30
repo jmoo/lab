@@ -8,6 +8,7 @@ with lib;
     ./iterm2.nix
     ./karabiner.nix
     ./nuphy75.nix
+    ./pass.nix
     ./shell.nix
     ./vscode.nix
     ../pkgs/vscode-nix-extensions/home-manager.nix
