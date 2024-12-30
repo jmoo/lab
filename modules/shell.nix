@@ -12,9 +12,9 @@ with builtins;
 
 {
   options.lab.shell = {
-    enable = mkEnableOption "shell";
+    enable = mkEnableOption "Enable default shell home-manager configuration";
 
-    # Deprecated, no longer needed. Use 
+    # Deprecated, no longer needed. Use
     aliases = mkOption {
       type = types.attrsOf types.str;
       default = { };

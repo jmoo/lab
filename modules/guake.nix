@@ -10,7 +10,7 @@ with lib;
 with builtins;
 
 {
-  options.lab.guake.enable = mkEnableOption "guake";
+  options.lab.guake.enable = mkEnableOption "Enable guake home-manager configuration";
 
   config.home = mkIf config.lab.guake.enable {
     packages = with pkgs; [ guake ];

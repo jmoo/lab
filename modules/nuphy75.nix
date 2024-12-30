@@ -6,7 +6,7 @@ with builtins;
 with config.lib.karabiner;
 
 {
-  options.lab.nuphy75.enable = mkEnableOption "nuphy75";
+  options.lab.nuphy75.enable = mkEnableOption "Enable nuphy75 karabiner configuration";
 
   # Key-mapping in karabiner for my nuphy air75 keyboard
   config.lab.karabiner.profiles.default = mkIf config.lab.nuphy75.enable {

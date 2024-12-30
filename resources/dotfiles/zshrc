@@ -6,4 +6,8 @@ if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
 
-. ~/.nix-profile/share/zsh-powerlevel10k/powerlevel9k.zsh-theme
+if [[ -e ~/.local/state/nix/profiles/home-manager/share/zsh-powerlevel10k/powerlevel9k.zsh-theme ]]; then
+  . ~/.local/state/nix/profiles/home-manager/share/zsh-powerlevel10k/powerlevel9k.zsh-theme
+elif [[ -e ~/.nix-profile/share/zsh-powerlevel10k/powerlevel9k.zsh-theme ]]; then
+  . ~/.nix-profile/share/zsh-powerlevel10k/powerlevel9k.zsh-theme
+fi

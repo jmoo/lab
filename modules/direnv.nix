@@ -6,7 +6,7 @@
 }:
 with lib;
 {
-  options.lab.direnv.enable = mkEnableOption "Enable direnv";
+  options.lab.direnv.enable = mkEnableOption "Enable direnv home-manager configuration";
 
   config = mkIf config.lab.direnv.enable {
     programs = {

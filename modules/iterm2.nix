@@ -10,7 +10,7 @@ with lib;
 
 {
   options.lab.iterm2 = {
-    enable = mkEnableOption "iterm2";
+    enable = mkEnableOption "Enable iterm2 home-manager configuration";
     package = mkOption {
       type = with types; nullOr package;
       default = pkgs.iterm2;
