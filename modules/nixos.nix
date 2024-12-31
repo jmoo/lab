@@ -1,5 +1,6 @@
 {
   config,
+  inputs,
   lib,
   pkgs,
   mkHome,
@@ -10,6 +11,7 @@ with lib;
   imports = [
     inputs.home-manager.nixosModules.home-manager
     ./home-manager.nix
+    ./hyprland
     ./k3s.nix
     ./lab.nix
     ./nix.nix
@@ -47,15 +49,6 @@ with lib;
       system.stateVersion = mkDefault "25.05";
       time.timeZone = "America/New_York";
     }
-
-    (mkIf config.lab.hyprland.enable {
-      environment.systemPackages = with pkgs; [
-        kitty
-      ];
-
-      home-manager.common.lab.hyprland.enable = mkDefault true;
-      programs.hyprland.enable = true;
-    })
 
     (mkIf config.lab.shell.enable {
       home-manager.common = {

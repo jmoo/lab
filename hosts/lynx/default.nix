@@ -31,7 +31,7 @@
 
   lab = {
     source = "/home/jmoore/Repos/jmoo/lab";
-    # hyprland.enable = true;
+    hyprland.enable = true;
     k3s.enable = true;
     shell.enable = true;
     ssh = {
@@ -65,15 +65,15 @@
       useRoutingFeatures = "server";
     };
 
-    xserver = {
-      enable = true;
-      displayManager.lightdm.enable = true;
-      desktopManager.cinnamon.enable = true;
-      xkb = {
-        layout = "us";
-        variant = "";
-      };
-    };
+    # xserver = {
+    #   enable = true;
+    #   displayManager.lightdm.enable = true;
+    #   desktopManager.cinnamon.enable = true;
+    #   xkb = {
+    #     layout = "us";
+    #     variant = "";
+    #   };
+    # };
   };
 
   programs = {

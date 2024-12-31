@@ -1,4 +1,5 @@
 {
+  inputs,
   lib,
   config,
   ...
@@ -54,6 +55,7 @@ in
         { name, ... }:
         {
           imports = [
+            inputs.walker.homeManagerModules.default
             ./home.nix
           ];
 

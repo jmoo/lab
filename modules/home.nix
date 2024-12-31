@@ -1,10 +1,14 @@
-{ pkgs, lib, ... }:
+{
+  pkgs,
+  lib,
+  ...
+}:
 with lib;
 {
   imports = [
     ./direnv.nix
     ./guake.nix
-    ./hyprland.nix
+    ./hyprland/home.nix
     ./iterm2.nix
     ./karabiner.nix
     ./nuphy75.nix
