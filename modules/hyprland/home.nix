@@ -81,6 +81,15 @@ with lib;
       hypridle = {
         enable = true;
       };
+
+      network-manager-applet = {
+        enable = true;
+      };
+    };
+
+    systemd.user.services = {
+      walker.Unit.After = "graphical-session.target";
+      network-manager-applet.Unit.After = [ "graphical-session.target" ];
     };
 
     wayland.windowManager.hyprland = {

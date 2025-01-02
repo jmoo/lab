@@ -10,10 +10,10 @@
  * ----------------------------------------------------- 
 */
 
-@define-color backgroundlight #FFFFFF;
-@define-color backgrounddark #FFFFFF;
-@define-color workspacesbackground1 #FFFFFF;
-@define-color workspacesbackground2 #CCCCCC;
+@define-color backgroundlight rgba(255,255,255,0.8);
+@define-color backgrounddark rgba(255,255,255,0.8);
+@define-color workspacesbackground1 rgba(255,255,255,0.8);
+@define-color workspacesbackground2 rgba(255,255,255,0.8);
 @define-color bordercolor #FFFFFF;
 @define-color textcolor1 #000000;
 @define-color textcolor2 #000000;
@@ -25,7 +25,7 @@
  * ----------------------------------------------------- */
 
 * {
-    font-family: "Fira Sans Semibold", FontAwesome, Roboto, Helvetica, Arial, sans-serif;
+    font-family: "Ubuntu Mono", FontAwesome, Roboto, Helvetica, Arial, sans-serif;
     border: none;
     border-radius: 0px;
 }
@@ -36,6 +36,11 @@ window#waybar {
     /* color: #FFFFFF; */
     transition-property: background-color;
     transition-duration: .5s;
+}
+
+button:hover {
+  background-color: rgba(255,255,255,0.5);
+  transition: all 0.3s ease-in-out;
 }
 
 /* -----------------------------------------------------
@@ -275,6 +280,8 @@ window#waybar.empty #window {
     color: @textcolor2;
     border-radius: 15px;
     margin: 10px 15px 10px 0px;
+    padding-left: 5px;
+    padding-right: 5px;
 }
 
 #bluetooth.off {

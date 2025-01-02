@@ -163,6 +163,7 @@
     "bluetooth": {
         "format-disabled": "",
         "format-off": "",
+        "format-on": " {num_connections}",
         "interval": 30,
         "on-click": "blueberry",
         "format-no-controller": ""
