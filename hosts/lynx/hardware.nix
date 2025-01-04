@@ -26,6 +26,11 @@
     "usb_storage"
     "sd_mod"
   ];
+
+  boot.kernelParams = [
+    "hid_apple.fnmode=2"
+  ];
+
   boot.initrd.kernelModules = [ ];
   boot.kernelModules = [ "kvm-amd" ];
   boot.extraModulePackages = [ ];

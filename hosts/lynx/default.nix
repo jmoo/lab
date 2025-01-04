@@ -12,6 +12,7 @@
   environment.systemPackages = with pkgs; [
     brave
     git
+    obsidian
     vim
   ];
 
@@ -46,6 +47,12 @@
   };
 
   services = {
+    sunshine = {
+      enable = true;
+      openFirewall = true;
+      capSysAdmin = true;
+    };
+
     jellyfin = {
       enable = true;
       openFirewall = true;

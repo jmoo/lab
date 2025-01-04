@@ -1,0 +1,13 @@
+diff --git a/ulauncher/modes/apps/launch_app.py b/ulauncher/modes/apps/launch_app.py
+index b351cfab..1921da78 100644
+--- a/ulauncher/modes/apps/launch_app.py
++++ b/ulauncher/modes/apps/launch_app.py
+@@ -35 +35 @@ def launch_app(desktop_entry_name: str) -> bool:
+-        cmd = ["gapplication", "launch", app_id]
++        cmd = ["uwsm", "app", "--", app_id]
+@@ -43 +43 @@ def launch_app(desktop_entry_name: str) -> bool:
+-                cmd = ["gtk-launch", app_id]
++                cmd = ["uwsm", "app", "--", app_id]
+@@ -45 +45 @@ def launch_app(desktop_entry_name: str) -> bool:
+-            cmd = shlex.split(app_exec)
++            cmd = [ "uwsm", "app", "--" ] + shlex.split(app_exec)

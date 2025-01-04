@@ -1,4 +1,6 @@
 inputs: final: prev: {
+  ulauncher-uwsm = final.callPackage ./pkgs/ulauncher-uwsm { };
+  
   powerlevel10k-media = final.callPackage ./pkgs/powerlevel10k-media.nix { };
 
   vscode-extensions = prev.vscode-extensions // {

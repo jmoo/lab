@@ -20,6 +20,9 @@ with lib;
       roboto
       ubuntu-sans-mono
       nixos-artwork.wallpapers.dracula
+      wdisplays
+      pop-launcher
+      ulauncher-uwsm
     ];
 
     dconf = {
@@ -54,22 +57,10 @@ with lib;
         extraConfig = builtins.readFile ./hyprlock.conf;
       };
 
-      walker = {
-        enable = true;
-        runAsService = true;
-        config = mkOptionDefault {
-          "app_launch_prefix" = mkForce "uwsm app -- ";
-        };
-      };
-
       wlogout.enable = true;
 
       waybar = {
         enable = true;
-        # systemd = {
-        #   enable = true;
-        #   target = "graphical-session.target";
-        # };
         style = builtins.readFile ./waybar/style.css;
         settings = [
           (with builtins; fromJSON (readFile ./waybar/config.json))
@@ -96,13 +87,18 @@ with lib;
       enable = true;
       xwayland.enable = true;
 
+      plugins = with pkgs.hyprlandPlugins; [
+        hyprbars
+      ];
+
       extraConfig = builtins.readFile ./hyprland.conf;
 
       settings = {
         "$mod" = "SUPER";
+        "$modPrime" = "SUPER+SHIFT";
         "$terminal" = "uwsm app -- kitty";
         "$fileManager" = "uwsm app -- nemo";
-        "$menu" = "uwsm app -- walker -m applications";
+        "$menu" = "uwsm app -- ulauncher-toggle";
         "$lock" = "uwsm app -- hyprlock";
         "$bar" = "uwsm app -- waybar";
 
