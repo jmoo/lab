@@ -1,6 +1,6 @@
 { ulauncher, ... }:
 ulauncher.overrideAttrs (old: {
-  patches = [
+  patches = old.patches ++ [
     ./uwsm-launcher-v5.patch
   ];
 })
