@@ -13,6 +13,7 @@ with lib;
     users = mkOption {
       description = "Enable ssh for these users";
       type = with types; listOf str;
+      default = mapAttrsToList (_: v: v.name) (filterAttrs (_: v: v.isNormalUser) config.users.users);
     };
   };
 

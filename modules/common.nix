@@ -1,5 +1,4 @@
 {
-  inputs,
   lib,
   config,
   ...
@@ -17,6 +16,13 @@ let
     "shell"
     "vscode"
   ];
+
+  mkHome =
+    x:
+    mkMerge [
+      (x)
+      config.home-manager.common
+    ];
 in
 {
   imports = [
@@ -27,7 +33,14 @@ in
   options = {
     lab =
       (genAttrs passthru (x: {
-        enable = mkEnableOption "Enable ${x} configuration for all home-manager users";
+        enable = mkEnableOption "Enable ${x} configuration";
+
+        users = mkOption {
+          type = with types; listOf str;
+          default = config.lab.users;
+        };
+
+        root = mkEnableOption "Include root user in default users";
 
         common = mkOption {
           description = "Common ${x} configuration for all home-manager users";
@@ -39,6 +52,13 @@ in
         name = mkOption {
           default = config.networking.hostName;
         };
+
+        users = mkOption {
+          type = with types; listOf str;
+          default = [ ];
+        };
+
+        root = mkEnableOption "Enable the root user";
       };
 
     home-manager = {
@@ -51,17 +71,20 @@ in
 
   config = {
     _module.args = {
-      mkHome =
-        x:
-        mkMerge [
-          (x)
-          config.home-manager.common
-        ];
+      inherit mkHome;
     };
 
     home-manager = {
       useGlobalPkgs = true;
       useUserPackages = true;
+
+      # users = foldl' (
+      #   x: acc:
+      #   acc
+      #   // {
+      #     "${x}" = mkHome { };
+      #   }
+      # ) { } (config.lab.users);
 
       common =
         { name, ... }:
@@ -75,7 +98,7 @@ in
               mapAttrs (
                 n: v:
                 mkMerge [
-                  { enable = mkDefault v.enable; }
+                  { enable = mkDefault (v.enable && (elem name v.users || (v.root && name == "root"))); }
                   v.common
                 ]
               ) config.lab

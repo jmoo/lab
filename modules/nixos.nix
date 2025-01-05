@@ -27,6 +27,11 @@ with lib;
         users.root = mkHome { };
       };
 
+      lab = {
+        users = mapAttrsToList (_: v: v.name) (filterAttrs (_: v: v.isNormalUser) config.users.users);
+        root = true;
+      };
+
       i18n.defaultLocale = "en_US.UTF-8";
       i18n.extraLocaleSettings = {
         LC_ADDRESS = "en_US.UTF-8";

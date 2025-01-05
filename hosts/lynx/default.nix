@@ -1,8 +1,10 @@
 {
   pkgs,
+  lib,
   mkHome,
   ...
 }:
+with lib;
 {
   imports = [
     ../../modules/nixos.nix
@@ -19,14 +21,6 @@
   hardware.pulseaudio.enable = false;
 
   home-manager.users.jmoore = mkHome {
-    lab = {
-      direnv.enable = true;
-      vscode = {
-        enable = true;
-        nix.formatter = pkgs.nixfmt-rfc-style;
-      };
-    };
-
     programs.yt-dlp.enable = true;
   };
 
@@ -35,12 +29,26 @@
     hyprland.enable = true;
     greetd.enable = true;
     k3s.enable = true;
-    shell.enable = true;
-    ssh = {
-      enable = true;
-      users = [ "jmoore" ];
-    };
+    ssh.enable = true;
     pass.enable = true;
+
+    shell = {
+      enable = true;
+      root = true;
+    };
+
+    direnv = {
+      enable = true;
+      root = true;
+    };
+
+    vscode = {
+      enable = true;
+      root = true;
+      common = {
+        nix.formatter = pkgs.nixfmt-rfc-style;
+      };
+    };
   };
 
   networking.networkmanager = {
