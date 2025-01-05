@@ -11,7 +11,7 @@ with lib;
   imports = [
     inputs.home-manager.nixosModules.home-manager
     ./home-manager.nix
-    ./hyprland
+    ./greetd.nix
     ./k3s.nix
     ./lab.nix
     ./nix.nix
@@ -49,6 +49,18 @@ with lib;
       system.stateVersion = mkDefault "25.05";
       time.timeZone = "America/New_York";
     }
+
+    (mkIf config.lab.hyprland.enable {
+      programs = {
+        hyprland = {
+          enable = true;
+          withUWSM = true;
+        };
+
+        hyprlock.enable = true; 
+        xwayland.enable = true;
+      };
+    })
 
     (mkIf config.lab.shell.enable {
       home-manager.common = {

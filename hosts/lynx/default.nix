@@ -33,6 +33,7 @@
   lab = {
     source = "/home/jmoore/Repos/jmoo/lab";
     hyprland.enable = true;
+    greetd.enable = true;
     k3s.enable = true;
     shell.enable = true;
     ssh = {
