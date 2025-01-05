@@ -10,6 +10,7 @@ with lib;
     ./guake.nix
     ./hyprland
     ./iterm2.nix
+    ./lab.nix
     ./karabiner.nix
     ./nuphy75.nix
     ./pass.nix
@@ -19,20 +20,6 @@ with lib;
     ./waybar
     ../pkgs/vscode-nix-extensions/home-manager.nix
   ];
-
-  options = {
-    lab = {
-      name = mkOption {
-        type = types.str;
-        default = config.networking.hostName;
-      };
-
-      source = mkOption {
-        type = with types; nullOr str;
-        default = "github:jmoo/lab";
-      };
-    };
-  };
 
   config = {
     programs.home-manager.enable = mkDefault true;

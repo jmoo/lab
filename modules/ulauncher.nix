@@ -7,7 +7,7 @@
 with lib;
 {
   options.lab.ulauncher = {
-    enable = mkEnableOption "Enable ulauncher";
+    enable = mkEnableOption "Enable ulauncher home-manager configuration";
     package = mkOption {
       type = types.package;
       default = pkgs.ulauncher-uwsm;

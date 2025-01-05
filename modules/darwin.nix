@@ -10,14 +10,8 @@ with lib;
 {
   imports = [
     inputs.home-manager.darwinModules.home-manager
-    ./home-manager.nix
-    ./lab.nix
-    ./nix.nix
+    ./common.nix
   ];
-
-  options.lab.name = mkOption {
-    default = config.networking.hostName;
-  };
 
   config = mkMerge [
     {

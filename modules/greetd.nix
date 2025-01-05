@@ -7,7 +7,7 @@
 with lib;
 {
   options.lab.greetd = {
-    enable = mkEnableOption "Enable greetd";
+    enable = mkEnableOption "Enable greetd nixos configuration";
   };
 
   config = mkIf config.lab.greetd.enable {

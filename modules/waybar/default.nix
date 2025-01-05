@@ -6,7 +6,7 @@
 with lib;
 {
   options.lab.waybar = {
-    enable = mkEnableOption "Enable waybar";
+    enable = mkEnableOption "Enable waybar home-manager configuration";
   };
 
   config = mkIf config.lab.waybar.enable {

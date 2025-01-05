@@ -19,15 +19,27 @@ let
   ];
 in
 {
+  imports = [
+    ./lab.nix
+    ./nix.nix
+  ];
+
   options = {
-    lab = genAttrs passthru (x: {
-      enable = mkEnableOption "Enable ${x} configuration for all home-manager users";
-      common = mkOption {
-        description = "Common ${x} configuration for all home-manager users";
-        type = types.raw;
-        default = { };
+    lab =
+      (genAttrs passthru (x: {
+        enable = mkEnableOption "Enable ${x} configuration for all home-manager users";
+
+        common = mkOption {
+          description = "Common ${x} configuration for all home-manager users";
+          type = types.raw;
+          default = { };
+        };
+      }))
+      // {
+        name = mkOption {
+          default = config.networking.hostName;
+        };
       };
-    });
 
     home-manager = {
       common = mkOption {

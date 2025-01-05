@@ -10,17 +10,11 @@ with lib;
 {
   imports = [
     inputs.home-manager.nixosModules.home-manager
-    ./home-manager.nix
+    ./common.nix
     ./greetd.nix
     ./k3s.nix
-    ./lab.nix
-    ./nix.nix
     ./ssh.nix
   ];
-
-  options.lab.name = mkOption {
-    default = config.networking.hostName;
-  };
 
   config = mkMerge [
     {
@@ -57,7 +51,7 @@ with lib;
           withUWSM = true;
         };
 
-        hyprlock.enable = true; 
+        hyprlock.enable = true;
         xwayland.enable = true;
       };
     })
