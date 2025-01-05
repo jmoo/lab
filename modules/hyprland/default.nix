@@ -21,6 +21,13 @@ with lib;
       wayland.windowManager.hyprland.systemd.enable = mkForce false;
     };
 
+    fonts.packages = with pkgs; [
+      nerd-fonts.ubuntu
+      nerd-fonts.ubuntu-mono
+      font-awesome
+      roboto
+    ];
+
     programs = {
       hyprland = {
         enable = true;

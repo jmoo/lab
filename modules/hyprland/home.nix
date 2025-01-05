@@ -16,9 +16,6 @@ with lib;
       pavucontrol
       adwaita-qt6
       adw-gtk3
-      font-awesome
-      roboto
-      ubuntu-sans-mono
       nixos-artwork.wallpapers.dracula
       wdisplays
       pop-launcher
@@ -51,13 +48,12 @@ with lib;
 
     programs = {
       kitty.enable = true;
+      ghostty.enable = true;
 
       hyprlock = {
         enable = true;
         extraConfig = builtins.readFile ./hyprlock.conf;
       };
-
-      wlogout.enable = true;
 
       waybar = {
         enable = true;
@@ -79,9 +75,28 @@ with lib;
     };
 
     systemd.user.services = {
-      walker.Unit.After = "graphical-session.target";
       network-manager-applet.Unit.After = [ "graphical-session.target" ];
     };
+
+    systemd.user.services.ulauncher = {
+        Unit.Description = "Ulauncher - Application Runner";
+        Install.WantedBy = ["graphical-session.target"];
+        Unit.After = [ "graphical-session.target" ];
+        Service = {
+          ExecStart = "${pkgs.lib.getExe pkgs.ulauncher-uwsm}";
+          Restart = "on-failure";
+        };
+      };
+
+      systemd.user.services.waybar = {
+        Unit.Description = "waybar";
+        Install.WantedBy = ["graphical-session.target"];
+        Unit.After = [ "graphical-session.target" ];
+        Service = {
+          ExecStart = "${pkgs.lib.getExe pkgs.waybar}";
+          Restart = "on-failure";
+        };
+      };
 
     wayland.windowManager.hyprland = {
       enable = true;

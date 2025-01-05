@@ -11,11 +11,6 @@
     };
 
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-
-    walker = {
-      url = "github:abenz1267/walker?ref=v0.11.9";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =

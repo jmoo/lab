@@ -2,24 +2,23 @@
     "height": 30,
     "spacing": 4,
     "modules-left": [
-        "custom/appmenu",
-        "group/quicklinks",
+        "custom/launcher",
         "hyprland/window"
     ],
     "modules-center": [
         "hyprland/workspaces"
     ],
     "modules-right": [
-        "mpd",
-        "pulseaudio",
-        "network",
-        "bluetooth",
-        "keyboard-state",
-        "battery",
-        "clock",
         "tray",
-        "custom/exit"
+        "battery",
+        "bluetooth",
+        "network",
+        "pulseaudio",
+        "clock"
     ],
+    "custom/launcher": {
+        "format": ""
+    },
     "hyprland/workspaces": {
         "on-click": "activate",
         "active-only": false,
@@ -44,18 +43,7 @@
         },
         "separate-outputs": true
     },
-    "custom/appmenu": {
-        "format": "Apps",
-        "tooltip-format": "Left: Open the application launcher",
-        "on-click": "uwsm app -- walker",
-        "tooltip": false
-    },
-    "custom/exit": {
-        "format": "",
-        "tooltip-format": "Powermenu",
-        "on-click": "uwsm app -- wlogout -b 4",
-        "tooltip": false
-    },
+
     "keyboard-state": {
         "numlock": true,
         "capslock": true,
@@ -65,35 +53,39 @@
             "unlocked": ""
         }
     },
+
     "tray": {
         "spacing": 10
     },
+
     "clock": {
         "timezone": "America/New_York",
         "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>",
-        "format-alt": "{:%Y-%m-%d}"
+        "format": "{:%a %b %u %R%p}"
     },
-    "custom/system": {
-        "format": "",
-        "tooltip": false
-    },
+
+
     "cpu": {
         "format": "/ C {usage}% ",
-        "on-click": "btop"
+        "on-click": "uwsm app -- btop"
     },
+
     "memory": {
         "format": "/ M {}% ",
-        "on-click": "btop"
+        "on-click": "uwsm app -- btop"
     },
+
     "disk": {
         "interval": 30,
         "format": "D {percentage_used}% ",
         "path": "/",
-        "on-click": "btop"
+        "on-click": "uwsm app -- btop"
     },
+
     "hyprland/language": {
         "format": "/ K {short}"
     },
+
     "group/hardware": {
         "orientation": "inherit",
         "drawer": {
@@ -109,6 +101,7 @@
             "hyprland/language"
         ]
     },
+
     "network": {
         "format": "{ifname}",
         "format-wifi": "   {signalStrength}%",
@@ -118,9 +111,9 @@
         "tooltip-format-wifi": "   {essid} ({signalStrength}%)",
         "tooltip-format-ethernet": "  {ifname} ({ipaddr}/{cidr})",
         "tooltip-format-disconnected": "Disconnected",
-        "max-length": 50,
-        "on-click": "nm-applet"
+        "max-length": 50
     },
+
     "battery": {
         "states": {
             "warning": 30,
@@ -138,6 +131,7 @@
             " "
         ]
     },
+
     "pulseaudio": {
         "format": "{icon}  {volume}%",
         "format-bluetooth": "{volume}% {icon} {format_source}",
@@ -158,21 +152,24 @@
                 " "
             ]
         },
-        "on-click": "pavucontrol"
+        "on-click": "uwsm app -- pavucontrol"
     },
+
     "bluetooth": {
         "format-disabled": "",
         "format-off": "",
-        "format-on": " {num_connections}",
+        "format-on": "",
         "interval": 30,
-        "on-click": "blueberry",
+        "on-click": "uwsm app -- blueberry",
         "format-no-controller": ""
     },
+
     "user": {
         "format": "{user}",
         "interval": 60,
         "icon": false
     },
+
     "idle_inhibitor": {
         "format": "{icon}",
         "tooltip": true,

@@ -1,5 +1,5 @@
 diff --git a/ulauncher/api/shared/action/LaunchAppAction.py b/ulauncher/api/shared/action/LaunchAppAction.py
-index 95ce7d8c..ef886017 100644
+index 95ce7d8c..e3a28103 100644
 --- a/ulauncher/api/shared/action/LaunchAppAction.py
 +++ b/ulauncher/api/shared/action/LaunchAppAction.py
 @@ -42 +42 @@ class LaunchAppAction(BaseAction):
@@ -13,4 +13,4 @@ index 95ce7d8c..ef886017 100644
 +                exec = ['uwsm', 'app', '--' ] + shlex.split(stripped_app_exec)
 @@ -64 +64 @@ class LaunchAppAction(BaseAction):
 -                exec = ['systemd-run', '--user', '--scope'] + exec
-+                exec = ['uwsm', 'app', '--', '--scope'] + exec
++                exec = ['uwsm', 'app', '--'] + exec
