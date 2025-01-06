@@ -8,21 +8,18 @@ let
   passthru = [
     "direnv"
     "guake"
+    "ghostty"
     "hyprland"
+    "hypridle"
+    "hyprlock"
     "iterm2"
     "karabiner"
     "nuphy75"
+    "theme"
     "pass"
     "shell"
     "vscode"
   ];
-
-  mkHome =
-    x:
-    mkMerge [
-      (x)
-      config.home-manager.common
-    ];
 in
 {
   imports = [
@@ -40,7 +37,7 @@ in
           default = config.lab.users;
         };
 
-        root = mkEnableOption "Include root user in default users";
+        root = mkEnableOption "Enable the root user";
 
         common = mkOption {
           description = "Common ${x} configuration for all home-manager users";
@@ -70,21 +67,17 @@ in
   };
 
   config = {
-    _module.args = {
-      inherit mkHome;
-    };
-
     home-manager = {
       useGlobalPkgs = true;
       useUserPackages = true;
 
-      # users = foldl' (
-      #   x: acc:
-      #   acc
-      #   // {
-      #     "${x}" = mkHome { };
-      #   }
-      # ) { } (config.lab.users);
+      users = foldl' (
+        acc: x:
+        acc
+        // {
+          "${x}" = config.home-manager.common;
+        }
+      ) { } (config.lab.users ++ (lists.optional config.lab.root "root"));
 
       common =
         { name, ... }:

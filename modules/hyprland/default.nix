@@ -5,115 +5,141 @@
   ...
 }:
 with lib;
+let
+  wrapHyprCommand = x: "${optionalString config.lab.hyprland.uwsm "${getExe pkgs.uwsm} app -- "}${x}";
+in
 {
-  options.lab.hyprland = {
-    enable = mkEnableOption "Enable hyprland home-manager configuration";
+  options.lab = {
+    hyprland = {
+      enable = mkEnableOption "Enable hyprland home-manager configuration";
+      nvidia = mkEnableOption "Enable nvidia";
+      uwsm = mkEnableOption "Enable uwsm";
+    };
+
+    hyprlock = {
+      enable = mkEnableOption "Enable hyprlock home-manager configuration";
+    };
+
+    hypridle = {
+      enable = mkEnableOption "Enable hypridle home-manager configuration";
+
+      lockCommand = mkOption {
+        type = types.str;
+        default = wrapHyprCommand config.lab.apps.lock.command;
+      };
+
+      lockTimeout = mkOption {
+        type = with types; nullOr number;
+        default = 900;
+      };
+
+      monitorTimeout = mkOption {
+        type = with types; nullOr number;
+        default = 1200;
+      };
+    };
   };
 
-  config = mkIf config.lab.hyprland.enable {
-    home.packages = with pkgs; [
-      # Utils
-      btop
-      blueberry
-      hyprpolkitagent
-      playerctl
-      brightnessctl
-      nemo
-      pavucontrol
-      wdisplays
-      pop-launcher
-      ulauncher-uwsm
+  config = mkMerge [
+    # Hyprland
+    (mkIf config.lab.hyprland.enable {
+      home.packages =
+        with pkgs;
+        [
+          hyprpolkitagent
+          playerctl
+          brightnessctl
+        ]
 
-      # Fonts
-      nerd-fonts.ubuntu
-      nerd-fonts.ubuntu-mono
-      font-awesome
+        # Add default apps to the environment
+        ++ (map (x: x.package) (attrValues config.lab.apps));
 
-      # Theme
-      adwaita-qt6
-      adw-gtk3
-      nixos-artwork.wallpapers.dracula
-    ];
+      lab = {
+        hyprlock.enable = true;
+        hypridle.enable = true;
+        theme.enable = true;
+        ulauncher.enable = true;
+        waybar.enable = true;
+      };
 
-    dconf = {
-      enable = true;
-      settings = {
-        "org/gnome/desktop/interface" = {
-          color-scheme = "prefer-dark";
+      # Always have kitty as a backup
+      programs.kitty.enable = true;
+
+      wayland.windowManager.hyprland = {
+        enable = true;
+        extraConfig = builtins.readFile ./hyprland.conf;
+        settings = mkMerge [
+          {
+            "$mod" = mkDefault "SUPER";
+            "$modCtrl" = mkDefault "SUPER+CTRL";
+            "$modAlt" = mkDefault "SUPER+ALT";
+            "$modShift" = mkDefault "SUPER+SHIFT";
+            "$modShiftCtrl" = mkDefault "SUPER+SHIFT+CTRL";
+
+            env = mkIf config.lab.hyprland.nvidia [
+              "LIBVA_DRIVER_NAME,nvidia"
+              "__GLX_VENDOR_LIBRARY_NAME,nvidia"
+            ];
+          }
+
+          # Add variables for default apps
+          (mapAttrs' (n: v: {
+            name = "\$${n}";
+            value = mkDefault (wrapHyprCommand v.command);
+          }) config.lab.apps)
+        ];
+
+        xwayland.enable = true;
+      };
+    })
+
+    # UWSM
+    (mkIf config.lab.hyprland.uwsm {
+      lab = {
+        ulauncher.package = mkIf config.lab.hyprland.uwsm pkgs.ulauncher-uwsm;
+        waybar.settings = {
+          bluetooth.on-click = wrapHyprCommand config.lab.apps.bluetoothManager.command;
+          pulseaudio.on-click = wrapHyprCommand config.lab.apps.audioManager.command;
         };
       };
-    };
 
-    lab = {
-      ulauncher.enable = true;
-      waybar.enable = true;
-    };
+      wayland.windowManager.hyprland.systemd.enable = mkForce false;
+    })
 
-    fonts.fontconfig.enable = true;
+    # Hyprlock
+    (mkIf config.lab.hyprlock.enable {
+      lab.apps.lock.package = config.programs.hyprlock.package;
 
-    gtk = {
-      enable = true;
-
-      theme = {
-        name = "adw-gtk3-dark";
-      };
-
-      iconTheme = {
-        name = "Adwaita";
-        package = pkgs.adwaita-icon-theme;
-      };
-
-      cursorTheme = {
-        name = "Adwaita";
-        package = pkgs.adwaita-icon-theme;
-      };
-    };
-
-    programs = {
-      kitty.enable = true;
-      ghostty.enable = true;
-
-      hyprlock = {
+      programs.hyprlock = {
         enable = true;
         extraConfig = builtins.readFile ./hyprlock.conf;
       };
-    };
+    })
 
-    services = {
-      hypridle = {
+    # Hypridle
+    (mkIf config.lab.hypridle.enable {
+      services.hypridle = {
         enable = true;
+
+        settings = {
+          general = {
+            after_sleep_cmd = "hyprctl dispatch dpms on";
+            ignore_dbus_inhibit = false;
+            lock_cmd = config.lab.hypridle.lockCommand;
+          };
+
+          listener =
+            (lists.optional (config.lab.hypridle.lockTimeout != null) {
+              timeout = config.lab.hypridle.lockTimeout;
+              on-timeout = config.lab.hypridle.lockCommand;
+            })
+            ++ (lists.optional (config.lab.hypridle.monitorTimeout != null) {
+              timeout = config.lab.hypridle.monitorTimeout;
+              on-timeout = "hyprctl dispatch dpms off";
+              on-resume = "hyprctl dispatch dpms on";
+            });
+        };
       };
-
-      network-manager-applet = {
-        enable = true;
-      };
-    };
-
-    systemd.user.services = {
-      network-manager-applet.Unit.After = [ "graphical-session.target" ];
-    };
-
-    wayland.windowManager.hyprland = {
-      enable = true;
-      xwayland.enable = true;
-      systemd.enable = mkForce false;
-
-      extraConfig = builtins.readFile ./hyprland.conf;
-
-      settings = {
-        "$mod" = "SUPER";
-        "$modPrime" = "SUPER+SHIFT";
-        "$terminal" = "uwsm app -- kitty";
-        "$fileManager" = "uwsm app -- nemo";
-        "$menu" = "uwsm app -- ulauncher-toggle";
-        "$lock" = "uwsm app -- hyprlock";
-        "$bar" = "uwsm app -- waybar";
-
-        env = [
-          "LIBVA_DRIVER_NAME,nvidia"
-          "__GLX_VENDOR_LIBRARY_NAME,nvidia"
-        ];
-      };
-    };
-  };
+    })
+  ];
 }

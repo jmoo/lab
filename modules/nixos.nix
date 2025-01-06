@@ -3,7 +3,6 @@
   inputs,
   lib,
   pkgs,
-  mkHome,
   ...
 }:
 with lib;
@@ -23,13 +22,6 @@ with lib;
           home.stateVersion = mkDefault config.system.stateVersion;
           programs.home-manager.enable = false;
         };
-
-        users.root = mkHome { };
-      };
-
-      lab = {
-        users = mapAttrsToList (_: v: v.name) (filterAttrs (_: v: v.isNormalUser) config.users.users);
-        root = true;
       };
 
       i18n.defaultLocale = "en_US.UTF-8";
@@ -49,18 +41,26 @@ with lib;
       time.timeZone = "America/New_York";
     }
 
+    # Hyprland
     (mkIf config.lab.hyprland.enable {
+      home-manager.common.lab = {
+        hyprland = {
+          nvidia = elem "nvidia" config.services.xserver.videoDrivers;
+          uwsm = true;
+        };
+      };
+
       programs = {
         hyprland = {
           enable = true;
           withUWSM = true;
         };
-
         hyprlock.enable = true;
         xwayland.enable = true;
       };
     })
 
+    # Shell configuration
     (mkIf config.lab.shell.enable {
       home-manager.common = {
         lab.shell.enable = mkDefault true;
@@ -72,6 +72,18 @@ with lib;
       programs.zsh.enable = true;
     })
 
+    # Network Manager
+    (mkIf config.networking.networkmanager.enable {
+      home-manager.common = {
+        services.network-manager-applet.enable = mkDefault true;
+
+        systemd.user.services = {
+          network-manager-applet.Unit.After = [ "graphical-session.target" ];
+        };
+      };
+    })
+
+    # Tailscale
     (mkIf config.services.tailscale.enable (
       let
         tailscale = config.services.tailscale.package;

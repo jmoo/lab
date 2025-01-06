@@ -1,7 +1,6 @@
 {
   pkgs,
   lib,
-  mkHome,
   ...
 }:
 with lib;
@@ -10,24 +9,32 @@ with lib;
 
   environment.systemPackages = with pkgs; [ tailscale ];
 
-  home-manager.users.jmoore = mkHome {
-    lab = {
-      direnv.enable = true;
-      iterm2.enable = true;
-      vscode = {
-        enable = true;
-        nix.formatter = pkgs.nixfmt-rfc-style;
-      };
-    };
-
+  home-manager.users.jmoore = {
     home.packages = with pkgs; [ spotify ];
-
+    lab.iterm2.enable = true;
     programs.yt-dlp.enable = true;
   };
 
   lab = {
     source = "/Users/jmoore/Repos/jmoo/lab";
-    shell.enable = true;
+    users = [ "jmoore" ];
+    root = true;
+
+    direnv = {
+      enable = true;
+      root = true;
+    };
+
+    shell = {
+      enable = true;
+      root = true;
+    };
+
+    vscode = {
+      enable = true;
+      root = true;
+      nix.formatter = pkgs.nixfmt-rfc-style;
+    };
   };
 
   networking.hostName = "meerkat";

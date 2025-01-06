@@ -3,7 +3,6 @@
   pkgs,
   config,
   lib,
-  mkHome,
   ...
 }:
 with lib;
@@ -20,8 +19,6 @@ with lib;
           home.stateVersion = mkDefault "25.05";
           programs.home-manager.enable = false;
         };
-
-        users.root = mkHome { };
       };
 
       users.users.root.home = "/var/root";

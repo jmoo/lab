@@ -1,7 +1,6 @@
 {
   pkgs,
   lib,
-  mkHome,
   ...
 }:
 with lib;
@@ -20,17 +19,26 @@ with lib;
 
   hardware.pulseaudio.enable = false;
 
-  home-manager.users.jmoore = mkHome {
+  home-manager.users.jmoore = {
     programs.yt-dlp.enable = true;
   };
 
   lab = {
     source = "/home/jmoore/Repos/jmoo/lab";
-    hyprland.enable = true;
+    users = [ "jmoore" ];
+    root = true;
+
+    ghostty.enable = true;
     greetd.enable = true;
+    hyprland.enable = true;
     k3s.enable = true;
     ssh.enable = true;
     pass.enable = true;
+
+    hypridle = {
+      enable = true;
+      common.monitorTimeout = null;
+    };
 
     shell = {
       enable = true;
@@ -51,8 +59,28 @@ with lib;
     };
   };
 
-  networking.networkmanager = {
-    enable = true;
+  networking = {
+    hostName = "lynx";
+
+    networkmanager = {
+      enable = true;
+    };
+
+    # Enables DHCP on each ethernet and wireless interface. In case of scripted networking
+    # (the default) this is the recommended approach. When using systemd-networkd it's
+    # still possible to use this option, but it's recommended to use it in conjunction
+    # with explicit per-interface declarations with `networking.interfaces.<interface>.useDHCP`.
+    useDHCP = lib.mkDefault true;
+  };
+
+  programs = {
+    steam = {
+      enable = true;
+      remotePlay.openFirewall = true;
+      localNetworkGameTransfers.openFirewall = true;
+    };
+
+    wireshark.enable = true;
   };
 
   services = {
@@ -80,26 +108,6 @@ with lib;
       enable = true;
       useRoutingFeatures = "server";
     };
-
-    # xserver = {
-    #   enable = true;
-    #   displayManager.lightdm.enable = true;
-    #   desktopManager.cinnamon.enable = true;
-    #   xkb = {
-    #     layout = "us";
-    #     variant = "";
-    #   };
-    # };
-  };
-
-  programs = {
-    steam = {
-      enable = true;
-      remotePlay.openFirewall = true;
-      localNetworkGameTransfers.openFirewall = true;
-    };
-
-    wireshark.enable = true;
   };
 
   users.users.jmoore = {

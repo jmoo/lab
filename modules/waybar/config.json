@@ -66,20 +66,17 @@
 
 
     "cpu": {
-        "format": "/ C {usage}% ",
-        "on-click": "uwsm app -- btop"
+        "format": "/ C {usage}% "
     },
 
     "memory": {
-        "format": "/ M {}% ",
-        "on-click": "uwsm app -- btop"
+        "format": "/ M {}% "
     },
 
     "disk": {
         "interval": 30,
         "format": "D {percentage_used}% ",
-        "path": "/",
-        "on-click": "uwsm app -- btop"
+        "path": "/"
     },
 
     "hyprland/language": {
@@ -151,8 +148,7 @@
                 " ",
                 " "
             ]
-        },
-        "on-click": "uwsm app -- pavucontrol"
+        }
     },
 
     "bluetooth": {
@@ -160,7 +156,6 @@
         "format-off": "",
         "format-on": "",
         "interval": 30,
-        "on-click": "uwsm app -- blueberry",
         "format-no-controller": ""
     },
 

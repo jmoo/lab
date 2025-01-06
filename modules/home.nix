@@ -1,13 +1,10 @@
-{
-  pkgs,
-  lib,
-  ...
-}:
-with lib;
+{ ... }:
 {
   imports = [
+    ./apps.nix
     ./direnv.nix
     ./guake.nix
+    ./ghostty.nix
     ./hyprland
     ./iterm2.nix
     ./lab.nix
@@ -15,13 +12,10 @@ with lib;
     ./nuphy75.nix
     ./pass.nix
     ./shell.nix
+    ./theme.nix
     ./vscode.nix
     ./ulauncher.nix
     ./waybar
     ../pkgs/vscode-nix-extensions/home-manager.nix
   ];
-
-  config = {
-    programs.home-manager.enable = mkDefault true;
-  };
 }
