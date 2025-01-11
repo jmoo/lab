@@ -14,103 +14,19 @@
         "bluetooth",
         "network",
         "pulseaudio",
-        "clock"
+        "backlight",
+        "clock",
+        "keyboard-state",
+        "systemd-failed-units"
     ],
-    "custom/launcher": {
-        "format": ""
-    },
-    "hyprland/workspaces": {
-        "on-click": "activate",
-        "active-only": false,
-        "all-outputs": true,
-        "format": "{}",
-        "format-icons": {
-            "urgent": "",
-            "active": "",
-            "default": ""
-        },
-        "persistent-workspaces": {
-            "*": 5
-        }
-    },
-    "hyprland/window": {
-        "rewrite": {
-            "(.*) - Brave": "$1",
-            "(.*) - Chromium": "$1",
-            "(.*) - Brave Search": "$1",
-            "(.*) - Outlook": "$1",
-            "(.*) Microsoft Teams": "$1"
-        },
-        "separate-outputs": true
-    },
-
-    "keyboard-state": {
-        "numlock": true,
-        "capslock": true,
-        "format": "{name} {icon}",
-        "format-icons": {
-            "locked": "",
-            "unlocked": ""
-        }
-    },
-
-    "tray": {
-        "spacing": 10
-    },
-
-    "clock": {
-        "timezone": "America/New_York",
-        "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>",
-        "format": "{:%a %b %u %R%p}"
-    },
-
-
-    "cpu": {
-        "format": "/ C {usage}% "
-    },
-
-    "memory": {
-        "format": "/ M {}% "
-    },
-
-    "disk": {
-        "interval": 30,
-        "format": "D {percentage_used}% ",
-        "path": "/"
-    },
-
-    "hyprland/language": {
-        "format": "/ K {short}"
-    },
-
-    "group/hardware": {
-        "orientation": "inherit",
-        "drawer": {
-            "transition-duration": 300,
-            "children-class": "not-memory",
-            "transition-left-to-right": false
-        },
-        "modules": [
-            "custom/system",
-            "disk",
-            "cpu",
-            "memory",
-            "hyprland/language"
+    "backlight": {
+        "device": "intel_backlight",
+        "format": "{percent}% {icon}",
+        "format-icons": [
+            "",
+            ""
         ]
     },
-
-    "network": {
-        "format": "{ifname}",
-        "format-wifi": "   {signalStrength}%",
-        "format-ethernet": "  {ipaddr}",
-        "format-disconnected": "Not connected", 
-        "tooltip-format": " {ifname} via {gwaddri}",
-        "tooltip-format-wifi": "   {essid} ({signalStrength}%)",
-        "tooltip-format-ethernet": "  {ifname} ({ipaddr}/{cidr})",
-        "tooltip-format-disconnected": "Disconnected",
-        "max-length": 50
-    },
-
     "battery": {
         "states": {
             "warning": 30,
@@ -128,7 +44,66 @@
             " "
         ]
     },
-
+    "bluetooth": {
+        "format-disabled": "",
+        "format-off": "",
+        "format-on": " {num_connections}",
+        "tooltip-format": "{device_enumerate}",
+        "interval": 30,
+        "format-no-controller": ""
+    },
+    "clock": {
+        "timezone": "America/New_York",
+        "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>",
+        "format": "{:%a %b %u %R%p}"
+    },
+    "custom/launcher": {
+        "format": ""
+    },
+    "hyprland/window": {
+        "rewrite": {
+            "(.*) - Brave": "$1",
+            "(.*) - Chromium": "$1",
+            "(.*) - Brave Search": "$1",
+            "(.*) - Outlook": "$1",
+            "(.*) Microsoft Teams": "$1"
+        },
+        "separate-outputs": true
+    },
+    "hyprland/workspaces": {
+        "on-click": "activate",
+        "active-only": false,
+        "all-outputs": true,
+        "format": "{}",
+        "format-icons": {
+            "urgent": "",
+            "active": "",
+            "default": ""
+        },
+        "persistent-workspaces": {
+            "*": 5
+        }
+    },
+    "keyboard-state": {
+        "numlock": true,
+        "capslock": true,
+        "format": "{name} {icon}",
+        "format-icons": {
+            "locked": "",
+            "unlocked": ""
+        }
+    },
+    "network": {
+        "format": "{ifname}",
+        "format-wifi": "   {signalStrength}%",
+        "format-ethernet": "  {ipaddr}",
+        "format-disconnected": "Not connected",
+        "tooltip-format": " {ifname} via {gwaddri}",
+        "tooltip-format-wifi": "   {essid} ({signalStrength}%)",
+        "tooltip-format-ethernet": "  {ifname} ({ipaddr}/{cidr})",
+        "tooltip-format-disconnected": "Disconnected",
+        "max-length": 50
+    },
     "pulseaudio": {
         "format": "{icon}  {volume}%",
         "format-bluetooth": "{volume}% {icon} {format_source}",
@@ -150,27 +125,14 @@
             ]
         }
     },
-
-    "bluetooth": {
-        "format-disabled": "",
-        "format-off": "",
-        "format-on": "",
-        "interval": 30,
-        "format-no-controller": ""
+    "systemd-failed-units": {
+        "hide-on-ok": true, 
+        "format": " {nr_failed}",
+        "format-ok": "✓",
+        "system": true,
+        "user": true 
     },
-
-    "user": {
-        "format": "{user}",
-        "interval": 60,
-        "icon": false
-    },
-
-    "idle_inhibitor": {
-        "format": "{icon}",
-        "tooltip": true,
-        "format-icons": {
-            "activated": "",
-            "deactivated": ""
-        }
+    "tray": {
+        "spacing": 10
     }
 }
