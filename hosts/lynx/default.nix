@@ -52,7 +52,6 @@ with lib;
 
     vscode = {
       enable = true;
-      root = true;
       common = {
         nix.formatter = pkgs.nixfmt-rfc-style;
       };
