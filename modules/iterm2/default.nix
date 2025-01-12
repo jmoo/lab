@@ -22,7 +22,7 @@ with lib;
 
     file.iterm2-plist = {
       executable = false;
-      source = ../resources/dotfiles/iterm2.plist;
+      source = ./iterm2.plist;
       target = ".config/iterm2/com.googlecode.iterm2.plist";
     };
   };

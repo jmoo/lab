@@ -6,7 +6,7 @@
     ./guake.nix
     ./ghostty.nix
     ./hyprland
-    ./iterm2.nix
+    ./iterm2
     ./lab.nix
     ./karabiner.nix
     ./nuphy75.nix

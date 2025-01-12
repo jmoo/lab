@@ -19,7 +19,7 @@ with lib;
         theme = "dark:Bright Lights,light:GruvboxLightHard";
         background-opacity = 0.9;
         font-family = "UbuntuMono Nerd Font Mono";
-        font-size = 14;
+        font-size = 13;
         window-decoration = false;
         gtk-tabs-location = "bottom";
         keybind = [
