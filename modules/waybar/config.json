@@ -1,0 +1,166 @@
+{
+    "height": 30,
+    "spacing": 4,
+    "modules-left": [
+        "custom/launcher",
+        "hyprland/window"
+    ],
+    "modules-center": [
+        "hyprland/workspaces"
+    ],
+    "modules-right": [
+        "keyboard-state",
+        "tray",
+        "bluetooth",
+        "battery",
+        "network",
+        "pulseaudio",
+        "backlight",
+        "clock",
+        "custom/notification",
+        "systemd-failed-units"
+    ],
+    "backlight": {
+        "device": "intel_backlight",
+        "format": "{percent}% {icon}",
+        "format-icons": [
+            "",
+            ""
+        ]
+    },
+    "battery": {
+        "states": {
+            "warning": 30,
+            "critical": 15
+        },
+        "format": "{icon}   {capacity}%",
+        "format-charging": "  {capacity}%",
+        "format-plugged": "  {capacity}%",
+        "format-alt": "{icon}  {time}",
+        "format-icons": [
+            " ",
+            " ",
+            " ",
+            " ",
+            " "
+        ]
+    },
+    "bluetooth": {
+        "format-disabled": "",
+        "format-off": "",
+        "format-on": "",
+        "tooltip-format": "{device_enumerate}",
+        "interval": 30,
+        "format-no-controller": ""
+    },
+    "clock": {
+        "timezone": "America/New_York",
+        "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>",
+        "format": "{:%a %b %u %R%p}"
+    },
+    "custom/launcher": {
+        "format": ""
+    },
+    "custom/notification": {
+        "escape": true,
+        "exec": "swaync-client -swb",
+        "exec-if": "which swaync-client",
+        "format": "{icon}",
+        "format-tooltip": "{} Notification(s)",
+        "format-icons": {
+            "dnd-inhibited-none": " ",
+            "dnd-inhibited-notification": " ",
+            "dnd-none": "󰂛",
+            "dnd-notification": " ",
+            "inhibited-none": "",
+            "inhibited-notification": " ",
+            "none": "",
+            "notification": "󱅫"
+        },
+        "on-click": "sleep 0.1 && swaync-client -t -sw",
+        "on-click-right": "sleep 0.1 && swaync-client -d -sw",
+        "return-type": "json",
+        "tooltip": true
+    },
+    "hyprland/window": {
+        "rewrite": {
+            "(.*) - Brave": "$1",
+            "(.*) - Chromium": "$1",
+            "(.*) - Brave Search": "$1",
+            "(.*) - Outlook": "$1",
+            "(.*) Microsoft Teams": "$1"
+        },
+        "separate-outputs": true
+    },
+    "hyprland/workspaces": {
+        "on-click": "activate",
+        "active-only": false,
+        "all-outputs": true,
+        "format": "{}",
+        "format-icons": {
+            "urgent": "",
+            "active": "",
+            "default": ""
+        },
+        "persistent-workspaces": {
+            "*": 5
+        }
+    },
+    "keyboard-state": {
+        "numlock": true,
+        "capslock": true,
+        "format": {
+            "capslock": "CAPS",
+            "numlock": "NUM",
+            "scrolllock": "SCRL"
+        },
+        "format-icons": {
+            "locked": "",
+            "unlocked": ""
+        }
+    },
+    "network": {
+        "format": "{ifname}",
+        "format-wifi": "   {signalStrength}%",
+        "format-ethernet": "  {ipaddr}",
+        "format-disconnected": "Not connected",
+        "tooltip-format": " {ifname} via {gwaddri}",
+        "tooltip-format-wifi": "   {essid} ({signalStrength}%)",
+        "tooltip-format-ethernet": "  {ifname} ({ipaddr}/{cidr})",
+        "tooltip-format-disconnected": "Disconnected",
+        "max-length": 50
+    },
+    "pulseaudio": {
+        "format": "{icon}  {volume}%",
+        "format-bluetooth": "{volume}% {icon} {format_source}",
+        "format-bluetooth-muted": " {icon} {format_source}",
+        "format-muted": " {format_source}",
+        "format-source": "{volume}% ",
+        "format-source-muted": "",
+        "format-icons": {
+            "headphone": "",
+            "hands-free": "",
+            "headset": "",
+            "phone": "",
+            "portable": "",
+            "car": "",
+            "default": [
+                "",
+                " ",
+                " "
+            ]
+        }
+    },
+    "systemd-failed-units": {
+        "hide-on-ok": true,
+        "format": "",
+        "format-ok": "✓",
+        "format-tooltip": "{nr_failed} failed units",
+        "system": true,
+        "user": true,
+        "tooltip": true
+    },
+    "tray": {
+        "spacing": 10
+    }
+}

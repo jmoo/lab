@@ -10,7 +10,7 @@ with lib;
 
 {
   options.lab.vscode = {
-    enable = mkEnableOption "vscode";
+    enable = mkEnableOption "Enable vscode home-manager configuration";
 
     python.enable = mkEnableOption "python" // {
       default = true;
@@ -55,6 +55,8 @@ with lib;
           streetsidesoftware.code-spell-checker
           tamasfe.even-better-toml
           mads-hartmann.bash-ide-vscode
+          charliermarsh.ruff
+          esbenp.prettier-vscode
         ];
 
         nixExtensions.default = {
@@ -89,6 +91,11 @@ with lib;
           }
 
           {
+            key = "ctrl+alt+p";
+            command = "workbench.action.openRecent";
+          }
+
+          {
             key = "alt+enter";
             command = "editor.action.quickFix";
             when = "editorHasCodeActionsProvider && textInputFocus && !editorReadonly";
@@ -101,6 +108,18 @@ with lib;
           }
 
           {
+            key = "ctrl+alt+l";
+            command = "editor.action.formatDocument";
+            when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
+          }
+
+          {
+            key = "ctrl+r";
+            command = "editor.action.startFindReplaceAction";
+            when = "editorFocus || editorIsOpen";
+          }
+
+          {
             key = "cmd+r";
             command = "editor.action.startFindReplaceAction";
             when = "editorFocus || editorIsOpen";
@@ -108,11 +127,10 @@ with lib;
         ];
 
         userSettings = {
+          "cSpell.words" = mkDefault (fromJSON (readFile ../dictionary.json));
+
           extensions.autoUpdate = false;
-          files.associations = {
-            "*.json" = "jsonc";
-          };
-          git.openRepositoryInParentFolders = "always";
+          "extensions.autoCheckUpdates" = false;
 
           "editor.fontFamily" = "Ubuntu Mono";
           "editor.fontSize" = 14;
@@ -127,16 +145,44 @@ with lib;
             };
           };
 
+          "files.autoSave" = "afterDelay";
+
+          files.associations = {
+            "*.json" = "jsonc";
+          };
+
+          git.openRepositoryInParentFolders = "always";
+
+          "scm.countBadge" = "off";
+
           terminal.integrated.fontFamily = "MesloLGS NF";
           terminal.integrated.defaultProfile.osx = "zsh";
           terminal.external.osxExec = "iTerm.app";
           terminal.integrated.fontSize = 13;
+
+          "update.mode" = "none";
+
+          "window.customTitleBarVisibility" = "auto";
+          "window.titleBarStyle" = "custom";
 
           "workbench.activityBar.location" = "top";
           "workbench.sideBar.location" = "left";
           "workbench.colorTheme" = "jmoo-dark";
           "workbench.iconTheme" = "jmoo-dark-icons";
           "workbench.tree.indent" = 20;
+
+          "[css]" = {
+            "editor.defaultFormatter" = "vscode.css-language-features";
+          };
+
+          "[jsonc]" = {
+            "editor.defaultFormatter" = "vscode.json-language-features";
+          };
+
+          "[python]" = {
+            "editor.defaultFormatter" = "charliermarsh.ruff";
+            # "editor.codeActionsOnSave" = { "source.organizeImports" = "explicit"; }
+          };
         };
       };
     }
@@ -164,17 +210,20 @@ with lib;
       };
     })
 
-    # Python
-    (mkIf config.lab.vscode.python.enable {
+    # Webdev
+    (mkIf config.lab.vscode.webdev.enable {
       programs.vscode.extensions = with pkgs.vscode-extensions; [
         dbaeumer.vscode-eslint
         esbenp.prettier-vscode
       ];
     })
 
-    # Webdev
-    (mkIf config.lab.vscode.webdev.enable {
-      programs.vscode.extensions = with pkgs.vscode-extensions; [ rust-lang.rust-analyzer ];
+    # Python
+    (mkIf config.lab.vscode.python.enable {
+      programs.vscode.extensions = with pkgs.vscode-extensions; [
+        ms-python.python
+        charliermarsh.ruff
+      ];
     })
   ]);
 }

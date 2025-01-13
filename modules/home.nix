@@ -1,18 +1,18 @@
-{ pkgs, lib, ... }:
-with lib;
+{ ... }:
 {
   imports = [
+    ./apps.nix
     ./direnv.nix
-    ./guake.nix
-    ./iterm2.nix
+    ./ghostty.nix
+    ./hyprland
+    ./iterm2
+    ./lab.nix
     ./karabiner.nix
-    ./nuphy75.nix
     ./shell.nix
+    ./theme.nix
     ./vscode.nix
+    ./ulauncher.nix
+    ./waybar
     ../pkgs/vscode-nix-extensions/home-manager.nix
   ];
-
-  programs.home-manager.enable = mkDefault true;
-
-  home.stateVersion = mkDefault "24.05";
 }

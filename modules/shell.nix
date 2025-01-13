@@ -1,5 +1,3 @@
-# Shared shell config for bash and zsh so I don't have to configure them twice for simple things like
-# aliases and basic init scripts.
 {
   config,
   pkgs,
@@ -12,9 +10,9 @@ with builtins;
 
 {
   options.lab.shell = {
-    enable = mkEnableOption "shell";
+    enable = mkEnableOption "Enable default shell home-manager configuration";
 
-    # Deprecated, no longer needed. Use 
+    # Deprecated, no longer needed.
     aliases = mkOption {
       type = types.attrsOf types.str;
       default = { };
@@ -52,7 +50,7 @@ with builtins;
     home = {
       shellAliases = {
         sl = "ls";
-        ls = "ls";
+        ls = "ls --color";
         l = "ls";
         la = "ls -la";
         ll = "ls -laF";
@@ -64,8 +62,6 @@ with builtins;
 
       packages = with pkgs; [
         rlwrap
-        zsh-powerlevel10k
-        powerlevel10k-media
         fzf
       ];
     };
@@ -77,21 +73,33 @@ with builtins;
         shellAliases = config.lab.shell.aliases;
 
         bashrcExtra = ''
-          ${builtins.readFile ../resources/dotfiles/bashrc}
+          case "$TERM" in
+              xterm-color|*-256color) color_prompt=yes;;
+          esac
+
+          if [ "$color_prompt" = yes ]; then
+              PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+          else
+              PS1='\u@\h:\w\$ '
+          fi
+
+          unset color_prompt force_color_prompt
+
+          case "$TERM" in
+          xterm*|rxvt*)
+              PS1="\[\e]0;\u@\h: \w\a\]$PS1"
+              ;;
+          *)
+              ;;
+          esac
 
           ${config.lab.shell.init}
         '';
 
         shellOptions =
           [
-            # Append to history file rather than replacing it.
             "histappend"
-
-            # check the window size after each command and, if
-            # necessary, update the values of LINES and COLUMNS.
             "checkwinsize"
-
-            # Extended globbing.
             "extglob"
           ]
           ++ (
@@ -99,13 +107,24 @@ with builtins;
               [ ]
             else
               [
-                # Extended globbing.
                 "globstar"
-
-                # Warn if closing shell with running jobs.
                 "checkjobs"
               ]
           );
+      };
+
+      fzf = {
+        enable = true;
+        enableZshIntegration = true;
+      };
+
+      starship = {
+        enable = true;
+        settings = {
+          line_break.disabled = true;
+          right_format = "$time$status";
+          git_status.disabled = true;
+        };
       };
 
       zsh = {
@@ -117,8 +136,9 @@ with builtins;
         shellAliases = config.lab.shell.aliases;
 
         initExtra = ''
-          ${builtins.readFile ../resources/dotfiles/zshrc}
-          ${builtins.readFile ../resources/dotfiles/p10k}
+          if [ -f /etc/zshrc ] && ! command -v nix > /dev/null 2> /dev/null; then
+            source /etc/zshrc
+          fi
 
           ${optionalString pkgs.stdenv.isDarwin ''
             # Fix home/end keys
