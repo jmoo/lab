@@ -29,34 +29,60 @@ with lib;
       uwsm = mkEnableOption "Manages graphical-session systemd user targets and scopes with uwsm";
 
       wallpapers = mkOption {
-        type = types.listOf types.submodule ({
-          enable = (mkEnableOption "Enable the wallpaper") // {
-            default = true;
-          };
+        type = types.listOf (
+          types.submodule ({
+            options = {
+              enable = (mkEnableOption "Enable the wallpaper") // {
+                default = true;
+              };
 
-          source = mkOption {
-            description = "Wallpaper source";
-            type = with types; oneOf package path;
-          };
+              source = mkOption {
+                description = "Wallpaper source";
+                type =
+                  with types;
+                  oneOf [
+                    package
+                    path
+                  ];
+              };
 
-          monitors = mkOption {
-            description = "Only apply wallpaper to these monitors";
-            type = with types; nullOr (listOf str);
-            default = null;
-          };
+              preload = mkOption {
+                description = "Preload the wallpaper";
+                type = types.bool;
+                default = true;
+              };
 
-          type = mkOption {
-            description = "Type of wallpaper";
-            type =
-              with types;
-              enum [
-                "lock"
-                "desktop"
-                "lock_and_desktop"
-              ];
-            default = "desktop";
-          };
-        });
+              mode = mkOption {
+                description = "Wallpaper display type";
+                type = types.enum [
+                  "cover"
+                  "contain"
+                  "tile"
+                ];
+                default = "cover";
+              };
+
+              monitors = mkOption {
+                description = "Only apply wallpaper to these monitors";
+                type = with types; nullOr (listOf str);
+                default = null;
+              };
+
+              type = mkOption {
+                description = "Type of wallpaper";
+                type =
+                  with types;
+                  enum [
+                    "lock"
+                    "desktop"
+                    "lock_and_desktop"
+                  ];
+                default = "desktop";
+              };
+            };
+          })
+        );
+        default = [ ];
       };
     };
   };
@@ -130,6 +156,12 @@ with lib;
 
             # Set sessionVariables
             env = mapAttrsToList (n: v: "${n},${v}") config.lab.hyprland.sessionVariables;
+
+            # Enable default anime wallpapers
+            misc = {
+              force_default_wallpaper = mkDefault (-1);
+              disable_hyprland_logo = mkDefault false;
+            };
           }
 
           # Set variables for default apps
