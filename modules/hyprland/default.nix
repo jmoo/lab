@@ -2,87 +2,137 @@
   config,
   lib,
   pkgs,
+  wrapHyprCommand,
   ...
 }:
 with lib;
-let
-  wrapHyprCommand = x: "${optionalString config.lab.hyprland.uwsm "${getExe pkgs.uwsm} app -- "}${x}";
-in
 {
+  imports = [
+    ./hypridle.nix
+    ./hyprlock.nix
+    ./hyprpaper.nix
+    ./hyprpolkitagent.nix
+  ];
+
   options.lab = {
     hyprland = {
       enable = mkEnableOption "Enable hyprland home-manager configuration";
-      nvidia = mkEnableOption "Enable nvidia";
-      uwsm = mkEnableOption "Enable uwsm";
-    };
 
-    hyprlock = {
-      enable = mkEnableOption "Enable hyprlock home-manager configuration";
-    };
+      nvidia = mkEnableOption "Set to true if using an nvidia gpu";
 
-    hypridle = {
-      enable = mkEnableOption "Enable hypridle home-manager configuration";
-
-      lockCommand = mkOption {
-        type = types.str;
-        default = wrapHyprCommand config.lab.apps.lock.command;
+      sessionVariables = mkOption {
+        description = "Session variables that need to be included in the hyprland session.";
+        type = with types; attrsOf str;
+        default = { };
       };
 
-      lockTimeout = mkOption {
-        type = with types; nullOr number;
-        default = 900;
-      };
+      uwsm = mkEnableOption "Manages graphical-session systemd user targets and scopes with uwsm";
 
-      monitorTimeout = mkOption {
-        type = with types; nullOr number;
-        default = 1200;
+      wallpapers = mkOption {
+        type = types.listOf types.submodule ({
+          enable = (mkEnableOption "Enable the wallpaper") // {
+            default = true;
+          };
+
+          source = mkOption {
+            description = "Wallpaper source";
+            type = with types; oneOf package path;
+          };
+
+          monitors = mkOption {
+            description = "Only apply wallpaper to these monitors";
+            type = with types; nullOr (listOf str);
+            default = null;
+          };
+
+          type = mkOption {
+            description = "Type of wallpaper";
+            type =
+              with types;
+              enum [
+                "lock"
+                "desktop"
+                "lock_and_desktop"
+              ];
+            default = "desktop";
+          };
+        });
       };
     };
   };
 
   config = mkMerge [
-    # Hyprland
-    (mkIf config.lab.hyprland.enable {
-      home.packages =
-        with pkgs;
-        [
-          hyprpolkitagent
-          playerctl
-          brightnessctl
-        ]
-
-        # Add default apps to the environment
-        ++ (map (x: x.package) (attrValues config.lab.apps));
-
-      lab = {
-        hyprlock.enable = true;
-        hypridle.enable = true;
-        theme.enable = true;
-        ulauncher.enable = true;
-        waybar.enable = true;
+    {
+      # Make QT apps happy
+      lab.hyprland.sessionVariables = {
+        QT_QPA_PLATFORM = "wayland";
       };
 
-      # Always have kitty as a backup
-      programs.kitty.enable = true;
+      # Wrapping all executables called from hyprland. This will wrap
+      # everything with uwsm calls if uwsm is enabled.
+      _module.args.wrapHyprCommand =
+        x:
+        "${
+          optionalString (
+            config.lab.hyprland.enable && config.lab.hyprland.uwsm
+          ) "${getExe pkgs.uwsm} app -- "
+        }${x}";
+    }
+
+    # Hyprland
+    (mkIf config.lab.hyprland.enable {
+      home = {
+        packages =
+          with pkgs;
+          [
+            # Media and brightness controls
+            brightnessctl
+            playerctl
+
+            # Include xterm so there is always a non-gpu accelerated terminal available
+            xterm
+          ]
+
+          # Add default apps to the environment
+          ++ (map (x: x.package) (attrValues config.lab.apps));
+
+        sessionVariables = config.lab.hyprland.sessionVariables;
+      };
+
+      # Enable default programs and services for a complete
+      # out of the box hyprland experience.
+      lab = {
+        hyprlock.enable = mkDefault true;
+        hypridle.enable = mkDefault true;
+        hyprpaper.enable = mkDefault false;
+        hyprpolkitagent.enable = mkDefault true;
+        theme.enable = mkDefault true;
+        ulauncher.enable = mkDefault true;
+        waybar.enable = mkDefault true;
+      };
+
+      # Notification daemon
+      services.swaync.enable = mkDefault true;
+
+      systemd.user.sessionVariables = config.lab.hyprland.sessionVariables;
 
       wayland.windowManager.hyprland = {
         enable = true;
-        extraConfig = builtins.readFile ./hyprland.conf;
+        extraConfig = builtins.readFile ./config/hyprland.conf;
         settings = mkMerge [
           {
+            # Set default mod variables
             "$mod" = mkDefault "SUPER";
             "$modCtrl" = mkDefault "SUPER+CTRL";
             "$modAlt" = mkDefault "SUPER+ALT";
             "$modShift" = mkDefault "SUPER+SHIFT";
             "$modShiftCtrl" = mkDefault "SUPER+SHIFT+CTRL";
 
-            env = mkIf config.lab.hyprland.nvidia [
-              "LIBVA_DRIVER_NAME,nvidia"
-              "__GLX_VENDOR_LIBRARY_NAME,nvidia"
-            ];
+            # Set sessionVariables
+            env = mapAttrsToList (n: v: "${n},${v}") config.lab.hyprland.sessionVariables;
           }
 
-          # Add variables for default apps
+          # Set variables for default apps
           (mapAttrs' (n: v: {
             name = "\$${n}";
             value = mkDefault (wrapHyprCommand v.command);
@@ -93,53 +143,29 @@ in
       };
     })
 
-    # UWSM
+    # Environment flags for nvidia GPUs
+    (mkIf config.lab.hyprland.nvidia {
+      lab.hyprland.sessionVariables = {
+        LIBVA_DRIVER_NAME = "nvidia";
+        __GLX_VENDOR_LIBRARY_NAME = "nvidia";
+      };
+    })
+
+    # UWSM - Manages graphical-session systemd user targets and scopes
     (mkIf config.lab.hyprland.uwsm {
       lab = {
+        # Patched version of ulauncher that launches everything with uwsm
         ulauncher.package = mkIf config.lab.hyprland.uwsm pkgs.ulauncher-uwsm;
+
+        # Override waybar launcher commands with uwsm variants
         waybar.settings = {
           bluetooth.on-click = wrapHyprCommand config.lab.apps.bluetoothManager.command;
           pulseaudio.on-click = wrapHyprCommand config.lab.apps.audioManager.command;
         };
       };
 
+      # Hyprland is started by UWSM so we need to disable the systemd service
       wayland.windowManager.hyprland.systemd.enable = mkForce false;
-    })
-
-    # Hyprlock
-    (mkIf config.lab.hyprlock.enable {
-      lab.apps.lock.package = config.programs.hyprlock.package;
-
-      programs.hyprlock = {
-        enable = true;
-        extraConfig = builtins.readFile ./hyprlock.conf;
-      };
-    })
-
-    # Hypridle
-    (mkIf config.lab.hypridle.enable {
-      services.hypridle = {
-        enable = true;
-
-        settings = {
-          general = {
-            after_sleep_cmd = "hyprctl dispatch dpms on";
-            ignore_dbus_inhibit = false;
-            lock_cmd = config.lab.hypridle.lockCommand;
-          };
-
-          listener =
-            (lists.optional (config.lab.hypridle.lockTimeout != null) {
-              timeout = config.lab.hypridle.lockTimeout;
-              on-timeout = config.lab.hypridle.lockCommand;
-            })
-            ++ (lists.optional (config.lab.hypridle.monitorTimeout != null) {
-              timeout = config.lab.hypridle.monitorTimeout;
-              on-timeout = "hyprctl dispatch dpms off";
-              on-resume = "hyprctl dispatch dpms on";
-            });
-        };
-      };
     })
   ];
 }

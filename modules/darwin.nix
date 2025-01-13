@@ -14,16 +14,14 @@ with lib;
 
   config = mkMerge [
     {
-      home-manager = {
-        common = {
-          home.stateVersion = mkDefault "25.05";
-          programs.home-manager.enable = false;
-        };
+      lab.common = {
+        home.stateVersion = mkDefault "25.05";
+        programs.home-manager.enable = false;
       };
 
       users.users.root.home = "/var/root";
-      system.stateVersion = mkDefault 5;
       services.nix-daemon.enable = true;
+      system.stateVersion = mkDefault 5;
       nixpkgs.hostPlatform = mkDefault "aarch64-darwin";
     }
 
@@ -32,7 +30,7 @@ with lib;
     })
 
     (mkIf config.lab.shell.enable {
-      home-manager.common.home.shellAliases = {
+      lab.common.home.shellAliases = {
         switch = mkDefault "darwin-rebuild switch --flake ${config.lab.source}#${config.lab.name}";
       };
       programs.zsh.enable = true;

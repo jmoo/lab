@@ -17,13 +17,6 @@ with lib;
 
   config = mkMerge [
     {
-      home-manager = {
-        common = {
-          home.stateVersion = mkDefault config.system.stateVersion;
-          programs.home-manager.enable = false;
-        };
-      };
-
       i18n.defaultLocale = "en_US.UTF-8";
       i18n.extraLocaleSettings = {
         LC_ADDRESS = "en_US.UTF-8";
@@ -37,17 +30,25 @@ with lib;
         LC_TIME = "en_US.UTF-8";
       };
 
+      lab.common = {
+        home.stateVersion = mkDefault config.system.stateVersion;
+        programs.home-manager.enable = false;
+      };
+
       system.stateVersion = mkDefault "25.05";
       time.timeZone = "America/New_York";
     }
 
     # Hyprland
     (mkIf config.lab.hyprland.enable {
-      home-manager.common.lab = {
-        hyprland = {
-          nvidia = elem "nvidia" config.services.xserver.videoDrivers;
-          uwsm = true;
-        };
+      environment.systemPackages = with pkgs; [
+        kdePackages.qtwayland
+        kdePackages.qtsvg
+      ];
+
+      lab.hyprland.common = {
+        nvidia = elem "nvidia" config.services.xserver.videoDrivers;
+        uwsm = true;
       };
 
       programs = {
@@ -62,23 +63,29 @@ with lib;
 
     # Shell configuration
     (mkIf config.lab.shell.enable {
-      home-manager.common = {
-        lab.shell.enable = mkDefault true;
-        home.shellAliases.switch = mkDefault "sudo nixos-rebuild switch --flake ${config.lab.source}#${config.lab.name}";
+      environment.shellInit = "unset __HM_SESS_VARS_SOURCED; [[ -e ~/.profile ]] && . ~/.profile";
+
+      lab = {
+        common.home.shellAliases.switch = mkDefault "sudo nixos-rebuild switch --flake ${config.lab.source}#${config.lab.name}";
+        shell.common = {
+          enable = mkDefault true;
+        };
       };
 
-      environment.shellInit = "unset __HM_SESS_VARS_SOURCED; [[ -e ~/.profile ]] && . ~/.profile";
-      users.defaultUserShell = pkgs.zsh;
       programs.zsh.enable = true;
+      users.defaultUserShell = pkgs.zsh;
     })
 
     # Network Manager
     (mkIf config.networking.networkmanager.enable {
-      home-manager.common = {
+      lab.common = {
         services.network-manager-applet.enable = mkDefault true;
 
         systemd.user.services = {
-          network-manager-applet.Unit.After = [ "graphical-session.target" ];
+          network-manager-applet.Unit = {
+            After = [ "graphical-session.target" ];
+            PartOf = [ "graphical-session.target" ];
+          };
         };
       };
     })
@@ -101,11 +108,11 @@ with lib;
 
           script = with pkgs; ''
             # wait for tailscaled to settle
-            sleep 2
+            sleep 10
 
             # check if we are already authenticated to tailscale
             status="$(${tailscale}/bin/tailscale status -json | ${jq}/bin/jq -r .BackendState)"
-            if [ $status = "Running" ]; then # if so, then do nothing
+            if [[ "$status" == "Running" ]]; then # if so, then do nothing
               exit 0
             fi
 

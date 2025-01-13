@@ -3,14 +3,11 @@
   imports = [
     ./apps.nix
     ./direnv.nix
-    ./guake.nix
     ./ghostty.nix
     ./hyprland
     ./iterm2
     ./lab.nix
     ./karabiner.nix
-    ./nuphy75.nix
-    ./pass.nix
     ./shell.nix
     ./theme.nix
     ./vscode.nix

@@ -9,14 +9,15 @@
         "hyprland/workspaces"
     ],
     "modules-right": [
+        "keyboard-state",
         "tray",
-        "battery",
         "bluetooth",
+        "battery",
         "network",
         "pulseaudio",
         "backlight",
         "clock",
-        "keyboard-state",
+        "custom/notification",
         "systemd-failed-units"
     ],
     "backlight": {
@@ -47,7 +48,7 @@
     "bluetooth": {
         "format-disabled": "",
         "format-off": "",
-        "format-on": " {num_connections}",
+        "format-on": "",
         "tooltip-format": "{device_enumerate}",
         "interval": 30,
         "format-no-controller": ""
@@ -59,6 +60,27 @@
     },
     "custom/launcher": {
         "format": ""
+    },
+    "custom/notification": {
+        "escape": true,
+        "exec": "swaync-client -swb",
+        "exec-if": "which swaync-client",
+        "format": "{icon}",
+        "format-tooltip": "{} Notification(s)",
+        "format-icons": {
+            "dnd-inhibited-none": " ",
+            "dnd-inhibited-notification": " ",
+            "dnd-none": "󰂛",
+            "dnd-notification": " ",
+            "inhibited-none": "",
+            "inhibited-notification": " ",
+            "none": "",
+            "notification": "󱅫"
+        },
+        "on-click": "sleep 0.1 && swaync-client -t -sw",
+        "on-click-right": "sleep 0.1 && swaync-client -d -sw",
+        "return-type": "json",
+        "tooltip": true
     },
     "hyprland/window": {
         "rewrite": {
@@ -87,7 +109,11 @@
     "keyboard-state": {
         "numlock": true,
         "capslock": true,
-        "format": "{name} {icon}",
+        "format": {
+            "capslock": "CAPS",
+            "numlock": "NUM",
+            "scrolllock": "SCRL"
+        },
         "format-icons": {
             "locked": "",
             "unlocked": ""
@@ -126,11 +152,13 @@
         }
     },
     "systemd-failed-units": {
-        "hide-on-ok": true, 
-        "format": " {nr_failed}",
+        "hide-on-ok": true,
+        "format": "",
         "format-ok": "✓",
+        "format-tooltip": "{nr_failed} failed units",
         "system": true,
-        "user": true 
+        "user": true,
+        "tooltip": true
     },
     "tray": {
         "spacing": 10

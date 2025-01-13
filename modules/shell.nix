@@ -50,7 +50,7 @@ with builtins;
     home = {
       shellAliases = {
         sl = "ls";
-        ls = "ls";
+        ls = "ls --color";
         l = "ls";
         la = "ls -la";
         ll = "ls -laF";

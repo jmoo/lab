@@ -39,7 +39,11 @@ with lib;
     systemd.user.services.waybar = {
       Unit.Description = "waybar";
       Install.WantedBy = [ "graphical-session.target" ];
-      Unit.After = [ "graphical-session.target" ];
+      Unit = {
+        After = [ "graphical-session.target" ];
+        PartOf = [ "graphical-session.target" ];
+        ConditionEnvironment = "WAYLAND_DISPLAY";
+      };
       Service = {
         ExecStart = "${getExe config.programs.waybar.package}";
         Restart = "on-failure";

@@ -10,7 +10,9 @@ with lib;
 
   config = mkIf config.lab.theme.enable {
     home.packages = with pkgs; [
-      # Themes
+      # Theme
+      adwaita-icon-theme
+      adwaita-qt
       adwaita-qt6
       adw-gtk3
 
@@ -18,9 +20,6 @@ with lib;
       nerd-fonts.ubuntu
       nerd-fonts.ubuntu-mono
       font-awesome
-
-      # Wallpapers
-      nixos-artwork.wallpapers.dracula
     ];
 
     dconf = {
@@ -50,6 +49,12 @@ with lib;
         name = "Adwaita";
         package = pkgs.adwaita-icon-theme;
       };
+    };
+
+    qt = {
+      enable = true;
+      style.name = "adwaita-dark";
+      platformTheme.name = "adwaita";
     };
   };
 }

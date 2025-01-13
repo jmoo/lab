@@ -7,6 +7,7 @@
 with lib;
 {
   options.lab.apps = mkOption {
+    description = "Default apps";
     type =
       with types;
       attrsOf (
@@ -36,12 +37,11 @@ with lib;
           }
         )
       );
-
     default = { };
   };
 
   config.lab.apps = with pkgs; {
-    terminal.package = mkDefault config.programs.kitty.package;
+    terminal.package = mkDefault xterm;
     bluetoothManager.package = mkDefault blueberry;
     audioManager.package = mkDefault pavucontrol;
     launcher.package = mkDefault config.lab.ulauncher.package;

@@ -13,11 +13,10 @@ with lib;
   environment.systemPackages = with pkgs; [
     brave
     git
+    gparted
     obsidian
     vim
   ];
-
-  hardware.pulseaudio.enable = false;
 
   home-manager.users.jmoore = {
     programs.yt-dlp.enable = true;
@@ -28,27 +27,35 @@ with lib;
     users = [ "jmoore" ];
     root = true;
 
+    direnv = {
+      enable = true;
+      root = true;
+    };
+
     ghostty.enable = true;
     greetd.enable = true;
-    hyprland.enable = true;
-    k3s.enable = true;
-    ssh.enable = true;
-    pass.enable = true;
 
-    hypridle = {
+    hyprpaper.enable = true;
+
+    hyprland = {
       enable = true;
-      common.monitorTimeout = null;
+      common = {
+        wallpapers = [
+          { source = ../../resources/wallpaper/5120x1440_a.png; }
+          { source = ../../resources/wallpaper/5120x1440_b.png; }
+          { source = ../../resources/wallpaper/5120x1440_c.jpg; }
+        ];
+      };
     };
+
+    k3s.enable = true;
 
     shell = {
       enable = true;
       root = true;
     };
 
-    direnv = {
-      enable = true;
-      root = true;
-    };
+    ssh.enable = true;
 
     vscode = {
       enable = true;
@@ -65,11 +72,7 @@ with lib;
       enable = true;
     };
 
-    # Enables DHCP on each ethernet and wireless interface. In case of scripted networking
-    # (the default) this is the recommended approach. When using systemd-networkd it's
-    # still possible to use this option, but it's recommended to use it in conjunction
-    # with explicit per-interface declarations with `networking.interfaces.<interface>.useDHCP`.
-    useDHCP = lib.mkDefault true;
+    useDHCP = mkDefault true;
   };
 
   programs = {
@@ -82,13 +85,9 @@ with lib;
     wireshark.enable = true;
   };
 
-  services = {
-    sunshine = {
-      enable = true;
-      openFirewall = true;
-      capSysAdmin = true;
-    };
+  security.rtkit.enable = true;
 
+  services = {
     jellyfin = {
       enable = true;
       openFirewall = true;
@@ -102,6 +101,14 @@ with lib;
     };
 
     printing.enable = true;
+
+    pulseaudio.enable = false;
+
+    sunshine = {
+      enable = true;
+      openFirewall = true;
+      capSysAdmin = true;
+    };
 
     tailscale = {
       enable = true;
@@ -117,8 +124,9 @@ with lib;
     extraGroups = [
       "networkmanager"
       "wheel"
+      "dialout"
+      "input"
     ];
   };
 
-  security.rtkit.enable = true;
 }
