@@ -30,7 +30,6 @@ with lib;
   };
 
   config = mkIf config.lab.hypridle.enable {
-    # Default lock screen wallpaper
     home.packages = with pkgs; [
       nixos-artwork.wallpapers.dracula
     ];

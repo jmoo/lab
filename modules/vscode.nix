@@ -114,6 +114,12 @@ with lib;
           }
 
           {
+            key = "ctrl+r";
+            command = "editor.action.startFindReplaceAction";
+            when = "editorFocus || editorIsOpen";
+          }
+
+          {
             key = "cmd+r";
             command = "editor.action.startFindReplaceAction";
             when = "editorFocus || editorIsOpen";

@@ -66,5 +66,6 @@
     "ghostty",
     "qtwayland",
     "qtsvg",
-    "gparted"
+    "gparted",
+    "dbus"
 ]
