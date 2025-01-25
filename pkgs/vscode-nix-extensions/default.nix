@@ -25,7 +25,7 @@ let
         ];
       }).config;
 
-  packageJson = writeText "pacakge.json" (builtins.toJSON config.extraConfig);
+  packageJson = writeText "package.json" (builtins.toJSON config.extraConfig);
 
 in
 (vscode-utils.buildVscodeMarketplaceExtension {

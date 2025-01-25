@@ -23,8 +23,8 @@ with lib;
         window-decoration = false;
         gtk-tabs-location = "bottom";
         keybind = [
-          "ctrl+left=previous_tab"
-          "ctrl+right=next_tab"
+          "ctrl+shift+left=previous_tab"
+          "ctrl+shift+right=next_tab"
           "ctrl+t=new_tab"
           "ctrl+shift+t=toggle_tab_overview"
         ];

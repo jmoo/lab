@@ -35,18 +35,8 @@ with lib;
     ghostty.enable = true;
     greetd.enable = true;
 
-    hyprpaper.enable = true;
-
-    hyprland = {
-      enable = true;
-      common = {
-        wallpapers = [
-          { source = ../../resources/wallpaper/5120x1440_a.png; }
-          { source = ../../resources/wallpaper/5120x1440_b.png; }
-          { source = ../../resources/wallpaper/5120x1440_c.jpg; }
-        ];
-      };
-    };
+    hyprpaper.enable = false;
+    hyprland.enable = true;
 
     k3s.enable = true;
 
