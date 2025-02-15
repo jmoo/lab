@@ -20,7 +20,7 @@ with lib;
       };
 
       users.users.root.home = "/var/root";
-      services.nix-daemon.enable = true;
+      nix.enable = true;
       system.stateVersion = mkDefault 5;
       nixpkgs.hostPlatform = mkDefault "aarch64-darwin";
     }

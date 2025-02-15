@@ -33,7 +33,7 @@ with lib;
     vscode = {
       enable = true;
       root = true;
-      nix.formatter = pkgs.nixfmt-rfc-style;
+      common.nix.formatter = pkgs.nixfmt-rfc-style;
     };
   };
 
