@@ -50,7 +50,7 @@
         default = import ./modules/nixos.nix;
       };
 
-      overlays.default = import ./overlay.nix { inherit inputs; };
+      overlays.default = import ./overlay.nix inputs;
 
       legacyPackages = {
         aarch64-darwin = import nixpkgs {
