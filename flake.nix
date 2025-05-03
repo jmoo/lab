@@ -1,6 +1,5 @@
 {
   inputs = {
-
     home-manager = {
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -11,6 +10,8 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    nix-environments.url = "github:nix-community/nix-environments";
+
     nixos-xlnx = {
       url = "github:chuangzhu/nixos-xlnx";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -20,62 +21,41 @@
   };
 
   outputs =
-    { nixpkgs, ... }@inputs:
+    { nixpkgs, self, ... }@inputs:
     let
-      legacyPackages = {
-        aarch64-darwin = import nixpkgs {
-          system = "aarch64-darwin";
-          overlays = nixpkgs.lib.attrValues overlays;
-        };
-
-        x86_64-linux = import nixpkgs {
-          system = "x86_64-linux";
-          overlays = nixpkgs.lib.attrValues overlays;
-        };
-      };
-
-      overlays.default = import ./overlay.nix inputs;
+      inherit (import ./lib.nix inputs)
+        eachPackageSet
+        eachSystem
+        darwinSystem
+        nixosSystem
+        ;
     in
     {
-      inherit legacyPackages overlays;
+      legacyPackages = eachSystem (
+        system:
+        import nixpkgs {
+          inherit system;
+          overlays = nixpkgs.lib.attrValues self.overlays;
+        }
+      );
+
+      overlays.default = import ./overlay.nix inputs;
 
       darwinConfigurations = {
-        meerkat = inputs.nix-darwin.lib.darwinSystem {
-          system = "aarch64-darwin";
-          specialArgs = {
-            inherit inputs;
-          };
-          modules = [
-            ./hosts/meerkat
-            { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
-          ];
-        };
+        meerkat = darwinSystem ./hosts/meerkat;
       };
 
-      formatter = nixpkgs.lib.mapAttrs (_: pkgs: pkgs.nixfmt-rfc-style) legacyPackages;
+      devShells = eachPackageSet (pkgs: {
+        zebu = pkgs.callPackage ./hosts/zebu/shell.nix {
+          inherit inputs;
+        };
+      });
+
+      formatter = eachPackageSet (pkgs: pkgs.nixfmt-rfc-style);
 
       nixosConfigurations = {
-        lynx = nixpkgs.lib.nixosSystem {
-          system = "x86_64-linux";
-          specialArgs = {
-            inherit inputs;
-          };
-          modules = [
-            ./hosts/lynx
-            { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
-          ];
-        };
-
-        zebu = nixpkgs.lib.nixosSystem {
-          system = "aarch64-multiplatform";
-          specialArgs = {
-            inherit inputs;
-          };
-          modules = [
-            ./hosts/zebu
-            { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
-          ];
-        };
+        lynx = nixosSystem "x86_64-linux" ./hosts/lynx;
+        zebu = nixosSystem "aarch64-linux" ./hosts/zebu;
       };
 
       nixosModules = {

@@ -8,9 +8,9 @@
 
     Enter dev shell
     ```
-    nix develop --no-write-lock-file github:nix-community/nix-environments#xilinx-vitis
+    nix develop .#zebu
     ```
 
     Run the installer
 
-2. 
+2. TODO
