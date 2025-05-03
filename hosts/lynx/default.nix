@@ -20,6 +20,7 @@ with lib;
 
   home-manager.users.jmoore = {
     programs.yt-dlp.enable = true;
+    programs.ghostty.settings.theme = mkForce "Bright Lights";
   };
 
   lab = {
