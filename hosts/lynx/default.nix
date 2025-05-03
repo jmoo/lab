@@ -15,6 +15,7 @@ with lib;
     git
     gparted
     obsidian
+    tio
     vim
   ];
 

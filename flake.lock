@@ -40,6 +40,26 @@
         "type": "github"
       }
     },
+    "nixos-xlnx": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1740448185,
+        "narHash": "sha256-x4CNRe70T5iTaqDa+dp0jqC8KZmV/lo3EV3n4sM685M=",
+        "owner": "chuangzhu",
+        "repo": "nixos-xlnx",
+        "rev": "8317ad8919aee470785c9f1dd4b9ec97cc82cb50",
+        "type": "github"
+      },
+      "original": {
+        "owner": "chuangzhu",
+        "repo": "nixos-xlnx",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1746141548,
@@ -60,6 +80,7 @@
       "inputs": {
         "home-manager": "home-manager",
         "nix-darwin": "nix-darwin",
+        "nixos-xlnx": "nixos-xlnx",
         "nixpkgs": "nixpkgs"
       }
     }
