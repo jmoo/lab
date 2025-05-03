@@ -14,6 +14,7 @@ let
     "hypridle"
     "hyprlock"
     "iterm2"
+    "iwmenu"
     "karabiner"
     "theme"
     "shell"

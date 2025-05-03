@@ -61,6 +61,11 @@ with lib;
       };
     })
 
+    # Wifi configuration
+    (mkIf config.lab.iwmenu.enable {
+      networking.wireless.iwd.enable = true;
+    })
+
     # Shell configuration
     (mkIf config.lab.shell.enable {
       environment.shellInit = "unset __HM_SESS_VARS_SOURCED; [[ -e ~/.profile ]] && . ~/.profile";

@@ -39,6 +39,8 @@ with lib;
     hyprpaper.enable = false;
     hyprland.enable = true;
 
+    iwmenu.enable = true;
+
     k3s.enable = true;
 
     shell = {
@@ -60,7 +62,7 @@ with lib;
     hostName = "lynx";
 
     networkmanager = {
-      enable = true;
+      enable = false;
     };
 
     useDHCP = mkDefault true;

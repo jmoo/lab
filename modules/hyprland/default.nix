@@ -132,6 +132,7 @@ with lib;
         hypridle.enable = mkDefault true;
         hyprpaper.enable = mkDefault false;
         hyprpolkitagent.enable = mkDefault true;
+        iwmenu.uwsm = config.lab.hyprland.uwsm;
         theme.enable = mkDefault true;
         ulauncher.enable = mkDefault true;
         waybar.enable = mkDefault true;

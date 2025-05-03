@@ -5,6 +5,8 @@ inputs: final: prev: {
     };
   });
 
+  iwmenu = inputs.iwmenu.packages.${final.system}.default;
+
   ulauncher-uwsm = final.callPackage ./pkgs/ulauncher-uwsm { };
 
   vscode-extensions = prev.vscode-extensions // {

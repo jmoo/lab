@@ -6,6 +6,7 @@
     ./ghostty.nix
     ./hyprland
     ./iterm2
+    ./iwmenu.nix
     ./lab.nix
     ./karabiner.nix
     ./shell.nix
