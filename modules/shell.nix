@@ -135,7 +135,7 @@ with builtins;
         enableCompletion = true;
         shellAliases = config.lab.shell.aliases;
 
-        initExtra = ''
+        initContent = ''
           if [ -f /etc/zshrc ] && ! command -v nix > /dev/null 2> /dev/null; then
             source /etc/zshrc
           fi

@@ -28,7 +28,7 @@ with lib;
   };
 
   config = {
-    programs.vscode.extensions = mapAttrsToList (
+    programs.vscode.profiles.default.extensions = mapAttrsToList (
       _: cfg: cfg.package
     ) config.programs.vscode.nixExtensions;
   };

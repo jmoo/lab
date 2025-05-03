@@ -19,7 +19,7 @@ with lib;
         nix-direnv.enable = false;
       };
 
-      vscode.extensions = with pkgs.vscode-extensions; [ mkhl.direnv ];
+      vscode.profiles.default.extensions = with pkgs.vscode-extensions; [ mkhl.direnv ];
     };
   };
 }

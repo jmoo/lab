@@ -48,17 +48,6 @@ with lib;
       programs.vscode = {
         enable = true;
 
-        extensions = with pkgs.vscode-extensions; [
-          ms-vscode-remote.remote-ssh
-          ms-azuretools.vscode-docker
-          usernamehw.errorlens
-          streetsidesoftware.code-spell-checker
-          tamasfe.even-better-toml
-          mads-hartmann.bash-ide-vscode
-          charliermarsh.ruff
-          esbenp.prettier-vscode
-        ];
-
         nixExtensions.default = {
           paths = [
             {
@@ -84,104 +73,117 @@ with lib;
           };
         };
 
-        keybindings = [
-          {
-            key = "ctrl+cmd+p";
-            command = "workbench.action.openRecent";
-          }
+        profiles.default = {
+          extensions = with pkgs.vscode-extensions; [
+            ms-vscode-remote.remote-ssh
+            ms-azuretools.vscode-docker
+            usernamehw.errorlens
+            streetsidesoftware.code-spell-checker
+            tamasfe.even-better-toml
+            mads-hartmann.bash-ide-vscode
+            charliermarsh.ruff
+            esbenp.prettier-vscode
+          ];
 
-          {
-            key = "ctrl+alt+p";
-            command = "workbench.action.openRecent";
-          }
+          keybindings = [
+            {
+              key = "ctrl+cmd+p";
+              command = "workbench.action.openRecent";
+            }
 
-          {
-            key = "alt+enter";
-            command = "editor.action.quickFix";
-            when = "editorHasCodeActionsProvider && textInputFocus && !editorReadonly";
-          }
+            {
+              key = "ctrl+alt+p";
+              command = "workbench.action.openRecent";
+            }
 
-          {
-            key = "alt+cmd+l";
-            command = "editor.action.formatDocument";
-            when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
-          }
+            {
+              key = "alt+enter";
+              command = "editor.action.quickFix";
+              when = "editorHasCodeActionsProvider && textInputFocus && !editorReadonly";
+            }
 
-          {
-            key = "ctrl+alt+l";
-            command = "editor.action.formatDocument";
-            when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
-          }
+            {
+              key = "alt+cmd+l";
+              command = "editor.action.formatDocument";
+              when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
+            }
 
-          {
-            key = "ctrl+r";
-            command = "editor.action.startFindReplaceAction";
-            when = "editorFocus || editorIsOpen";
-          }
+            {
+              key = "ctrl+alt+l";
+              command = "editor.action.formatDocument";
+              when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
+            }
 
-          {
-            key = "cmd+r";
-            command = "editor.action.startFindReplaceAction";
-            when = "editorFocus || editorIsOpen";
-          }
-        ];
+            {
+              key = "ctrl+r";
+              command = "editor.action.startFindReplaceAction";
+              when = "editorFocus || editorIsOpen";
+            }
 
-        userSettings = {
-          "cSpell.words" = mkDefault (fromJSON (readFile ../dictionary.json));
+            {
+              key = "cmd+r";
+              command = "editor.action.startFindReplaceAction";
+              when = "editorFocus || editorIsOpen";
+            }
+          ];
 
-          extensions.autoUpdate = false;
-          "extensions.autoCheckUpdates" = false;
+          userSettings = {
+            "cSpell.words" = mkDefault (fromJSON (readFile ../dictionary.json));
 
-          "editor.fontFamily" = "Ubuntu Mono";
-          "editor.fontSize" = 14;
-          "editor.lineHeight" = 1.2;
-          "editor.semanticHighlighting.enabled" = true;
-          "editor.semanticTokenColorCustomizations" = {
-            enabled = true;
-            rules = {
-              "*.mutable" = {
-                "underline" = false;
+            extensions.autoUpdate = false;
+            "extensions.autoCheckUpdates" = false;
+
+            "editor.fontFamily" = "Ubuntu Mono";
+            "editor.fontSize" = 14;
+            "editor.lineHeight" = 1.2;
+            "editor.semanticHighlighting.enabled" = true;
+            "editor.semanticTokenColorCustomizations" = {
+              enabled = true;
+              rules = {
+                "*.mutable" = {
+                  "underline" = false;
+                };
               };
             };
-          };
 
-          "files.autoSave" = "afterDelay";
+            "files.autoSave" = "afterDelay";
 
-          files.associations = {
-            "*.json" = "jsonc";
-          };
+            files.associations = {
+              "*.json" = "jsonc";
+            };
 
-          git.openRepositoryInParentFolders = "always";
+            git.openRepositoryInParentFolders = "always";
 
-          "scm.countBadge" = "off";
+            "scm.countBadge" = "off";
 
-          terminal.integrated.fontFamily = "MesloLGS NF";
-          terminal.integrated.defaultProfile.osx = "zsh";
-          terminal.external.osxExec = "iTerm.app";
-          terminal.integrated.fontSize = 13;
+            terminal.integrated.fontFamily = "MesloLGS NF";
+            terminal.integrated.defaultProfile.osx = "zsh";
+            terminal.external.osxExec = "iTerm.app";
+            terminal.integrated.fontSize = 13;
 
-          "update.mode" = "none";
+            "update.mode" = "none";
 
-          "window.customTitleBarVisibility" = "auto";
-          "window.titleBarStyle" = "custom";
+            "window.customTitleBarVisibility" = "auto";
+            "window.titleBarStyle" = "custom";
 
-          "workbench.activityBar.location" = "top";
-          "workbench.sideBar.location" = "left";
-          "workbench.colorTheme" = "jmoo-dark";
-          "workbench.iconTheme" = "jmoo-dark-icons";
-          "workbench.tree.indent" = 20;
+            "workbench.activityBar.location" = "top";
+            "workbench.sideBar.location" = "left";
+            "workbench.colorTheme" = "jmoo-dark";
+            "workbench.iconTheme" = "jmoo-dark-icons";
+            "workbench.tree.indent" = 20;
 
-          "[css]" = {
-            "editor.defaultFormatter" = "vscode.css-language-features";
-          };
+            "[css]" = {
+              "editor.defaultFormatter" = "vscode.css-language-features";
+            };
 
-          "[jsonc]" = {
-            "editor.defaultFormatter" = "vscode.json-language-features";
-          };
+            "[jsonc]" = {
+              "editor.defaultFormatter" = "vscode.json-language-features";
+            };
 
-          "[python]" = {
-            "editor.defaultFormatter" = "charliermarsh.ruff";
-            # "editor.codeActionsOnSave" = { "source.organizeImports" = "explicit"; }
+            "[python]" = {
+              "editor.defaultFormatter" = "charliermarsh.ruff";
+              # "editor.codeActionsOnSave" = { "source.organizeImports" = "explicit"; }
+            };
           };
         };
       };
@@ -189,7 +191,9 @@ with lib;
 
     # Rust
     (mkIf config.lab.vscode.rust.enable {
-      programs.vscode.extensions = with pkgs.vscode-extensions; [ rust-lang.rust-analyzer ];
+      programs.vscode.profiles.default.extensions = with pkgs.vscode-extensions; [
+        rust-lang.rust-analyzer
+      ];
     })
 
     # Nix
@@ -199,7 +203,7 @@ with lib;
         config.lab.vscode.nix.lsp
       ];
 
-      programs.vscode = {
+      programs.vscode.profiles.default = {
         extensions = with pkgs.vscode-extensions; [ jnoortheen.nix-ide ];
 
         userSettings = {
@@ -212,7 +216,7 @@ with lib;
 
     # Webdev
     (mkIf config.lab.vscode.webdev.enable {
-      programs.vscode.extensions = with pkgs.vscode-extensions; [
+      programs.vscode.profiles.default.extensions = with pkgs.vscode-extensions; [
         dbaeumer.vscode-eslint
         esbenp.prettier-vscode
       ];
@@ -220,7 +224,7 @@ with lib;
 
     # Python
     (mkIf config.lab.vscode.python.enable {
-      programs.vscode.extensions = with pkgs.vscode-extensions; [
+      programs.vscode.profiles.default.extensions = with pkgs.vscode-extensions; [
         ms-python.python
         charliermarsh.ruff
       ];
