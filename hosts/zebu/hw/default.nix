@@ -9,15 +9,15 @@
 
   hardware.zynq = {
     platform = "zynqmp";
-    bitstream = ./hw/sdt/vivado_exported.bit;
-    sdtDir = ./hw/sdt;
-    dtDir = ./hw/dt;
+    bitstream = ./sdt/kria_kr260_bd_wrapper.bit;
+    sdtDir = ./sdt;
+    dtDir = ./dt;
   };
 
   hardware.deviceTree.overlays = [
     {
       name = "system-user";
-      dtsFile = ./hw/system-user.dts;
+      dtsFile = ./system-user.dts;
     }
   ];
 }

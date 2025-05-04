@@ -10,6 +10,11 @@ with lib;
     ./hardware.nix
   ];
 
+  boot.binfmt.emulatedSystems = [
+    "aarch64-linux"
+    "armv7l-linux"
+  ];
+
   environment.systemPackages = with pkgs; [
     brave
     git

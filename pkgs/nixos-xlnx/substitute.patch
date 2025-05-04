@@ -1,0 +1,39 @@
+diff --git a/scripts/gendt.tcl b/scripts/gendt.tcl
+index 5f57dad..e23f073 100755
+--- a/scripts/gendt.tcl
++++ b/scripts/gendt.tcl
+@@ -48,5 +47,0 @@ if {$platform == "zynqmp"} {
+-if {![file exists $env(HOME)/.cache/device-tree-xlnx]} {
+-	puts "Please clone https://github.com/Xilinx/device-tree-xlnx/ to ~/.cache/device-tree-xlnx!"
+-	exit 2
+-}
+-
+@@ -55 +50 @@ hsi open_hw_design $xsa
+-hsi set_repo_path $env(HOME)/.cache/device-tree-xlnx
++hsi set_repo_path @device-tree-xlnx@
+diff --git a/scripts/vitisgenfw.py b/scripts/vitisgenfw.py
+index 94af10b..b6de019 100755
+--- a/scripts/vitisgenfw.py
++++ b/scripts/vitisgenfw.py
+@@ -22 +22 @@ cachedir = os.environ.get('XDG_CACHE_HOME') or os.path.join(os.environ.get('HOME
+-dtx_repo = os.path.join(cachedir, 'device-tree-xlnx')
++dtx_repo = "@device-tree-xlnx@"
+@@ -24,5 +23,0 @@ dtx_repo = os.path.join(cachedir, 'device-tree-xlnx')
+-# Device tree
+-
+-if not os.path.exists(dtx_repo):
+-    print('Please clone https://github.com/Xilinx/device-tree-xlnx/ to ~/.cache/device-tree-xlnx!')
+-    os.sys.exit(2)
+diff --git a/scripts/vitisgenfw.tcl b/scripts/vitisgenfw.tcl
+index eb2ae91..832747b 100755
+--- a/scripts/vitisgenfw.tcl
++++ b/scripts/vitisgenfw.tcl
+@@ -72,5 +71,0 @@ proc tmpdir {} {
+-if {![file exists $env(HOME)/.cache/device-tree-xlnx]} {
+-	puts "Please clone https://github.com/Xilinx/device-tree-xlnx/ to ~/.cache/device-tree-xlnx!"
+-	exit 2
+-}
+-
+@@ -86 +81 @@ if {![info exists target]} {
+-	createdts -hw $xsa -platform-name devicetree -local-repo $env(HOME)/.cache/device-tree-xlnx
++	createdts -hw $xsa -platform-name devicetree -local-repo @device-tree-xlnx@

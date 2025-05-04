@@ -1,14 +1,8 @@
-{
-  config,
-  lib,
-  pkgs,
-  inputs,
-  ...
-}:
+{ ... }:
 {
   imports = [
     ../../modules/nixos.nix
-    ./hardware.nix
+    ./hw
   ];
 
   lab = {
