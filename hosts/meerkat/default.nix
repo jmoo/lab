@@ -10,7 +10,14 @@ with lib;
   environment.systemPackages = with pkgs; [ tailscale ];
 
   home-manager.users.jmoore = {
-    home.packages = with pkgs; [ spotify ];
+    home.packages = with pkgs; [
+      spotify
+      binwalk
+      colordiff
+      radare2
+      vbindiff
+    ];
+
     lab.iterm2.enable = true;
     programs.yt-dlp.enable = true;
   };
