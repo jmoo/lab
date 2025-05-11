@@ -117,6 +117,8 @@ with lib;
       pulse.enable = true;
     };
 
+    openssh.settings.AllowUsers = [ "nix-ssh" ];
+
     printing.enable = true;
 
     pulseaudio.enable = false;
