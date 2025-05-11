@@ -10,6 +10,13 @@ with lib;
     ./hardware.nix
   ];
 
+  boot.binfmt = {
+    addEmulatedSystemsToNixSandbox = true;
+    emulatedSystems = [
+      "aarch64-linux"
+    ];
+  };
+
   environment.systemPackages = with pkgs; [
     brave
     git
@@ -64,6 +71,25 @@ with lib;
     };
 
     useDHCP = mkDefault true;
+  };
+
+  nix = {
+    extraOptions = ''
+      secret-key-files = /etc/nixos/lynx.priv
+    '';
+
+    settings = {
+      trusted-users = [ "@wheel" "nix-ssh" ];
+    };
+
+    sshServe = {
+      enable = true;
+      write = true;
+      keys = map (builtins.readFile) [
+        ../meerkat/pubkeys/ssh.pub
+        ./pubkeys/ssh.pub
+      ];
+    };
   };
 
   programs = {

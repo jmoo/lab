@@ -10,14 +10,19 @@ with lib;
   environment.systemPackages = with pkgs; [ tailscale ];
 
   home-manager.users.jmoore = {
-    home.packages = with pkgs; [
-      spotify
-      binwalk
-      colordiff
-      radare2
-      vbindiff
-    ];
+    home = {
+      packages = with pkgs; [
+        spotify
+        binwalk
+        colordiff
+        radare2
+        vbindiff
+      ];
 
+      shellAliases = {
+        "nix-lynx" = "nix --store 'ssh-ng://lynx.johndm.dev'";
+      };
+    };
     lab.iterm2.enable = true;
     programs.yt-dlp.enable = true;
   };
@@ -45,6 +50,52 @@ with lib;
   };
 
   networking.hostName = "meerkat";
+
+  nix = {
+    distributedBuilds = true;
+
+    buildMachines = [
+      {
+        hostName = "lynx.johndm.dev";
+        sshKey = "/Users/jmoore/.ssh/id_rsa";
+        sshUser = "nix-ssh";
+        maxJobs = 8;
+        supportedFeatures = [
+          "kvm"
+          "big-parallel"
+        ];
+        systems = [
+          "aarch64-linux"
+          "x86_64-linux"
+        ];
+      }
+    ];
+
+    extraOptions = ''
+      extra-platforms = aarch64-linux
+      builders-use-substitutes = true
+    '';
+
+    settings = {
+      trusted-users = [
+        "jmoore"
+        "root"
+      ];
+
+      trusted-substituters = [
+        "ssh://lynx.johndm.dev"
+      ];
+
+      trusted-public-keys = [
+        "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+        (builtins.readFile ../lynx/pubkeys/nix.pub)
+      ];
+
+      substituters = [
+        "https://cache.nixos.org/"
+      ];
+    };
+  };
 
   users.users.jmoore = {
     name = "jmoore";
