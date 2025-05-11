@@ -46,6 +46,33 @@ with lib;
 
   networking.hostName = "meerkat";
 
+  nix = {
+    extraOptions = ''
+      builders = @/etc/nix/machines
+    '';
+
+    settings = {
+      trusted-users = [
+        "jmoore"
+        "root"
+      ];
+
+      trusted-substituters = [
+        "ssh://lynx.johndm.dev"
+      ];
+
+      trusted-public-keys = [
+        "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+        (builtins.readFile ../lynx/pubkeys/nix.pub)
+      ];
+
+      substituters = [
+        "https://cache.nixos.org/"
+        "ssh://lynx.johndm.dev"
+      ];
+    };
+  };
+
   users.users.jmoore = {
     name = "jmoore";
     home = "/Users/jmoore";
