@@ -31,7 +31,7 @@ with lib;
 
     (mkIf config.lab.shell.enable {
       lab.common.home.shellAliases = {
-        switch = mkDefault "darwin-rebuild switch --flake ${config.lab.source}#${config.lab.name}";
+        switch = mkDefault "sudo darwin-rebuild switch --flake ${config.lab.source}#${config.lab.name}";
       };
       programs.zsh.enable = true;
     })
