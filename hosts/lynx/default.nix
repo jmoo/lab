@@ -45,9 +45,7 @@ with lib;
 
     hyprpaper.enable = false;
     hyprland.enable = true;
-
-    k3s.enable = true;
-
+    
     shell = {
       enable = true;
       root = true;
