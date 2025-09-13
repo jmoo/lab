@@ -12,7 +12,6 @@ with lib;
   home-manager.users.jmoore = {
     home = {
       packages = with pkgs; [
-        spotify
         binwalk
         colordiff
         radare2
