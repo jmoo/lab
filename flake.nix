@@ -12,6 +12,8 @@
 
     nixos-apple-silicon = {
       url = "github:nix-community/nixos-apple-silicon?ref=release-2025-08-23";
+      # Kernel panic on unstable, use nixos-apple-silicon's nixpkgs pin
+      # inputs.nixpkgs.follows = "nixpkgs";
     };
 
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
