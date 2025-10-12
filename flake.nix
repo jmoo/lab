@@ -18,7 +18,7 @@
   };
 
   outputs =
-    { nixpkgs, ... }@inputs:
+    { nixpkgs, nixos-apple-silicon, ... }@inputs:
     rec {
       darwinConfigurations = {
         meerkat = inputs.nix-darwin.lib.darwinSystem {
@@ -47,7 +47,7 @@
           ];
         };
 
-        meerkat = nixpkgs.lib.nixosSystem {
+        meerkat = nixos-apple-silicon.inputs.nixpkgs.lib.nixosSystem {
           system = "aarch64-linux";
           specialArgs = {
             inherit inputs;
