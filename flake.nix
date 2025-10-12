@@ -10,6 +10,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    nixos-apple-silicon = {
+      url = "github:nix-community/nixos-apple-silicon?ref=release-2025-08-23";
+    };
+
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   };
 
@@ -23,7 +27,7 @@
             inherit inputs;
           };
           modules = [
-            ./hosts/meerkat
+            ./hosts/meerkat/darwin.nix
             { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
           ];
         };
@@ -42,11 +46,24 @@
             { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
           ];
         };
+
+        meerkat = nixpkgs.lib.nixosSystem {
+          system = "aarch64-linux";
+          specialArgs = {
+            inherit inputs;
+          };
+          modules = [
+            ./hosts/meerkat/asahi.nix
+            { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
+          ];
+        };
       };
 
       nixosModules = {
         axolotl = import ./hosts/axolotl/default.nix;
         lynx = import ./hosts/lynx/default.nix;
+        meerkat-asahi = import ./hosts/meerkat/asahi.nix;
+        meerkat-darwin = import ./hosts/meerkat/darwin.nix;
         default = import ./modules/nixos.nix;
       };
 

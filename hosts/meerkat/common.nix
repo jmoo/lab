@@ -1,12 +1,10 @@
 {
   pkgs,
   lib,
+  config,
   ...
 }:
-with lib;
 {
-  imports = [ ../../modules/darwin.nix ];
-
   environment.systemPackages = with pkgs; [ tailscale ];
 
   home-manager.users.jmoore = {
@@ -22,12 +20,11 @@ with lib;
         "nix-lynx" = "nix --store 'ssh-ng://lynx.johndm.dev'";
       };
     };
-    lab.iterm2.enable = true;
     programs.yt-dlp.enable = true;
   };
 
   lab = {
-    source = "/Users/jmoore/Repos/jmoo/lab";
+    source = "${config.home-manager.users.jmoore.home.homeDirectory}/Repos/jmoo/lab";
     users = [ "jmoore" ];
     root = true;
 
@@ -56,7 +53,7 @@ with lib;
     buildMachines = [
       {
         hostName = "lynx.johndm.dev";
-        sshKey = "/Users/jmoore/.ssh/id_rsa";
+        sshKey = "${config.home-manager.users.jmoore.home.homeDirectory}/.ssh/id_rsa";
         sshUser = "nix-ssh";
         maxJobs = 8;
         supportedFeatures = [
@@ -94,10 +91,5 @@ with lib;
         "https://cache.nixos.org/"
       ];
     };
-  };
-
-  users.users.jmoore = {
-    name = "jmoore";
-    home = "/Users/jmoore";
   };
 }
