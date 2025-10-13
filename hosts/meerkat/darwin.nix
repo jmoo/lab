@@ -11,7 +11,7 @@ with lib;
   ];
 
   environment.systemPackages = with pkgs; [ tailscale ];
-  
+
   lab = {
     iterm2.enable = true;
   };

@@ -19,7 +19,7 @@
         vim
       ];
     };
-    
+
     programs.yt-dlp.enable = true;
   };
 

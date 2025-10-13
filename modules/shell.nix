@@ -96,21 +96,20 @@ with builtins;
           ${config.lab.shell.init}
         '';
 
-        shellOptions =
-          [
-            "histappend"
-            "checkwinsize"
-            "extglob"
-          ]
-          ++ (
-            if pkgs.stdenv.isDarwin then
-              [ ]
-            else
-              [
-                "globstar"
-                "checkjobs"
-              ]
-          );
+        shellOptions = [
+          "histappend"
+          "checkwinsize"
+          "extglob"
+        ]
+        ++ (
+          if pkgs.stdenv.isDarwin then
+            [ ]
+          else
+            [
+              "globstar"
+              "checkjobs"
+            ]
+        );
       };
 
       fzf = {

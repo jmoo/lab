@@ -45,7 +45,7 @@ with lib;
 
     hyprpaper.enable = false;
     hyprland.enable = true;
-    
+
     shell = {
       enable = true;
       root = true;
@@ -77,7 +77,10 @@ with lib;
     '';
 
     settings = {
-      trusted-users = [ "@wheel" "nix-ssh" ];
+      trusted-users = [
+        "@wheel"
+        "nix-ssh"
+      ];
     };
 
     sshServe = {

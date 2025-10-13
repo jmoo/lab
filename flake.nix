@@ -35,7 +35,7 @@
         };
       };
 
-      formatter = nixpkgs.lib.mapAttrs (_: pkgs: pkgs.nixfmt-rfc-style) legacyPackages;
+      formatter = nixpkgs.lib.mapAttrs (_: pkgs: pkgs.nixfmt-tree) legacyPackages;
 
       nixosConfigurations = {
         lynx = nixpkgs.lib.nixosSystem {
@@ -64,8 +64,7 @@
       nixosModules = {
         axolotl = import ./hosts/axolotl/default.nix;
         lynx = import ./hosts/lynx/default.nix;
-        meerkat-asahi = import ./hosts/meerkat/asahi.nix;
-        meerkat-darwin = import ./hosts/meerkat/darwin.nix;
+        meerkat = import ./hosts/meerkat/asahi.nix;
         default = import ./modules/nixos.nix;
       };
 
@@ -74,6 +73,11 @@
       legacyPackages = {
         aarch64-darwin = import nixpkgs {
           system = "aarch64-darwin";
+          overlays = nixpkgs.lib.attrValues overlays;
+        };
+
+        aarch64-linux = import nixpkgs {
+          system = "aarch64-linux";
           overlays = nixpkgs.lib.attrValues overlays;
         };
 

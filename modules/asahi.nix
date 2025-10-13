@@ -44,7 +44,7 @@ in
         ];
       };
 
-      # Extend display to notch 
+      # Extend display to notch
       kernelParams = [
         "apple_dcp.show_notch=1"
       ];

@@ -38,7 +38,7 @@ with lib;
       nixpkgs.config.permittedInsecurePackages = [
         "libsoup-2.74.3"
       ];
-      
+
       system.stateVersion = mkDefault "25.05";
       time.timeZone = "America/New_York";
     }
