@@ -7,6 +7,7 @@ with lib;
 let
   # Home-manager modules that can be configured for multiple users via NixOS or nix-darwin
   passthru = [
+    "apps"
     "direnv"
     "ghostty"
     "hyprland"

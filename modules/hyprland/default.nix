@@ -120,7 +120,9 @@ with lib;
           ]
 
           # Add default apps to the environment
-          ++ (map (x: x.package) (attrValues config.lab.apps));
+          ++ (map (x: x.package) (
+            filter (x: x.enable && isDerivation x.package) (attrValues config.lab.apps)
+          ));
 
         sessionVariables = config.lab.hyprland.sessionVariables;
       };

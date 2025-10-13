@@ -58,11 +58,16 @@ in
           force_zero_scaling = true;
         };
 
+        bindl = [
+          ",switch:on:Lid Switch,exec,systemctl suspend"
+        ];
+
         env = [
           "GDK_SCALE,2"
-          "QT_AUTO_SCREEN_SCALE_FACTOR=2"
-          "QT_ENABLE_HIGHDPI_SCALING=2"
-          "XCURSOR_SIZE=32"
+          "QT_AUTO_SCREEN_SCALE_FACTOR,2"
+          "QT_ENABLE_HIGHDPI_SCALING,2"
+          "XCURSOR_SIZE,16"
+          "HYPRCURSOR_SIZE,16"
         ];
       };
     };
@@ -75,10 +80,36 @@ in
     hyprpaper.enable = false;
     hyprland.enable = true;
     ssh.enable = true;
+
+    # Hyprlock currently segfaults in asahi
+    # Use swaylock instead until PR merged.
+    hyprlock.enable = false;
+    apps.common.lock = mkForce {
+      package = pkgs.swaylock;
+    };
+  };
+
+  networking = {
+    networkmanager = {
+      enable = true;
+    };
   };
 
   services = {
     tailscale.enable = true;
+
+    pipewire = {
+      enable = true;
+      alsa.enable = true;
+      alsa.support32Bit = true;
+      pulse.enable = true;
+    };
+
+    openssh.settings.AllowUsers = [ "nix-ssh" ];
+
+    printing.enable = true;
+
+    pulseaudio.enable = false;
   };
 
   users.users.jmoore = {
