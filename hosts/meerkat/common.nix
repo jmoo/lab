@@ -33,11 +33,6 @@
       root = true;
     };
 
-    greetd.enable = true;
-
-    hyprpaper.enable = false;
-    hyprland.enable = true;
-
     shell = {
       enable = true;
       root = true;
