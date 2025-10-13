@@ -44,6 +44,11 @@ in
         ];
       };
 
+      # Extend display to notch 
+      kernelParams = [
+        "apple_dcp.show_notch=1"
+      ];
+
       # Use the systemd-boot EFI boot loader.
       loader = {
         systemd-boot.enable = true;

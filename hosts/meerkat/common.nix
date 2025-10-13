@@ -4,21 +4,22 @@
   ...
 }:
 {
-  environment.systemPackages = with pkgs; [ tailscale ];
-
   home-manager.users.jmoore = {
     home = {
       packages = with pkgs; [
+        bat
         binwalk
+        claude-code
         colordiff
+        gh
+        git
         radare2
+        tio
         vbindiff
+        vim
       ];
-
-      shellAliases = {
-        "nix-lynx" = "nix --store 'ssh-ng://lynx.johndm.dev'";
-      };
     };
+    
     programs.yt-dlp.enable = true;
   };
 
@@ -53,23 +54,6 @@
   nix = {
     distributedBuilds = true;
 
-    buildMachines = [
-      {
-        hostName = "lynx.johndm.dev";
-        sshKey = "${config.home-manager.users.jmoore.home.homeDirectory}/.ssh/id_rsa";
-        sshUser = "nix-ssh";
-        maxJobs = 8;
-        supportedFeatures = [
-          "kvm"
-          "big-parallel"
-        ];
-        systems = [
-          "aarch64-linux"
-          "x86_64-linux"
-        ];
-      }
-    ];
-
     extraOptions = ''
       extra-platforms = aarch64-linux
       builders-use-substitutes = true
@@ -79,10 +63,6 @@
       trusted-users = [
         "jmoore"
         "root"
-      ];
-
-      trusted-substituters = [
-        "ssh://lynx.johndm.dev"
       ];
 
       trusted-public-keys = [

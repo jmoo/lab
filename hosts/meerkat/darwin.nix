@@ -10,6 +10,8 @@ with lib;
     ./common.nix
   ];
 
+  environment.systemPackages = with pkgs; [ tailscale ];
+  
   lab = {
     iterm2.enable = true;
   };
