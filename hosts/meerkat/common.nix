@@ -1,33 +1,30 @@
 {
   pkgs,
-  lib,
+  config,
   ...
 }:
-with lib;
 {
-  imports = [ ../../modules/darwin.nix ];
-
-  environment.systemPackages = with pkgs; [ tailscale ];
-
   home-manager.users.jmoore = {
     home = {
       packages = with pkgs; [
+        bat
         binwalk
+        claude-code
         colordiff
+        gh
+        git
         radare2
+        tio
         vbindiff
+        vim
       ];
-
-      shellAliases = {
-        "nix-lynx" = "nix --store 'ssh-ng://lynx.johndm.dev'";
-      };
     };
-    lab.iterm2.enable = true;
+
     programs.yt-dlp.enable = true;
   };
 
   lab = {
-    source = "/Users/jmoore/Repos/jmoo/lab";
+    source = "${config.home-manager.users.jmoore.home.homeDirectory}/Repos/jmoo/lab";
     users = [ "jmoore" ];
     root = true;
 
@@ -36,6 +33,11 @@ with lib;
       root = true;
     };
 
+    greetd.enable = true;
+
+    hyprpaper.enable = false;
+    hyprland.enable = true;
+
     shell = {
       enable = true;
       root = true;
@@ -43,7 +45,6 @@ with lib;
 
     vscode = {
       enable = true;
-      root = true;
       common.nix.formatter = pkgs.nixfmt-rfc-style;
     };
   };
@@ -52,23 +53,6 @@ with lib;
 
   nix = {
     distributedBuilds = true;
-
-    buildMachines = [
-      {
-        hostName = "lynx.johndm.dev";
-        sshKey = "/Users/jmoore/.ssh/id_rsa";
-        sshUser = "nix-ssh";
-        maxJobs = 8;
-        supportedFeatures = [
-          "kvm"
-          "big-parallel"
-        ];
-        systems = [
-          "aarch64-linux"
-          "x86_64-linux"
-        ];
-      }
-    ];
 
     extraOptions = ''
       extra-platforms = aarch64-linux
@@ -81,10 +65,6 @@ with lib;
         "root"
       ];
 
-      trusted-substituters = [
-        "ssh://lynx.johndm.dev"
-      ];
-
       trusted-public-keys = [
         "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
         (builtins.readFile ../lynx/pubkeys/nix.pub)
@@ -94,10 +74,5 @@ with lib;
         "https://cache.nixos.org/"
       ];
     };
-  };
-
-  users.users.jmoore = {
-    name = "jmoore";
-    home = "/Users/jmoore";
   };
 }

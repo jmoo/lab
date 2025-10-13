@@ -10,11 +10,17 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    nixos-apple-silicon = {
+      url = "github:nix-community/nixos-apple-silicon?ref=release-2025-08-23";
+      # Kernel panic on unstable, use nixos-apple-silicon's nixpkgs pin
+      # inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   };
 
   outputs =
-    { nixpkgs, ... }@inputs:
+    { nixpkgs, nixos-apple-silicon, ... }@inputs:
     rec {
       darwinConfigurations = {
         meerkat = inputs.nix-darwin.lib.darwinSystem {
@@ -23,13 +29,13 @@
             inherit inputs;
           };
           modules = [
-            ./hosts/meerkat
+            ./hosts/meerkat/darwin.nix
             { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
           ];
         };
       };
 
-      formatter = nixpkgs.lib.mapAttrs (_: pkgs: pkgs.nixfmt-rfc-style) legacyPackages;
+      formatter = nixpkgs.lib.mapAttrs (_: pkgs: pkgs.nixfmt-tree) legacyPackages;
 
       nixosConfigurations = {
         lynx = nixpkgs.lib.nixosSystem {
@@ -42,11 +48,23 @@
             { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
           ];
         };
+
+        meerkat = nixos-apple-silicon.inputs.nixpkgs.lib.nixosSystem {
+          system = "aarch64-linux";
+          specialArgs = {
+            inherit inputs;
+          };
+          modules = [
+            ./hosts/meerkat/asahi.nix
+            { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
+          ];
+        };
       };
 
       nixosModules = {
         axolotl = import ./hosts/axolotl/default.nix;
         lynx = import ./hosts/lynx/default.nix;
+        meerkat = import ./hosts/meerkat/asahi.nix;
         default = import ./modules/nixos.nix;
       };
 
@@ -55,6 +73,11 @@
       legacyPackages = {
         aarch64-darwin = import nixpkgs {
           system = "aarch64-darwin";
+          overlays = nixpkgs.lib.attrValues overlays;
+        };
+
+        aarch64-linux = import nixpkgs {
+          system = "aarch64-linux";
           overlays = nixpkgs.lib.attrValues overlays;
         };
 
