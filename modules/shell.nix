@@ -48,7 +48,18 @@ with builtins;
     '';
 
     home = {
+      packages = with pkgs; [
+        rlwrap
+        fzf
+        vim
+      ];
+
+      sessionVariables = {
+        EDITOR = "vim";
+      };
+
       shellAliases = {
+        d = "yazi";
         sl = "ls";
         ls = "ls --color";
         l = "ls";
@@ -59,11 +70,6 @@ with builtins;
         fgrep = "fgrep --color=auto";
         egrep = "egrep --color=auto";
       };
-
-      packages = with pkgs; [
-        rlwrap
-        fzf
-      ];
     };
 
     programs = {
@@ -124,6 +130,12 @@ with builtins;
           right_format = "$time$status";
           git_status.disabled = true;
         };
+      };
+
+      yazi = {
+        enable = true;
+        enableBashIntegration = true;
+        enableZshIntegration = true;
       };
 
       zsh = {
