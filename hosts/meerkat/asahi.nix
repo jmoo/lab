@@ -31,6 +31,9 @@ in
 
       ghostty.settings.theme = mkForce "Bright Lights";
       obs-studio.enable = true;
+      vscode.profiles.default.userSettings = {
+        "window.zoomLevel" = -3;
+      };
     };
 
     # Create global config files for chromium based apps

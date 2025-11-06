@@ -16,7 +16,6 @@
         radare2
         tio
         vbindiff
-        vim
       ];
     };
 
