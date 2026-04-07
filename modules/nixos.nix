@@ -63,6 +63,8 @@ with lib;
         hyprlock.enable = true;
         xwayland.enable = true;
       };
+
+      services.blueman.enable = true;
     })
 
     # Shell configuration

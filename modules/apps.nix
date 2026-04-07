@@ -42,7 +42,10 @@ with lib;
 
   config.lab.apps = with pkgs; {
     terminal.package = mkDefault xterm;
-    bluetoothManager.package = mkDefault blueberry;
+    bluetoothManager = {
+      package = mkDefault blueman;
+      command = "${blueman}/bin/blueman-manager";
+    };
     audioManager.package = mkDefault pavucontrol;
     launcher.package = mkDefault config.lab.ulauncher.package;
     displayManager.package = mkDefault wdisplays;

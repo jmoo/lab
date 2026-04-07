@@ -27,6 +27,9 @@ with lib;
           "ctrl+shift+right=next_tab"
           "ctrl+t=new_tab"
           "ctrl+shift+t=toggle_tab_overview"
+          "ctrl+left=unbind"
+          "ctrl+right=unbind"
+          "ctrl+shift+t=toggle_tab_overview"
         ];
       };
     };

@@ -1,10 +1,4 @@
 inputs: final: prev: {
-  blueberry = prev.blueberry.overrideAttrs (old: {
-    meta = old.meta // {
-      mainProgram = "blueberry";
-    };
-  });
-
   # # Fix core dump on asahi
   # # This PR gets a little farther but still segfaults
   # hyprlock = prev.hyprlock.overrideAttrs (_: {

@@ -59,7 +59,6 @@ with builtins;
       };
 
       shellAliases = {
-        d = "yazi";
         sl = "ls";
         ls = "ls --color";
         l = "ls";
@@ -136,6 +135,7 @@ with builtins;
         enable = true;
         enableBashIntegration = true;
         enableZshIntegration = true;
+        shellWrapperName = "d";
       };
 
       zsh = {

@@ -138,9 +138,14 @@ with lib;
         ulauncher.enable = mkDefault true;
         waybar.enable = mkDefault true;
       };
+      
+      services = {
+        # Notification daemon
+        swaync.enable = mkDefault true;
 
-      # Notification daemon
-      services.swaync.enable = mkDefault true;
+        # Screenshot application
+        flameshot.enable = mkDefault true;
+      };
 
       systemd.user.sessionVariables = config.lab.hyprland.sessionVariables;
 
@@ -174,6 +179,13 @@ with lib;
         ];
 
         xwayland.enable = true;
+      };
+
+      xdg = {
+        mime.enable = true;
+        portal.extraPortals = with pkgs; [
+          xdg-desktop-portal-gtk
+        ];
       };
     })
 

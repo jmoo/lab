@@ -26,8 +26,12 @@ with lib;
   ];
 
   home-manager.users.jmoore = {
-    programs.yt-dlp.enable = true;
-    programs.ghostty.settings.theme = mkForce "Bright Lights";
+    programs = {
+      claude-code.enable = true;
+      ghostty.settings.theme = mkForce "Bright Lights";
+      yt-dlp.enable = true;
+    };
+    
   };
 
   lab = {
@@ -56,7 +60,7 @@ with lib;
     vscode = {
       enable = true;
       common = {
-        nix.formatter = pkgs.nixfmt-rfc-style;
+        nix.formatter = pkgs.nixfmt;
       };
     };
   };

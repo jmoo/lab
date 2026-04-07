@@ -39,7 +39,7 @@
 
     vscode = {
       enable = true;
-      common.nix.formatter = pkgs.nixfmt-rfc-style;
+      common.nix.formatter = pkgs.nixfmt;
     };
   };
 
