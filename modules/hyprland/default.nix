@@ -131,7 +131,7 @@ with lib;
       # out of the box hyprland experience.
       lab = {
         hyprlock.enable = mkDefault true;
-        hypridle.enable = mkDefault true;
+        hypridle.enable = mkDefault false;
         hyprpaper.enable = mkDefault false;
         hyprpolkitagent.enable = mkDefault true;
         theme.enable = mkDefault true;

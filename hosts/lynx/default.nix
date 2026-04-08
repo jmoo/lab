@@ -18,6 +18,7 @@ with lib;
   };
 
   environment.systemPackages = with pkgs; [
+    anki
     brave
     git
     gparted
@@ -49,6 +50,7 @@ with lib;
 
     hyprpaper.enable = false;
     hyprland.enable = true;
+    hypridle.enable = mkForce false;
 
     shell = {
       enable = true;
