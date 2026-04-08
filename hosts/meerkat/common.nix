@@ -16,6 +16,7 @@
         radare2
         tio
         vbindiff
+        claude-code
       ];
     };
 

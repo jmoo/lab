@@ -30,7 +30,12 @@
           };
           modules = [
             ./hosts/meerkat/darwin.nix
-            { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
+            {
+              nixpkgs = {
+                config.allowUnfree = true;
+                overlays = nixpkgs.lib.attrValues overlays;
+              };
+            }
           ];
         };
       };
@@ -45,7 +50,12 @@
           };
           modules = [
             ./hosts/lynx
-            { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
+            {
+              nixpkgs = {
+                config.allowUnfree = true;
+                overlays = nixpkgs.lib.attrValues overlays;
+              };
+            }
           ];
         };
 
@@ -73,6 +83,7 @@
       legacyPackages = {
         aarch64-darwin = import nixpkgs {
           system = "aarch64-darwin";
+          config.allowUnfree = true;
           overlays = nixpkgs.lib.attrValues overlays;
         };
 
@@ -83,6 +94,7 @@
 
         x86_64-linux = import nixpkgs {
           system = "x86_64-linux";
+          config.allowUnfree = true;
           overlays = nixpkgs.lib.attrValues overlays;
         };
       };
