@@ -10,6 +10,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    nudelta = {
+      url = "github:donn/nudelta";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     nixos-apple-silicon = {
       url = "github:nix-community/nixos-apple-silicon?ref=release-2025-08-23";
       # Kernel panic on unstable, use nixos-apple-silicon's nixpkgs pin

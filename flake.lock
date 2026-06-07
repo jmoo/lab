@@ -55,6 +55,24 @@
         "type": "github"
       }
     },
+    "nix-eda": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_3"
+      },
+      "locked": {
+        "lastModified": 1759413531,
+        "narHash": "sha256-SZA2mxB0NXv4Elq/GrnOW2Aif41MwALpA9j1ib3XzOg=",
+        "owner": "fossi-foundation",
+        "repo": "nix-eda",
+        "rev": "d8e884cd9198ffb1e545f2b66673db83f3ce08a1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "fossi-foundation",
+        "repo": "nix-eda",
+        "type": "github"
+      }
+    },
     "nixos-apple-silicon": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -108,12 +126,47 @@
         "type": "github"
       }
     },
+    "nixpkgs_3": {
+      "locked": {
+        "lastModified": 1750400657,
+        "narHash": "sha256-3vkjFnxCOP6vm5Pm13wC/Zy6/VYgei/I/2DWgW4RFeA=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "b2485d56967598da068b5a6946dadda8bfcbcd37",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "nixos-25.05",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nudelta": {
+      "inputs": {
+        "nix-eda": "nix-eda"
+      },
+      "locked": {
+        "lastModified": 1760113446,
+        "narHash": "sha256-eRaX4K0EEiXmIaWS7YEx/2z2nVMsExFdbI0P6X0bBxM=",
+        "owner": "donn",
+        "repo": "nudelta",
+        "rev": "052abf5bd54afee25e0795707b3990ee432631fa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "donn",
+        "repo": "nudelta",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "home-manager": "home-manager",
         "nix-darwin": "nix-darwin",
         "nixos-apple-silicon": "nixos-apple-silicon",
-        "nixpkgs": "nixpkgs_2"
+        "nixpkgs": "nixpkgs_2",
+        "nudelta": "nudelta"
       }
     },
     "treefmt-nix": {

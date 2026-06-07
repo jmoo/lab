@@ -10,6 +10,8 @@ inputs: final: prev: {
   #   };
   # });
 
+  nudelta = inputs.nudelta.packages.${final.system}.default;
+
   ulauncher-uwsm = final.callPackage ./pkgs/ulauncher-uwsm { };
 
   vscode-extensions = prev.vscode-extensions // {

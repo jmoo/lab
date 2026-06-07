@@ -20,10 +20,14 @@ with lib;
   environment.systemPackages = with pkgs; [
     anki
     brave
+    dos2unix
     git
     gparted
+    nudelta
     obsidian
     vim
+    wev
+    zip
   ];
 
   home-manager.users.jmoore = {
