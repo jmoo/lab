@@ -12,7 +12,6 @@
 
     nudelta = {
       url = "github:donn/nudelta";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
 
     nixos-apple-silicon = {
