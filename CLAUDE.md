@@ -40,14 +40,14 @@ Meerkat is one host (`hosts/meerkat.nix`) that enables two platforms — `asahi`
 
 Everything hangs off one flake-parts option: `lab.hosts.<host>`, an `attrsOf submodule`. The submodule is assembled by merging declarations from many files:
 
-- `modules/default.nix` — base host options: `name` (defaults to attr name), `user` (the single home-manager user), `source` (flake URI for the `switch` alias).
+- `modules/default.nix` — base host options: `name` (defaults to attr name), `user` (the single home-manager user), `source` (flake URI for the `switch` alias), and `home` (a `deferredModule` of home-manager config applied to the user on **every** enabled platform — use it for cross-platform home config instead of repeating it per platform).
 - `modules/{nixos,asahi,darwin}.nix` — each adds a **platform** sub-submodule (`.nixos` / `.asahi` / `.darwin`) via `lab.mkHostPlatform`, with:
   - `enable` — export this platform as a `*Modules.<host>` output,
   - `eval` — build a full `*Configurations.<host>` (defaults to `enable`),
   - `module` — a `deferredModule` holding the platform's **system** config,
   - `home` — a `deferredModule` holding that platform's **home-manager** config,
   - plus `system`, `specialArgs`, and platform-specific options (e.g. asahi's `peripheralFirmwareHash`).
-  These files also emit the flake outputs by mapping over `config.lab.hosts` (filtered by `eval`/`enable`) into `nixosSystem` / `darwinSystem`, splicing `<platform>.home` into `home-manager.users.${host.user}`.
+  These files also emit the flake outputs by mapping over `config.lab.hosts` (filtered by `eval`/`enable`) into `nixosSystem` / `darwinSystem`, splicing both the host-level `home` and the `<platform>.home` into `home-manager.users.${host.user}`.
 
 ### Feature modules (the important pattern)
 
@@ -56,7 +56,7 @@ A feature (ghostty, shell, hyprland, …) is **one file** that declares its togg
 ```nix
 { lib', ... }:
 let
-  inherit (lib'.lab) mkHostModule homeLinux;   # or homeAll/homeDarwin, forLinux/forAll
+  inherit (lib'.lab) mkHostModule homeLinux;   # or homeDarwin, forLinux/forAll
   inherit (lib') mkEnableOption mkIf;
 in
 {
@@ -75,17 +75,17 @@ in
 
 Push helpers (in `lib.nix`):
 - **System** config → platform `.module`: `forLinux` (nixos + asahi), `forAll` (+ darwin).
-- **Home** config → platform `.home`: `homeLinux`, `homeAll`, `homeDarwin`.
+- **Home** config → platform `.home`: `homeLinux`, `homeDarwin`. For **all** platforms, set the host-level `home` option directly (`config.home = …`) instead of a helper.
 
 Because every feature's pushed `.home` for a platform merges into one home-manager evaluation, co-resident home modules can share option namespaces (see the desktop bundle's `apps` set + `wrapHyprCommand` arg). Pushed config is usually written as a `{ pkgs, ... }:` function so packages resolve at build time (there is no `pkgs` at the flake-parts level — option *defaults* must not reference `pkgs`).
 
-Host-specific overrides are written the old-fashioned way directly into a host's `<platform>.module` / `<platform>.home` (e.g. lynx's ghostty theme + `hyprland.nvidia`, meerkat-asahi's swaylock + HiDPI). There is no `.common` option and no multi-user/root support — one host, one user.
+Host-specific overrides are written the old-fashioned way directly into a host's `home` (cross-platform), `<platform>.home` (one platform), or `<platform>.module` (system) — e.g. meerkat's shared home packages live in `home`, its asahi-only swaylock/HiDPI in `asahi.home`, and lynx's ghostty theme + `hyprland.nvidia` in `nixos.home`. There is no multi-user/root support — one host, one user.
 
 ### Directory layout
 
 ```
 flake.nix              # calls lib.nix:mkFlake
-lib.nix                # mkFlake + lab.{mkHostModule,mkHostPlatform,mkHostOptions,forLinux,forAll,homeLinux,homeAll,homeDarwin}
+lib.nix                # mkFlake + lab.{mkHostModule,mkHostPlatform,mkHostOptions,forLinux,forAll,homeLinux,homeDarwin}
 overlay.nix            # global overlay (nudelta, vscode-nix-extensions, ulauncher-uwsm)
 modules/           # flake-parts modules, auto-imported (every .nix)
   default.nix          # lab.hosts base options + home-manager flakeModule
@@ -93,7 +93,10 @@ modules/           # flake-parts modules, auto-imported (every .nix)
   asahi.nix            # asahi platform (pinned nixpkgs) + nixos{Configurations,Modules}
   darwin.nix           # darwin platform + darwin{Configurations,Modules}
   perSystem.nix        # systems, formatter (nixfmt-tree), legacyPackages, overlays.default
-  <feature>.nix        # ghostty, shell, direnv, vscode, iterm2, karabiner,
+  locale.nix           # shared (always-on): i18n + time.timeZone (Linux)
+  nix.nix              # shared (always-on): nix daemon settings
+  nixpkgs.nix          # shared (always-on): allowUnfree, overlay, insecure pkgs
+  <feature>.nix        # ghostty, shell, direnv, vscode, iterm2,
                        #   greetd, ssh, k3s, tailscale
   hyprland/            # desktop bundle (hypridle/hyprlock/hyprpaper/hyprpolkitagent/
                        #   apps/theme/ulauncher/waybar/nm-applet) + config/ & waybar/ assets
@@ -115,13 +118,13 @@ Non-`.nix` assets (`*.conf`, `*.json`, `*.css`, `*.plist`, pubkeys) live next to
 
 ### Adding a host
 
-1. Create `hosts/<name>.nix` setting `lab.hosts.<name>` with `user`, `source`, feature toggles, and per-platform `enable`/`system`/`module`/`home`.
+1. Create `hosts/<name>.nix` setting `lab.hosts.<name>` with `user`, `source`, a cross-platform `home`, feature toggles, and per-platform `enable`/`system`/`module`/`home`.
 2. Hardware/disk/user-account config goes inline in `<platform>.module`.
 
 ## Platform conditionals & key details
 
 - Use `pkgs.stdenv.isDarwin` / `pkgs.stdenv.isLinux` inside pushed modules. Use `forLinux`/`homeLinux` vs `homeDarwin` to target platforms at the feature level.
-- Overlays (`overlay.nix`) and `allowUnfree` are applied in each platform's base module — `allowUnfree = true` on **all** nixos/darwin configurations (incl. Asahi, which runs vscode/brave/obsidian). In `perSystem`, `legacyPackages` keeps `allowUnfree` off for aarch64-linux only.
+- Overlays (`overlay.nix`), `allowUnfree`, nix settings, and locale/timezone are applied by **always-on shared feature modules** (`nixpkgs.nix`, `nix.nix`, `locale.nix`) that push to every platform with no enable toggle — not by the platform base modules. `allowUnfree = true` on **all** nixos/darwin configurations (incl. Asahi, which runs vscode/brave/obsidian). In `perSystem`, `legacyPackages` keeps `allowUnfree` off for aarch64-linux only.
 - Asahi builds with `nixos-apple-silicon.inputs.nixpkgs.lib.nixosSystem` (its pinned 25.11 nixpkgs); the pin intentionally does **not** follow nixpkgs (stability — unstable kernel-panics). Because that pinned lib predates `lib.genAttrs'`, the Asahi platform uses a dedicated, era-matched `home-manager-asahi` input (`modules/asahi.nix`) instead of the main `home-manager`.
 - `system.stateVersion` is **stateful** — base modules default it to `"25.05"` (the hosts' install version), independent of the current nixpkgs release. Do not bump it casually (it changed hyprland's `configType` from hyprlang→lua during the migration).
 - Lynx is a remote nix builder for meerkat (`nix.sshServe` + signing keys in `keys/`).

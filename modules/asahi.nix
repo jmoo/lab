@@ -22,52 +22,27 @@ let
       users.${host.user} =
         { osConfig, ... }:
         {
-          imports = [ host.asahi.home ];
+          imports = [
+            host.home
+            host.asahi.home
+          ];
           home.stateVersion = mkDefault osConfig.system.stateVersion;
           programs.home-manager.enable = false;
         };
     };
   };
 
-  # Base configuration shared with nixos.nix. Asahi uses the pinned
-  # nixos-apple-silicon nixpkgs and does NOT enable allowUnfree.
+  # Base configuration. Locale, nix, and nixpkgs config come from the shared
+  # feature modules (locale.nix / nix.nix / nixpkgs.nix).
   base = {
     imports = [
       inputs.nixos-apple-silicon.nixosModules.apple-silicon-support
       inputs.home-manager-asahi.nixosModules.home-manager
     ];
 
-    i18n = {
-      defaultLocale = "en_US.UTF-8";
-      extraLocaleSettings = {
-        LC_ADDRESS = "en_US.UTF-8";
-        LC_IDENTIFICATION = "en_US.UTF-8";
-        LC_MEASUREMENT = "en_US.UTF-8";
-        LC_MONETARY = "en_US.UTF-8";
-        LC_NAME = "en_US.UTF-8";
-        LC_NUMERIC = "en_US.UTF-8";
-        LC_PAPER = "en_US.UTF-8";
-        LC_TELEPHONE = "en_US.UTF-8";
-        LC_TIME = "en_US.UTF-8";
-      };
-    };
-
-    nix.settings.experimental-features = "nix-command flakes";
-
-    nixpkgs = {
-      config = {
-        allowUnfree = true;
-        permittedInsecurePackages = [
-          "libsoup-2.74.3"
-        ];
-      };
-      overlays = [ (import ../overlay.nix inputs) ];
-    };
-
     # stateVersion is stateful — pin to the host's install version (25.05),
     # independent of the pinned 25.11 nixpkgs.
     system.stateVersion = mkDefault "25.05";
-    time.timeZone = "America/New_York";
   };
 in
 {

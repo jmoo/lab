@@ -6,30 +6,30 @@ let
     "--ozone-platform=wayland"
     "--gtk-version=4"
   ];
-
-  # Home packages shared across both platforms.
-  homeCommon =
-    { pkgs, ... }:
-    {
-      home.packages = with pkgs; [
-        bat
-        binwalk
-        claude-code
-        colordiff
-        gh
-        git
-        radare2
-        tio
-        vbindiff
-      ];
-
-      programs.yt-dlp.enable = true;
-    };
 in
 {
   lab.hosts.meerkat = {
     user = "jmoore";
     source = "/home/jmoore/Repos/jmoo/lab";
+
+    # Home config applied to the user on both platforms.
+    home =
+      { pkgs, ... }:
+      {
+        home.packages = with pkgs; [
+          bat
+          binwalk
+          claude-code
+          colordiff
+          gh
+          git
+          radare2
+          tio
+          vbindiff
+        ];
+
+        programs.yt-dlp.enable = true;
+      };
 
     # Shared features (applied to whichever platforms are built).
     direnv.enable = true;
@@ -53,8 +53,6 @@ in
       home =
         { pkgs, lib, ... }:
         {
-          imports = [ homeCommon ];
-
           # Hyprlock currently segfaults on asahi; use swaylock instead.
           hyprlock.enable = false;
           apps.lock.package = lib.mkForce pkgs.swaylock;
@@ -177,8 +175,6 @@ in
       home =
         { lib, ... }:
         {
-          imports = [ homeCommon ];
-
           # macOS repo lives under /Users
           home.shellAliases.switch = lib.mkForce "sudo darwin-rebuild switch --flake /Users/jmoore/Repos/jmoo/lab#meerkat";
         };

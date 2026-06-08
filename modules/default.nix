@@ -33,6 +33,12 @@ in
                     type = with types; nullOr str;
                     default = "github:jmoo/lab";
                   };
+
+                  home = mkOption {
+                    description = "Home-manager configuration applied to the user on every enabled platform";
+                    type = types.deferredModule;
+                    default = { };
+                  };
                 };
 
                 config = {

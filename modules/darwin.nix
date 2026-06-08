@@ -20,7 +20,10 @@ let
       useGlobalPkgs = true;
       useUserPackages = true;
       users.${host.user} = {
-        imports = [ host.darwin.home ];
+        imports = [
+          host.home
+          host.darwin.home
+        ];
         home.stateVersion = mkDefault "25.05";
         programs.home-manager.enable = false;
       };
@@ -58,14 +61,9 @@ in
 
               users.users.root.home = "/var/root";
 
-              nix.enable = true;
-              nix.settings.experimental-features = "nix-command flakes";
-
-              nixpkgs = {
-                config.allowUnfree = true;
-                overlays = [ (import ../overlay.nix inputs) ];
-                hostPlatform = mkDefault "aarch64-darwin";
-              };
+              # nix and nixpkgs.{config,overlays} come from the shared feature
+              # modules (nix.nix / nixpkgs.nix).
+              nixpkgs.hostPlatform = mkDefault "aarch64-darwin";
 
               system.stateVersion = mkDefault 5;
             };
