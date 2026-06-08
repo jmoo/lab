@@ -34,7 +34,7 @@ let
   base = {
     imports = [
       inputs.nixos-apple-silicon.nixosModules.apple-silicon-support
-      inputs.home-manager.nixosModules.home-manager
+      inputs.home-manager-asahi.nixosModules.home-manager
     ];
 
     i18n = {
@@ -55,13 +55,18 @@ let
     nix.settings.experimental-features = "nix-command flakes";
 
     nixpkgs = {
-      config.permittedInsecurePackages = [
-        "libsoup-2.74.3"
-      ];
+      config = {
+        allowUnfree = true;
+        permittedInsecurePackages = [
+          "libsoup-2.74.3"
+        ];
+      };
       overlays = [ (import ../overlay.nix inputs) ];
     };
 
-    system.stateVersion = mkDefault "26.11";
+    # stateVersion is stateful — pin to the host's install version (25.05),
+    # independent of the pinned 25.11 nixpkgs.
+    system.stateVersion = mkDefault "25.05";
     time.timeZone = "America/New_York";
   };
 in

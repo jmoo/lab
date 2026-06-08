@@ -5,6 +5,14 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Asahi uses the pinned nixos-apple-silicon nixpkgs (25.11, Aug 2025), whose
+    # lib predates home-manager master's use of `lib.genAttrs'`. Pin a matching
+    # home-manager from the same era for the asahi platform only.
+    home-manager-asahi = {
+      url = "github:nix-community/home-manager/dd026d864207";
+      inputs.nixpkgs.follows = "nixos-apple-silicon/nixpkgs";
+    };
+
     flake-parts = {
       url = "github:hercules-ci/flake-parts";
     };
