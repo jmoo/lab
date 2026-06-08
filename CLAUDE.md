@@ -14,7 +14,7 @@ Built on **flake-parts** with `denful/import-tree` auto-importing every module a
 | meerkat | NixOS (Asahi) | aarch64-linux | Linux on Apple Silicon, uses pinned nixos-apple-silicon nixpkgs (not unstable — kernel panic) |
 | axolotl | NixOS | x86_64-linux | Exported as `nixosModules.axolotl` only, no active nixosConfiguration |
 
-Meerkat is one host (`new-hosts/meerkat.nix`) that enables two platforms — `asahi` and `darwin` — each with its own `module` (system) and `home` (home-manager) config.
+Meerkat is one host (`hosts/meerkat.nix`) that enables two platforms — `asahi` and `darwin` — each with its own `module` (system) and `home` (home-manager) config.
 
 ## Rebuild commands
 
@@ -33,15 +33,15 @@ Meerkat is one host (`new-hosts/meerkat.nix`) that enables two platforms — `as
 
 `lib.nix` extends `nixpkgs.lib` with a `lab` helper set and defines `mkFlake`, which:
 - runs `flake-parts.lib.mkFlake`,
-- imports **every `.nix` file** under `new-modules/` and `new-hosts/` via `import-tree` (so each file is a flake-parts module — there is no central import list),
+- imports **every `.nix` file** under `modules/` and `hosts/` via `import-tree` (so each file is a flake-parts module — there is no central import list),
 - exposes the extended lib to every module as `_module.args.lib'`.
 
 ### The `lab.hosts` model
 
 Everything hangs off one flake-parts option: `lab.hosts.<host>`, an `attrsOf submodule`. The submodule is assembled by merging declarations from many files:
 
-- `new-modules/default.nix` — base host options: `name` (defaults to attr name), `user` (the single home-manager user), `source` (flake URI for the `switch` alias).
-- `new-modules/{nixos,asahi,darwin}.nix` — each adds a **platform** sub-submodule (`.nixos` / `.asahi` / `.darwin`) via `lab.mkHostPlatform`, with:
+- `modules/default.nix` — base host options: `name` (defaults to attr name), `user` (the single home-manager user), `source` (flake URI for the `switch` alias).
+- `modules/{nixos,asahi,darwin}.nix` — each adds a **platform** sub-submodule (`.nixos` / `.asahi` / `.darwin`) via `lab.mkHostPlatform`, with:
   - `enable` — export this platform as a `*Modules.<host>` output,
   - `eval` — build a full `*Configurations.<host>` (defaults to `enable`),
   - `module` — a `deferredModule` holding the platform's **system** config,
@@ -87,7 +87,7 @@ Host-specific overrides are written the old-fashioned way directly into a host's
 flake.nix              # calls lib.nix:mkFlake
 lib.nix                # mkFlake + lab.{mkHostModule,mkHostPlatform,mkHostOptions,forLinux,forAll,homeLinux,homeAll,homeDarwin}
 overlay.nix            # global overlay (nudelta, vscode-nix-extensions, ulauncher-uwsm)
-new-modules/           # flake-parts modules, auto-imported (every .nix)
+modules/           # flake-parts modules, auto-imported (every .nix)
   default.nix          # lab.hosts base options + home-manager flakeModule
   nixos.nix            # nixos platform + nixos{Configurations,Modules}
   asahi.nix            # asahi platform (pinned nixpkgs) + nixos{Configurations,Modules}
@@ -98,7 +98,7 @@ new-modules/           # flake-parts modules, auto-imported (every .nix)
   hyprland/            # desktop bundle (hypridle/hyprlock/hyprpaper/hyprpolkitagent/
                        #   apps/theme/ulauncher/waybar/nm-applet) + config/ & waybar/ assets
   iterm2/              # iterm2 feature + iterm2.plist
-new-hosts/             # one flake-parts module per host, auto-imported
+hosts/             # one flake-parts module per host, auto-imported
 keys/                  # ssh/nix pubkeys (referenced via builtins.readFile)
 pkgs/                  # custom packages + vscode-nix-extensions home-manager module
 resources/             # vscode themes/icons, mascots
@@ -109,32 +109,39 @@ Non-`.nix` assets (`*.conf`, `*.json`, `*.css`, `*.plist`, pubkeys) live next to
 
 ### Adding a feature module
 
-1. Create `new-modules/<name>.nix` following the pattern above: declare `lab.hosts.<host>.<name>.*` options via `mkHostModule`, gate config on the enable, and push it with the right helper (`homeLinux`/`forAll`/etc.).
+1. Create `modules/<name>.nix` following the pattern above: declare `lab.hosts.<host>.<name>.*` options via `mkHostModule`, gate config on the enable, and push it with the right helper (`homeLinux`/`forAll`/etc.).
 2. Enable it per host: `lab.hosts.<host>.<name>.enable = true;`.
    No central registration — `import-tree` picks the file up automatically.
 
 ### Adding a host
 
-1. Create `new-hosts/<name>.nix` setting `lab.hosts.<name>` with `user`, `source`, feature toggles, and per-platform `enable`/`system`/`module`/`home`.
+1. Create `hosts/<name>.nix` setting `lab.hosts.<name>` with `user`, `source`, feature toggles, and per-platform `enable`/`system`/`module`/`home`.
 2. Hardware/disk/user-account config goes inline in `<platform>.module`.
 
 ## Platform conditionals & key details
 
 - Use `pkgs.stdenv.isDarwin` / `pkgs.stdenv.isLinux` inside pushed modules. Use `forLinux`/`homeLinux` vs `homeDarwin` to target platforms at the feature level.
-- Overlays (`overlay.nix`) and `allowUnfree` are applied in each platform's base module and in `perSystem`. `allowUnfree` is on for darwin + x86_64-linux but **NOT** aarch64-linux (Asahi).
-- Asahi builds with `nixos-apple-silicon.inputs.nixpkgs.lib.nixosSystem` (its pinned nixpkgs); the pin intentionally does **not** follow nixpkgs (stability — unstable kernel-panics).
+- Overlays (`overlay.nix`) and `allowUnfree` are applied in each platform's base module — `allowUnfree = true` on **all** nixos/darwin configurations (incl. Asahi, which runs vscode/brave/obsidian). In `perSystem`, `legacyPackages` keeps `allowUnfree` off for aarch64-linux only.
+- Asahi builds with `nixos-apple-silicon.inputs.nixpkgs.lib.nixosSystem` (its pinned 25.11 nixpkgs); the pin intentionally does **not** follow nixpkgs (stability — unstable kernel-panics). Because that pinned lib predates `lib.genAttrs'`, the Asahi platform uses a dedicated, era-matched `home-manager-asahi` input (`modules/asahi.nix`) instead of the main `home-manager`.
+- `system.stateVersion` is **stateful** — base modules default it to `"25.05"` (the hosts' install version), independent of the current nixpkgs release. Do not bump it casually (it changed hyprland's `configType` from hyprlang→lua during the migration).
 - Lynx is a remote nix builder for meerkat (`nix.sshServe` + signing keys in `keys/`).
 - `eval` vs `enable`: `eval` builds a `*Configurations.<host>`; `enable` exports a `*Modules.<host>`. axolotl sets `nixos.enable = true; nixos.eval = false;` to be module-only.
 
+## Migration verification (vs `master`)
+
+The refactor was verified by **derivation-level** diffing (`nix-diff`) of each config against the pre-refactor `master` branch — `master` shares the same nixpkgs + home-manager revs, so the diff isolates structural changes (stronger than `nix store diff-closures`, no multi-GB build needed). To re-run: `nix-diff $(nix eval --raw "git+file://$PWD?ref=master#nixosConfigurations.lynx.config.system.build.toplevel.drvPath") $(nix eval --raw .#nixosConfigurations.lynx.config.system.build.toplevel.drvPath)`.
+
+Result — lynx & meerkat-darwin are identical to `master` except:
+- **root home-manager dropped** (intentional — single-user model).
+- **home.packages reordered** — `import-tree` orders modules alphabetically vs the old explicit `home.nix` order. Same set, functionally identical, only the buildEnv hash differs (benign, unavoidable).
+- one **duplicate ghostty keybind removed** (the old file listed `ctrl+shift+t` twice).
+
+Two real regressions were caught and fixed during the diff: missing `boot.binfmt` aarch64 emulation on lynx, and wrong `stateVersion`. meerkat-**asahi** can't be diffed — `master`'s asahi doesn't evaluate (the `genAttrs'` skew), so the new config is a broken→working improvement.
+
+Still TODO: run an actual `nixos-rebuild build`/`switch` (or `darwin-rebuild`) to deploy.
+
 ## TODO — next steps
 
-- [ ] **Fix meerkat Asahi evaluation.** `home-manager`'s `qt.nix` uses `lib.genAttrs'`, which the pinned Asahi nixpkgs lib lacks (main nixpkgs has it). Pre-existing input skew — not module code. Pin `home-manager` to a release matching the Asahi nixpkgs, or bump the Asahi pin. (lynx + meerkat-darwin both evaluate fine.)
-- [ ] **Full build verification + closure diff.** Only evaluation (`*.drvPath`) has been checked. Build the configs (`nixos-rebuild build --flake .#lynx`, `darwin-rebuild build --flake .#meerkat`) and **assert the refactor did not change the output closures** vs the pre-refactor config:
-  - Build the old toplevel from the pre-migration revision, e.g. `nix build "git+file://$PWD?ref=master#nixosConfigurations.lynx.config.system.build.toplevel" -o result-old` (or a pre-flake-parts commit), and the new one `nix build .#nixosConfigurations.lynx.config.system.build.toplevel -o result-new`.
-  - Compare: `nix store diff-closures ./result-old ./result-new` (and/or `nvd diff result-old result-new`). A pure refactor should show **no** package/version changes.
-  - Caveat: pin **identical `flake.lock` inputs** on both sides first, otherwise nixpkgs/home-manager bumps will show up as diffs and mask the structural comparison. Then switch/deploy.
-- [ ] **Rename `new-modules/` → `modules/` and `new-hosts/` → `hosts/`** once the pattern is settled, and update the two `import-tree` paths in `lib.nix`.
-- [ ] **Commit the migration** (currently staged, not committed).
-- [ ] **Remove karabiner** (`new-modules/karabiner.nix`) — ported for completeness but no host enables it.
-- [ ] Consider standalone **`homeConfigurations`** output (the old single-platform `home` module was dropped in favor of per-platform `<platform>.home`).
-- [ ] **Create a `./docs` directory with an mdBook** containing the old per-host READMEs (mascot art from `resources/mascots/`) plus additional documentation.
+- [ ] **Deploy**: `nixos-rebuild switch --flake .#lynx`, `darwin-rebuild switch --flake .#meerkat`, and on the Asahi box `nixos-rebuild switch --flake .#meerkat`.
+
+Docs live in `./docs` (mdBook) — `nix run nixpkgs#mdbook -- serve docs` to preview; build output (`docs/book`) is gitignored.
