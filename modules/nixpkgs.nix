@@ -9,24 +9,23 @@ let
   inherit (lib') types mkOption;
 in
 {
-
   options = {
     lab = {
-      nixpkgs = {
-        overlays = mkOption {
-          type = types.listOf types.raw;
-          default = [ ];
-        };
-
-        config = mkOption {
-          type = types.attrsOf types.anything;
-          default = { };
-        };
-      };
-
       hosts = mkHostModule (forAll {
         inherit (config) nixpkgs;
       });
+    };
+
+    nixpkgs = {
+      overlays = mkOption {
+        type = types.listOf types.raw;
+        default = [ ];
+      };
+
+      config = mkOption {
+        type = types.attrsOf types.anything;
+        default = { };
+      };
     };
   };
 
@@ -38,7 +37,7 @@ in
           "libsoup-2.74.3"
         ];
       };
-      overlays = [ (import ./overlay.nix inputs) ];
+      overlays = [ (import ../overlay.nix inputs) ];
     };
 
     systems = [
