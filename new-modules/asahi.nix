@@ -13,6 +13,57 @@ let
     filterAttrs
     types
     ;
+
+  # Apply the host's single home-manager configuration to its user.
+  homeManager = host: {
+    home-manager = {
+      useGlobalPkgs = true;
+      useUserPackages = true;
+      users.${host.user} =
+        { osConfig, ... }:
+        {
+          imports = [ host.asahi.home ];
+          home.stateVersion = mkDefault osConfig.system.stateVersion;
+          programs.home-manager.enable = false;
+        };
+    };
+  };
+
+  # Base configuration shared with nixos.nix. Asahi uses the pinned
+  # nixos-apple-silicon nixpkgs and does NOT enable allowUnfree.
+  base = {
+    imports = [
+      inputs.nixos-apple-silicon.nixosModules.apple-silicon-support
+      inputs.home-manager.nixosModules.home-manager
+    ];
+
+    i18n = {
+      defaultLocale = "en_US.UTF-8";
+      extraLocaleSettings = {
+        LC_ADDRESS = "en_US.UTF-8";
+        LC_IDENTIFICATION = "en_US.UTF-8";
+        LC_MEASUREMENT = "en_US.UTF-8";
+        LC_MONETARY = "en_US.UTF-8";
+        LC_NAME = "en_US.UTF-8";
+        LC_NUMERIC = "en_US.UTF-8";
+        LC_PAPER = "en_US.UTF-8";
+        LC_TELEPHONE = "en_US.UTF-8";
+        LC_TIME = "en_US.UTF-8";
+      };
+    };
+
+    nix.settings.experimental-features = "nix-command flakes";
+
+    nixpkgs = {
+      config.permittedInsecurePackages = [
+        "libsoup-2.74.3"
+      ];
+      overlays = [ (import ../overlay.nix inputs) ];
+    };
+
+    system.stateVersion = mkDefault "26.11";
+    time.timeZone = "America/New_York";
+  };
 in
 {
   options = {
@@ -25,6 +76,17 @@ in
           in
           {
             options = {
+              specialArgs = mkOption {
+                type = types.attrsOf types.anything;
+                default = { };
+              };
+
+              home = mkOption {
+                description = "Home-manager configuration for this platform's user";
+                type = types.deferredModule;
+                default = { };
+              };
+
               peripheralFirmwareHash = mkOption {
                 type = types.str;
                 default = abort ''
@@ -39,10 +101,11 @@ in
             };
 
             config = {
-              eval = mkDefault true;
               module =
                 { pkgs, ... }:
                 {
+                  imports = [ base ];
+
                   boot = {
                     # For ` to < and ~ to > (for those with US keyboards)
                     extraModprobeConfig = ''
@@ -91,13 +154,19 @@ in
         inputs.nixos-apple-silicon.inputs.nixpkgs.lib.nixosSystem {
           system = "aarch64-linux";
           specialArgs = host.asahi.specialArgs;
-          modules = [ host.asahi.module ];
+          modules = [
+            host.asahi.module
+            (homeManager host)
+          ];
         }
       ) (filterAttrs (_: host: host.asahi.eval) config.lab.hosts);
 
-      nixosModules = mapAttrs (_: host: host.asahi.module) (
-        filterAttrs (_: host: host.asahi.enable) config.lab.hosts
-      );
+      nixosModules = mapAttrs (_: host: {
+        imports = [
+          host.asahi.module
+          (homeManager host)
+        ];
+      }) (filterAttrs (_: host: host.asahi.enable) config.lab.hosts);
     };
   };
 }

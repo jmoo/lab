@@ -1,11 +1,82 @@
 { ... }:
 {
   lab.hosts.axolotl = {
-    home.enable = true;
+    user = "jmoore";
+    source = "/home/jmoore/Repos/jmoore/home";
+
+    direnv.enable = true;
+    ghostty.enable = true;
+    greetd.enable = true;
+    hyprland.enable = true;
+    shell.enable = true;
+    ssh.enable = true;
+    vscode.enable = true;
 
     nixos = {
       enable = true;
+      # Exported as nixosModules.axolotl only; no active nixosConfiguration.
+      eval = false;
       system = "x86_64-linux";
+
+      home = {
+        hyprpaper.enable = true;
+      };
+
+      module =
+        {
+          pkgs,
+          lib,
+          ...
+        }:
+        {
+          environment.systemPackages = with pkgs; [
+            git
+            gparted
+            vim
+          ];
+
+          networking = {
+            hostName = "axolotl";
+
+            networkmanager = {
+              enable = true;
+            };
+
+            useDHCP = lib.mkDefault true;
+          };
+
+          programs = {
+            wireshark.enable = true;
+          };
+
+          security.rtkit.enable = true;
+
+          services = {
+            pipewire = {
+              enable = true;
+              alsa.enable = true;
+              alsa.support32Bit = true;
+              pulse.enable = true;
+            };
+
+            printing.enable = true;
+
+            pulseaudio.enable = false;
+          };
+
+          users.users.jmoore = {
+            name = "jmoore";
+            home = "/home/jmoore";
+            isNormalUser = true;
+            description = "John Moore";
+            extraGroups = [
+              "networkmanager"
+              "wheel"
+              "dialout"
+              "input"
+            ];
+          };
+        };
     };
   };
 }

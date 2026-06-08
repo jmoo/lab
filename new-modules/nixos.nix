@@ -14,6 +14,21 @@ let
     nixosSystem
     types
     ;
+
+  # Apply this platform's home-manager configuration to the host's user.
+  homeManager = host: {
+    home-manager = {
+      useGlobalPkgs = true;
+      useUserPackages = true;
+      users.${host.user} =
+        { osConfig, ... }:
+        {
+          imports = [ host.nixos.home ];
+          home.stateVersion = mkDefault osConfig.system.stateVersion;
+          programs.home-manager.enable = false;
+        };
+    };
+  };
 in
 {
   options = {
@@ -29,11 +44,15 @@ in
             system = mkOption {
               type = types.str;
             };
+
+            home = mkOption {
+              description = "Home-manager configuration for this platform's user";
+              type = types.deferredModule;
+              default = { };
+            };
           };
 
           config = {
-            eval = mkDefault true;
-
             module = {
               imports = [
                 inputs.home-manager.nixosModules.home-manager
@@ -54,10 +73,16 @@ in
                 };
               };
 
+              nix.settings.experimental-features = "nix-command flakes";
+
               nixpkgs = {
-                config.permittedInsecurePackages = [
-                  "libsoup-2.74.3"
-                ];
+                config = {
+                  allowUnfree = true;
+                  permittedInsecurePackages = [
+                    "libsoup-2.74.3"
+                  ];
+                };
+                overlays = [ (import ../overlay.nix inputs) ];
               };
 
               system.stateVersion = mkDefault "26.11";
@@ -76,13 +101,19 @@ in
         nixosSystem {
           system = host.nixos.system;
           specialArgs = host.nixos.specialArgs;
-          modules = [ host.nixos.module ];
+          modules = [
+            host.nixos.module
+            (homeManager host)
+          ];
         }
       ) (filterAttrs (_: host: host.nixos.eval) config.lab.hosts);
 
-      nixosModules = mapAttrs (_: host: host.nixos.module) (
-        filterAttrs (_: host: host.nixos.enable) config.lab.hosts
-      );
+      nixosModules = mapAttrs (_: host: {
+        imports = [
+          host.nixos.module
+          (homeManager host)
+        ];
+      }) (filterAttrs (_: host: host.nixos.enable) config.lab.hosts);
     };
   };
 }

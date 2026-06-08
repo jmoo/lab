@@ -22,6 +22,17 @@ in
                     type = types.str;
                     default = name;
                   };
+
+                  user = mkOption {
+                    description = "The single user home-manager configuration is applied to";
+                    type = types.str;
+                  };
+
+                  source = mkOption {
+                    description = "Flake uri of the jmoo/lab source, used by the rebuild alias";
+                    type = with types; nullOr str;
+                    default = "github:jmoo/lab";
+                  };
                 };
 
                 config = {
