@@ -18,11 +18,6 @@ with lib;
         home.stateVersion = mkDefault "25.05";
         programs.home-manager.enable = false;
       };
-
-      users.users.root.home = "/var/root";
-      nix.enable = true;
-      system.stateVersion = mkDefault 5;
-      nixpkgs.hostPlatform = mkDefault "aarch64-darwin";
     }
 
     (mkIf config.lab.iterm2.enable {

@@ -5,6 +5,12 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    flake-parts = {
+      url = "github:hercules-ci/flake-parts";
+    };
+
+    import-tree.url = "github:denful/import-tree";
+
     nix-darwin = {
       url = "github:lnl7/nix-darwin";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -24,83 +30,87 @@
   };
 
   outputs =
-    { nixpkgs, nixos-apple-silicon, ... }@inputs:
-    rec {
-      darwinConfigurations = {
-        meerkat = inputs.nix-darwin.lib.darwinSystem {
-          system = "aarch64-darwin";
-          specialArgs = {
-            inherit inputs;
-          };
-          modules = [
-            ./hosts/meerkat/darwin.nix
-            {
-              nixpkgs = {
-                config.allowUnfree = true;
-                overlays = nixpkgs.lib.attrValues overlays;
-              };
-            }
-          ];
-        };
-      };
+    { nixpkgs, ... }@inputs:
+    (nixpkgs.lib.extend (import ./lib.nix inputs)).mkFlake {
+      inherit inputs;
+    } { };
 
-      formatter = nixpkgs.lib.mapAttrs (_: pkgs: pkgs.nixfmt-tree) legacyPackages;
+  # rec {
+  #   darwinConfigurations = {
+  #     meerkat = inputs.nix-darwin.lib.darwinSystem {
+  #       system = "aarch64-darwin";
+  #       specialArgs = {
+  #         inherit inputs;
+  #       };
+  #       modules = [
+  #         ./hosts/meerkat/darwin.nix
+  #         {
+  #           nixpkgs = {
+  #             config.allowUnfree = true;
+  #             overlays = nixpkgs.lib.attrValues overlays;
+  #           };
+  #         }
+  #       ];
+  #     };
+  #   };
 
-      nixosConfigurations = {
-        lynx = nixpkgs.lib.nixosSystem {
-          system = "x86_64-linux";
-          specialArgs = {
-            inherit inputs;
-          };
-          modules = [
-            ./hosts/lynx
-            {
-              nixpkgs = {
-                config.allowUnfree = true;
-                overlays = nixpkgs.lib.attrValues overlays;
-              };
-            }
-          ];
-        };
+  #   formatter = nixpkgs.lib.mapAttrs (_: pkgs: pkgs.nixfmt-tree) legacyPackages;
 
-        meerkat = nixos-apple-silicon.inputs.nixpkgs.lib.nixosSystem {
-          system = "aarch64-linux";
-          specialArgs = {
-            inherit inputs;
-          };
-          modules = [
-            ./hosts/meerkat/asahi.nix
-            { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
-          ];
-        };
-      };
+  #   nixosConfigurations = {
+  #     lynx = nixpkgs.lib.nixosSystem {
+  #       system = "x86_64-linux";
+  #       specialArgs = {
+  #         inherit inputs;
+  #       };
+  #       modules = [
+  #         ./hosts/lynx
+  #         {
+  #           nixpkgs = {
+  #             config.allowUnfree = true;
+  #             overlays = nixpkgs.lib.attrValues overlays;
+  #           };
+  #         }
+  #       ];
+  #     };
 
-      nixosModules = {
-        axolotl = import ./hosts/axolotl/default.nix;
-        lynx = import ./hosts/lynx/default.nix;
-        meerkat = import ./hosts/meerkat/asahi.nix;
-        default = import ./modules/nixos.nix;
-      };
+  #     meerkat = nixos-apple-silicon.inputs.nixpkgs.lib.nixosSystem {
+  #       system = "aarch64-linux";
+  #       specialArgs = {
+  #         inherit inputs;
+  #       };
+  #       modules = [
+  #         ./hosts/meerkat/asahi.nix
+  #         { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
+  #       ];
+  #     };
+  #   };
 
-      overlays.default = import ./overlay.nix inputs;
+  #   nixosModules = {
+  #     axolotl = import ./hosts/axolotl/default.nix;
+  #     lynx = import ./hosts/lynx/default.nix;
+  #     meerkat = import ./hosts/meerkat/asahi.nix;
+  #     default = import ./modules/nixos.nix;
+  #   };
 
-      legacyPackages = {
-        aarch64-darwin = import nixpkgs {
-          system = "aarch64-darwin";
-          config.allowUnfree = true;
-          overlays = nixpkgs.lib.attrValues overlays;
-        };
+  #   overlays.default = import ./overlay.nix inputs;
 
-        aarch64-linux = import nixpkgs {
-          system = "aarch64-linux";
-          overlays = nixpkgs.lib.attrValues overlays;
-        };
+  #   legacyPackages = {
+  #     aarch64-darwin = import nixpkgs {
+  #       system = "aarch64-darwin";
+  #       config.allowUnfree = true;
+  #       overlays = nixpkgs.lib.attrValues overlays;
+  #     };
 
-        x86_64-linux = import nixpkgs {
-          system = "x86_64-linux";
-          config.allowUnfree = true;
-          overlays = nixpkgs.lib.attrValues overlays;
-        };
-      };
-    };
+  #     aarch64-linux = import nixpkgs {
+  #       system = "aarch64-linux";
+  #       overlays = nixpkgs.lib.attrValues overlays;
+  #     };
+
+  #     x86_64-linux = import nixpkgs {
+  #       system = "x86_64-linux";
+  #       config.allowUnfree = true;
+  #       overlays = nixpkgs.lib.attrValues overlays;
+  #     };
+  #   };
+  # };
 }

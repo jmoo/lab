@@ -17,30 +17,13 @@ with lib;
 
   config = mkMerge [
     {
-      i18n.defaultLocale = "en_US.UTF-8";
-      i18n.extraLocaleSettings = {
-        LC_ADDRESS = "en_US.UTF-8";
-        LC_IDENTIFICATION = "en_US.UTF-8";
-        LC_MEASUREMENT = "en_US.UTF-8";
-        LC_MONETARY = "en_US.UTF-8";
-        LC_NAME = "en_US.UTF-8";
-        LC_NUMERIC = "en_US.UTF-8";
-        LC_PAPER = "en_US.UTF-8";
-        LC_TELEPHONE = "en_US.UTF-8";
-        LC_TIME = "en_US.UTF-8";
-      };
+
 
       lab.common = {
         home.stateVersion = mkDefault config.system.stateVersion;
         programs.home-manager.enable = false;
       };
-
-      nixpkgs.config.permittedInsecurePackages = [
-        "libsoup-2.74.3"
-      ];
-
-      system.stateVersion = mkDefault "25.05";
-      time.timeZone = "America/New_York";
+      
     }
 
     # Hyprland
