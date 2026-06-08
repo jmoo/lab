@@ -1,11 +1,11 @@
 { lib', ... }:
 let
-  inherit (lib'.lab) mkHostModule homeAll;
+  inherit (lib'.lab) mkHostModule;
   inherit (lib') mkEnableOption mkIf;
 
   # Home-manager vscode configuration. `flags` carries the per-host toggles
   # (nix/python/rust/webdev) resolved from the flake-parts options.
-  home =
+  mkHome =
     flags:
     {
       pkgs,
@@ -223,16 +223,16 @@ in
         };
       };
 
-      config = mkIf config.vscode.enable (
-        homeAll (home {
+      config = mkIf config.vscode.enable {
+        home = mkHome {
           inherit (config.vscode)
             nix
             python
             rust
             webdev
             ;
-        })
-      );
+        };
+      };
     }
   );
 }

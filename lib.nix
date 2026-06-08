@@ -90,15 +90,10 @@ in
     };
 
     # Push a home-manager module down into each platform's home config.
+    # (For all platforms, set the host-level `home` option instead.)
     homeLinux = module: {
       nixos.home = module;
       asahi.home = module;
-    };
-
-    homeAll = module: {
-      nixos.home = module;
-      asahi.home = module;
-      darwin.home = module;
     };
 
     homeDarwin = module: {

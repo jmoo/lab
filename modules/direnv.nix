@@ -1,6 +1,6 @@
 { lib', ... }:
 let
-  inherit (lib'.lab) mkHostModule homeAll;
+  inherit (lib'.lab) mkHostModule;
   inherit (lib') mkEnableOption mkIf;
 in
 {
@@ -9,8 +9,8 @@ in
     {
       options.direnv.enable = mkEnableOption "direnv home-manager configuration";
 
-      config = mkIf config.direnv.enable (
-        homeAll (
+      config = mkIf config.direnv.enable {
+        home =
           { pkgs, ... }:
           {
             programs = {
@@ -25,9 +25,8 @@ in
 
               vscode.profiles.default.extensions = with pkgs.vscode-extensions; [ mkhl.direnv ];
             };
-          }
-        )
-      );
+          };
+      };
     }
   );
 }
