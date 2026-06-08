@@ -18,8 +18,8 @@ in
     in
     flake-parts.lib.mkFlake args' (_: {
       imports = [
-        (import-tree ./new-modules)
-        (import-tree ./new-hosts)
+        (import-tree ./modules)
+        (import-tree ./hosts)
         module
       ];
 
