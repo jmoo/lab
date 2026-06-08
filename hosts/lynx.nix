@@ -1,4 +1,7 @@
-{ ... }:
+{ lib, ... }:
+let
+  inherit (lib) mkDefault mkForce;
+in
 {
   lab.hosts.lynx = {
     user = "jmoore";
@@ -21,34 +24,24 @@
       enable = true;
       system = "x86_64-linux";
 
-      home =
-        { lib, ... }:
-        {
-          # nvidia GPU
-          hyprland.nvidia = true;
+      home = {
+        # nvidia GPU
+        hyprland.nvidia = true;
 
-          programs = {
-            claude-code.enable = true;
-            ghostty.settings.theme = lib.mkForce "Bright Lights";
-            yt-dlp.enable = true;
-          };
+        programs = {
+          claude-code.enable = true;
+          ghostty.settings.theme = mkForce "Bright Lights";
+          yt-dlp.enable = true;
         };
+      };
 
       module =
         {
           pkgs,
-          lib,
           config,
-          modulesPath,
           ...
         }:
         {
-          imports = [
-            (modulesPath + "/installer/scan/not-detected.nix")
-          ];
-
-          # ---- hardware (was hosts/lynx/hardware.nix) ----
-
           # Bootloader.
           boot.loader.systemd-boot.enable = true;
           boot.loader.efi.canTouchEfiVariables = true;
@@ -116,8 +109,9 @@
             { device = "/dev/disk/by-uuid/2a722f1e-d50b-4e65-ad59-e821be7c6e05"; }
           ];
 
-          nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
-          hardware.cpu.amd.updateMicrocode = lib.mkDefault config.hardware.enableRedistributableFirmware;
+          nixpkgs.hostPlatform = mkDefault "x86_64-linux";
+          hardware.cpu.amd.updateMicrocode = mkDefault config.hardware.enableRedistributableFirmware;
+          hardware.enableRedistributableFirmware = mkDefault true;
 
           # Enable OpenGL
           hardware.graphics = {
@@ -143,8 +137,6 @@
             package = config.boot.kernelPackages.nvidiaPackages.stable;
           };
 
-          # ---- host configuration (was hosts/lynx/default.nix) ----
-
           environment.systemPackages = with pkgs; [
             anki
             brave
@@ -165,30 +157,12 @@
               enable = true;
             };
 
-            useDHCP = lib.mkDefault true;
+            useDHCP = mkDefault true;
           };
 
-          nix = {
-            extraOptions = ''
-              secret-key-files = /etc/nixos/lynx.priv
-            '';
-
-            settings = {
-              trusted-users = [
-                "@wheel"
-                "nix-ssh"
-              ];
-            };
-
-            sshServe = {
-              enable = true;
-              write = true;
-              keys = map (builtins.readFile) [
-                ../keys/meerkat-ssh.pub
-                ../keys/lynx-ssh.pub
-              ];
-            };
-          };
+          nix.settings.trusted-users = [
+            "@wheel"
+          ];
 
           programs = {
             steam = {

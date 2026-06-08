@@ -25,34 +25,6 @@ let
 
       programs.yt-dlp.enable = true;
     };
-
-  # Nix settings shared across both platforms: meerkat offloads builds to lynx.
-  nixCommon = {
-    nix = {
-      distributedBuilds = true;
-
-      extraOptions = ''
-        extra-platforms = aarch64-linux
-        builders-use-substitutes = true
-      '';
-
-      settings = {
-        trusted-users = [
-          "jmoore"
-          "root"
-        ];
-
-        trusted-public-keys = [
-          "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-          (builtins.readFile ../keys/lynx-nix.pub)
-        ];
-
-        substituters = [
-          "https://cache.nixos.org/"
-        ];
-      };
-    };
-  };
 in
 {
   lab.hosts.meerkat = {
@@ -143,8 +115,6 @@ in
       module =
         { pkgs, ... }:
         {
-          imports = [ nixCommon ];
-
           environment.systemPackages = with pkgs; [
             gparted
             lm_sensors
@@ -216,8 +186,6 @@ in
       module =
         { pkgs, ... }:
         {
-          imports = [ nixCommon ];
-
           networking.hostName = "meerkat";
 
           environment.systemPackages = with pkgs; [ tailscale ];

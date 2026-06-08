@@ -1,4 +1,7 @@
-{ ... }:
+{ lib, ... }:
+let
+  inherit (lib) mkDefault;
+in
 {
   lab.hosts.axolotl = {
     user = "jmoore";
@@ -14,8 +17,7 @@
 
     nixos = {
       enable = true;
-      # Exported as nixosModules.axolotl only; no active nixosConfiguration.
-      eval = false;
+      eval = mkDefault false;
       system = "x86_64-linux";
 
       home = {
@@ -23,11 +25,7 @@
       };
 
       module =
-        {
-          pkgs,
-          lib,
-          ...
-        }:
+        { pkgs, ... }:
         {
           environment.systemPackages = with pkgs; [
             git
