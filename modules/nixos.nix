@@ -85,7 +85,9 @@ in
                 overlays = [ (import ../overlay.nix inputs) ];
               };
 
-              system.stateVersion = mkDefault "26.11";
+              # stateVersion is stateful — pin to the hosts' install version, not
+              # the current nixpkgs release. Override per host if newer.
+              system.stateVersion = mkDefault "25.05";
               time.timeZone = "America/New_York";
             };
           };

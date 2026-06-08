@@ -70,6 +70,13 @@
           boot.kernelModules = [ "kvm-amd" ];
           boot.extraModulePackages = [ ];
 
+          boot.binfmt = {
+            addEmulatedSystemsToNixSandbox = true;
+            emulatedSystems = [
+              "aarch64-linux"
+            ];
+          };
+
           fileSystems = {
             "/" = {
               device = "/dev/disk/by-uuid/3ed3e47a-d611-4399-81ac-a8f47a78dabd";
