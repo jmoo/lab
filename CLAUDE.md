@@ -79,7 +79,7 @@ Push helpers (in `lib.nix`):
 
 Because every feature's pushed `.home` for a platform merges into one home-manager evaluation, co-resident home modules can share option namespaces (see the desktop bundle's `apps` set + `wrapHyprCommand` arg). Pushed config is usually written as a `{ pkgs, ... }:` function so packages resolve at build time (there is no `pkgs` at the flake-parts level — option *defaults* must not reference `pkgs`).
 
-Host-specific overrides are written the old-fashioned way directly into a host's `home` (cross-platform), `<platform>.home` (one platform), or `<platform>.module` (system) — e.g. meerkat's shared home packages live in `home`, its asahi-only swaylock/HiDPI in `asahi.home`, and lynx's ghostty theme + `hyprland.nvidia` in `nixos.home`. There is no multi-user/root support — one host, one user.
+Host-specific overrides are written directly into a host's `home` (cross-platform), `<platform>.home` (one platform), or `<platform>.module` (system) — e.g. meerkat's shared home packages live in `home`, its asahi-only swaylock/HiDPI in `asahi.home`, and lynx's ghostty theme + `hyprland.nvidia` in `nixos.home`. There is no multi-user/root support — one host, one user.
 
 ### Directory layout
 
@@ -87,21 +87,21 @@ Host-specific overrides are written the old-fashioned way directly into a host's
 flake.nix              # calls lib.nix:mkFlake
 lib.nix                # mkFlake + lab.{mkHostModule,mkHostPlatform,mkHostOptions,forLinux,forAll,homeLinux,homeDarwin}
 overlay.nix            # global overlay (nudelta, vscode-nix-extensions, ulauncher-uwsm)
-modules/           # flake-parts modules, auto-imported (every .nix)
+modules/               # flake-parts modules, auto-imported (every .nix)
   default.nix          # lab.hosts base options + home-manager flakeModule
   nixos.nix            # nixos platform + nixos{Configurations,Modules}
   asahi.nix            # asahi platform (pinned nixpkgs) + nixos{Configurations,Modules}
   darwin.nix           # darwin platform + darwin{Configurations,Modules}
-  perSystem.nix        # systems, formatter (nixfmt-tree), legacyPackages, overlays.default
+  nixpkgs.nix          # nixpkgs.{config,overlays} options + systems + perSystem pkgs/legacyPackages
+  treefmt.nix          # perSystem formatter (nixfmt-tree)
   locale.nix           # shared (always-on): i18n + time.timeZone (Linux)
   nix.nix              # shared (always-on): nix daemon settings
-  nixpkgs.nix          # shared (always-on): allowUnfree, overlay, insecure pkgs
   <feature>.nix        # ghostty, shell, direnv, vscode, iterm2,
-                       #   greetd, ssh, k3s, tailscale
+                       #   greetd, ssh, tailscale
   hyprland/            # desktop bundle (hypridle/hyprlock/hyprpaper/hyprpolkitagent/
                        #   apps/theme/ulauncher/waybar/nm-applet) + config/ & waybar/ assets
   iterm2/              # iterm2 feature + iterm2.plist
-hosts/             # one flake-parts module per host, auto-imported
+hosts/                 # one flake-parts module per host, auto-imported
 keys/                  # ssh/nix pubkeys (referenced via builtins.readFile)
 pkgs/                  # custom packages + vscode-nix-extensions home-manager module
 resources/             # vscode themes/icons, mascots
@@ -124,8 +124,9 @@ Non-`.nix` assets (`*.conf`, `*.json`, `*.css`, `*.plist`, pubkeys) live next to
 ## Platform conditionals & key details
 
 - Use `pkgs.stdenv.isDarwin` / `pkgs.stdenv.isLinux` inside pushed modules. Use `forLinux`/`homeLinux` vs `homeDarwin` to target platforms at the feature level.
-- Overlays (`overlay.nix`), `allowUnfree`, nix settings, and locale/timezone are applied by **always-on shared feature modules** (`nixpkgs.nix`, `nix.nix`, `locale.nix`) that push to every platform with no enable toggle — not by the platform base modules. `allowUnfree = true` on **all** nixos/darwin configurations (incl. Asahi, which runs vscode/brave/obsidian). In `perSystem`, `legacyPackages` keeps `allowUnfree` off for aarch64-linux only.
+- **nixpkgs config + overlays** are top-level flake-parts options — `nixpkgs.config` (`attrsOf anything`) and `nixpkgs.overlays` (`listOf raw`) — declared and defaulted in `modules/nixpkgs.nix`. `nixpkgs.nix` applies them to every host platform (via `forAll`) **and** to the `perSystem` `pkgs`/`legacyPackages`, so it's one source of truth. (`overlays` must be `types.raw`, not `types.anything`: `raw` is opaque, so the module system never forces the overlay functions, which would otherwise infinite-recurse via `option → pkgs → flake outputs → config → option`.) `allowUnfree = true` everywhere (incl. Asahi, which runs vscode/brave/obsidian, and `legacyPackages`).
+- nix daemon settings and locale/timezone come from always-on shared modules (`nix.nix`, `locale.nix`) that push to every platform with no enable toggle.
 - Asahi builds with `nixos-apple-silicon.inputs.nixpkgs.lib.nixosSystem` (its pinned 25.11 nixpkgs); the pin intentionally does **not** follow nixpkgs (stability — unstable kernel-panics). Because that pinned lib predates `lib.genAttrs'`, the Asahi platform uses a dedicated, era-matched `home-manager-asahi` input (`modules/asahi.nix`) instead of the main `home-manager`.
-- `system.stateVersion` is **stateful** — base modules default it to `"25.05"` (the hosts' install version), independent of the current nixpkgs release. Do not bump it casually (it changed hyprland's `configType` from hyprlang→lua during the migration).
+- `system.stateVersion` is **stateful** — base modules default it to `"25.05"` (the hosts' install version), independent of the current nixpkgs release. Do not bump it casually (e.g. it flips hyprland's `configType` from hyprlang to lua at 26.05).
 - Lynx is a remote nix builder for meerkat (`nix.sshServe` + signing keys in `keys/`).
 - `eval` vs `enable`: `eval` builds a `*Configurations.<host>`; `enable` exports a `*Modules.<host>`. axolotl sets `nixos.enable = true; nixos.eval = false;` to be module-only.

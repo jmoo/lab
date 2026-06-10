@@ -51,7 +51,7 @@ in
       {
         _module.args.pkgs = import inputs.nixpkgs {
           inherit system;
-          inherit (config) nixpkgs;
+          inherit (config.nixpkgs) config overlays;
         };
 
         legacyPackages = pkgs;
