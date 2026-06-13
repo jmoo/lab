@@ -96,11 +96,10 @@ modules/               # flake-parts modules, auto-imported (every .nix)
   treefmt.nix          # perSystem formatter (nixfmt-tree)
   locale.nix           # shared (always-on): i18n + time.timeZone (Linux)
   nix.nix              # shared (always-on): nix daemon settings
-  <feature>.nix        # ghostty, shell, direnv, vscode, theme,
-                       #   ulauncher, hyprpolkitagent, greetd, ssh, tailscale
-  hyprland/            # hyprland session (core) + hyprland.conf
-  hyprlock/            # lock screen + hyprlock.conf ($lock keybind)
-  waybar/              # status bar + config.json & style.css
+  <feature>.nix        # ghostty, shell, direnv, vscode, theme, ssh, tailscale
+  hyprland/            # hyprland desktop, one .nix per piece (all hyprland-specific):
+                       #   default.nix (session core) + greetd, ulauncher, hyprlock,
+                       #   hyprpolkitagent, waybar + their .conf/.json/.css assets
   iterm2/              # iterm2 feature + iterm2.plist
 hosts/                 # one flake-parts module per host, auto-imported
 keys/                  # ssh/nix pubkeys (referenced via builtins.readFile)
