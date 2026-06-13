@@ -9,7 +9,6 @@ in
 
     direnv.enable = true;
     ghostty.enable = true;
-    greetd.enable = true;
     hyprland = {
       enable = true;
       nvidia = true;

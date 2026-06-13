@@ -109,6 +109,7 @@ in
 
       config = mkIf config.hyprland.enable {
         # Companion desktop modules, on by default with hyprland.
+        greetd.enable = mkDefault true;
         theme.enable = mkDefault true;
         waybar.enable = mkDefault true;
         ulauncher.enable = mkDefault true;

@@ -38,7 +38,6 @@ in
     vscode.enable = true;
 
     # Linux-only features (forLinux → only affect the asahi build).
-    greetd.enable = true;
     hyprland.enable = true;
     ssh.enable = true;
     tailscale.enable = true;
