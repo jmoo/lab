@@ -10,6 +10,7 @@ in
       enable = true;
       nvidia = true;
     };
+    orca-slicer.enable = true;
 
     nixos = {
       enable = true;
@@ -80,11 +81,13 @@ in
           environment.systemPackages = with pkgs; [
             anki
             brave
+            btop
             dos2unix
             git
             gparted
             nudelta
             obsidian
+            unzip
             vim
             wev
             zip
@@ -189,6 +192,7 @@ in
               openFirewall = true;
             };
 
+            # nuphy air75 flashing
             udev.extraRules = ''
               KERNEL=="hidraw*", SUBSYSTEM=="hidraw", TAG+="uaccess"
             '';

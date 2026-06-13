@@ -12,6 +12,8 @@ inputs: final: prev: {
 
   nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 
+  open-bamboo-networking = final.callPackage ./pkgs/open-bamboo-networking { };
+
   ulauncher-uwsm = final.callPackage ./pkgs/ulauncher-uwsm { };
 
   vscode-extensions = prev.vscode-extensions // {

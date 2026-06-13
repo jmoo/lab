@@ -9,7 +9,7 @@ let
   inherit (lib') mkOption types;
 in
 {
-  options = { 
+  options = {
     lab.hosts = mkHostModule (forAll {
       inherit (config) nixpkgs;
     });
