@@ -10,7 +10,10 @@ in
     direnv.enable = true;
     ghostty.enable = true;
     greetd.enable = true;
-    hyprland.enable = true;
+    hyprland = {
+      enable = true;
+      nvidia = true;
+    };
     shell.enable = true;
     ssh.enable = true;
     vscode.enable = true;
@@ -25,9 +28,6 @@ in
       system = "x86_64-linux";
 
       home = {
-        # nvidia GPU
-        hyprland.nvidia = true;
-
         programs = {
           claude-code.enable = true;
           ghostty.settings.theme = mkForce "Bright Lights";

@@ -77,7 +77,7 @@ Push helpers (in `lib.nix`):
 - **System** config → platform `.module`: `forLinux` (nixos + asahi), `forAll` (+ darwin).
 - **Home** config → platform `.home`: `homeLinux`, `homeDarwin`. For **all** platforms, set the host-level `home` option directly (`config.home = …`) instead of a helper.
 
-Because every feature's pushed `.home` for a platform merges into one home-manager evaluation, co-resident home modules can share option namespaces (see the desktop bundle's `apps` set + `wrapHyprCommand` arg). Pushed config is usually written as a `{ pkgs, ... }:` function so packages resolve at build time (there is no `pkgs` at the flake-parts level — option *defaults* must not reference `pkgs`).
+Because every feature's pushed `.home` for a platform merges into one home-manager evaluation, separate modules can contribute to the same config — e.g. `ulauncher` and `hyprlock` each set their own `wayland.windowManager.hyprland.settings."$launcher"`/`"$lock"`, which merge into the settings the `hyprland` module declares. A feature can also default-enable its companions at the flake-parts level (`hyprland` sets `theme.enable`/`waybar.enable`/… `= mkDefault true`). Pushed config is usually written as a `{ pkgs, ... }:` function so packages resolve at build time (there is no `pkgs` at the flake-parts level — option *defaults* must not reference `pkgs`).
 
 Host-specific overrides are written directly into a host's `home` (cross-platform), `<platform>.home` (one platform), or `<platform>.module` (system) — e.g. meerkat's shared home packages live in `home`, its asahi-only swaylock/HiDPI in `asahi.home`, and lynx's ghostty theme + `hyprland.nvidia` in `nixos.home`. There is no multi-user/root support — one host, one user.
 
@@ -96,10 +96,11 @@ modules/               # flake-parts modules, auto-imported (every .nix)
   treefmt.nix          # perSystem formatter (nixfmt-tree)
   locale.nix           # shared (always-on): i18n + time.timeZone (Linux)
   nix.nix              # shared (always-on): nix daemon settings
-  <feature>.nix        # ghostty, shell, direnv, vscode, iterm2,
-                       #   greetd, ssh, tailscale
-  hyprland/            # desktop bundle (hypridle/hyprlock/hyprpaper/hyprpolkitagent/
-                       #   apps/theme/ulauncher/waybar/nm-applet) + config/ & waybar/ assets
+  <feature>.nix        # ghostty, shell, direnv, vscode, theme,
+                       #   ulauncher, hyprpolkitagent, greetd, ssh, tailscale
+  hyprland/            # hyprland session (core) + hyprland.conf
+  hyprlock/            # lock screen + hyprlock.conf ($lock keybind)
+  waybar/              # status bar + config.json & style.css
   iterm2/              # iterm2 feature + iterm2.plist
 hosts/                 # one flake-parts module per host, auto-imported
 keys/                  # ssh/nix pubkeys (referenced via builtins.readFile)

@@ -20,10 +20,6 @@ in
       eval = mkDefault false;
       system = "x86_64-linux";
 
-      home = {
-        hyprpaper.enable = true;
-      };
-
       module =
         { pkgs, ... }:
         {

@@ -43,6 +43,9 @@ in
     ssh.enable = true;
     tailscale.enable = true;
 
+    # hyprlock currently segfaults on asahi; use swaylock instead (see asahi.home).
+    hyprlock.enable = false;
+
     # Darwin-only feature.
     iterm2.enable = true;
 
@@ -53,9 +56,8 @@ in
       home =
         { pkgs, lib, ... }:
         {
-          # Hyprlock currently segfaults on asahi; use swaylock instead.
-          hyprlock.enable = false;
-          apps.lock.package = lib.mkForce pkgs.swaylock;
+          # swaylock instead of hyprlock (disabled at the host level).
+          home.packages = [ pkgs.swaylock ];
 
           programs = {
             brave = {
@@ -87,6 +89,8 @@ in
           # HiDPI settings for retina display
           wayland.windowManager.hyprland = {
             settings = {
+              "$lock" = "${lib.getExe pkgs.uwsm} app -- ${lib.getExe pkgs.swaylock}";
+
               monitor = [
                 ", highres, auto, 2"
               ];
