@@ -4,20 +4,13 @@ let
 in
 {
   lab.hosts.axolotl = {
-    user = "jmoore";
-    source = "/home/jmoore/Repos/jmoore/home";
-
     direnv.enable = true;
     ghostty.enable = true;
     hyprland.enable = true;
-    shell.enable = true;
-    ssh.enable = true;
-    vscode.enable = true;
 
     nixos = {
       enable = true;
       eval = mkDefault false;
-      system = "x86_64-linux";
 
       module =
         { pkgs, ... }:
@@ -31,24 +24,22 @@ in
           networking = {
             hostName = "axolotl";
 
-            networkmanager = {
-              enable = true;
-            };
+            networkmanager.enable = true;
 
             useDHCP = lib.mkDefault true;
           };
 
-          programs = {
-            wireshark.enable = true;
-          };
+          programs.wireshark.enable = true;
 
           security.rtkit.enable = true;
 
           services = {
             pipewire = {
+              alsa = {
+                enable = true;
+                support32Bit = true;
+              };
               enable = true;
-              alsa.enable = true;
-              alsa.support32Bit = true;
               pulse.enable = true;
             };
 
@@ -58,9 +49,6 @@ in
           };
 
           users.users.jmoore = {
-            name = "jmoore";
-            home = "/home/jmoore";
-            isNormalUser = true;
             description = "John Moore";
             extraGroups = [
               "networkmanager"
@@ -68,8 +56,19 @@ in
               "dialout"
               "input"
             ];
+            home = "/home/jmoore";
+            isNormalUser = true;
+            name = "jmoore";
           };
         };
+
+      system = "x86_64-linux";
     };
+
+    shell.enable = true;
+    source = "/home/jmoore/Repos/jmoore/home";
+    ssh.enable = true;
+    user = "jmoore";
+    vscode.enable = true;
   };
 }

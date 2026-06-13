@@ -13,6 +13,27 @@ in
         homeLinux (
           { pkgs, config, ... }:
           {
+            dconf = {
+              enable = true;
+              settings."org/gnome/desktop/interface".color-scheme = "prefer-dark";
+            };
+
+            fonts.fontconfig.enable = true;
+
+            gtk = {
+              cursorTheme = {
+                name = "Adwaita";
+                package = pkgs.adwaita-icon-theme;
+              };
+              enable = true;
+              gtk4.theme = config.gtk.theme;
+              iconTheme = {
+                name = "Adwaita";
+                package = pkgs.adwaita-icon-theme;
+              };
+              theme.name = "adw-gtk3-dark";
+            };
+
             home.packages = with pkgs; [
               adwaita-icon-theme
               adwaita-qt
@@ -24,31 +45,10 @@ in
               font-awesome
             ];
 
-            fonts.fontconfig.enable = true;
-
-            dconf = {
-              enable = true;
-              settings."org/gnome/desktop/interface".color-scheme = "prefer-dark";
-            };
-
-            gtk = {
-              enable = true;
-              theme.name = "adw-gtk3-dark";
-              iconTheme = {
-                name = "Adwaita";
-                package = pkgs.adwaita-icon-theme;
-              };
-              cursorTheme = {
-                name = "Adwaita";
-                package = pkgs.adwaita-icon-theme;
-              };
-              gtk4.theme = config.gtk.theme;
-            };
-
             qt = {
               enable = true;
-              style.name = "adwaita-dark";
               platformTheme.name = "adwaita";
+              style.name = "adwaita-dark";
             };
           }
         )

@@ -6,25 +6,23 @@
 }:
 let
   inherit (lib'.lab) mkHostModule forAll;
-  inherit (lib') types mkOption;
+  inherit (lib') mkOption types;
 in
 {
   options = {
-    lab = {
-      hosts = mkHostModule (forAll {
-        inherit (config) nixpkgs;
-      });
-    };
+    lab.hosts = mkHostModule (forAll {
+      inherit (config) nixpkgs;
+    });
 
     nixpkgs = {
-      overlays = mkOption {
-        type = types.listOf types.raw;
-        default = [ ];
+      config = mkOption {
+        default = { };
+        type = types.attrsOf types.anything;
       };
 
-      config = mkOption {
-        type = types.attrsOf types.anything;
-        default = { };
+      overlays = mkOption {
+        default = [ ];
+        type = types.listOf types.raw;
       };
     };
   };
@@ -40,12 +38,6 @@ in
       overlays = [ (import ../overlay.nix inputs) ];
     };
 
-    systems = [
-      "x86_64-linux"
-      "aarch64-linux"
-      "aarch64-darwin"
-    ];
-
     perSystem =
       { system, pkgs, ... }:
       {
@@ -56,5 +48,11 @@ in
 
         legacyPackages = pkgs;
       };
+
+    systems = [
+      "x86_64-linux"
+      "aarch64-linux"
+      "aarch64-darwin"
+    ];
   };
 }

@@ -14,11 +14,9 @@ in
           enable = true;
           enableZshIntegration = true;
           settings = {
-            theme = "dark:Bright Lights,light:GruvboxLightHard";
             background-opacity = 0.9;
             font-family = "UbuntuMono Nerd Font Mono";
             font-size = 13;
-            window-decoration = false;
             gtk-tabs-location = "bottom";
             keybind = [
               "ctrl+shift+left=previous_tab"
@@ -28,6 +26,8 @@ in
               "ctrl+left=unbind"
               "ctrl+right=unbind"
             ];
+            theme = "dark:Bright Lights,light:GruvboxLightHard";
+            window-decoration = false;
           };
         };
       });

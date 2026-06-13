@@ -7,8 +7,6 @@ in
   options.lab.hosts = mkHostModule (
     { config, ... }:
     {
-      options.hyprlock.enable = mkEnableOption "hyprlock lock screen";
-
       config = mkIf config.hyprlock.enable (
         homeLinux (
           {
@@ -29,6 +27,8 @@ in
           }
         )
       );
+
+      options.hyprlock.enable = mkEnableOption "hyprlock lock screen";
     }
   );
 }

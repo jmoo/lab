@@ -17,8 +17,6 @@ let
       lsp = pkgs.nil;
     in
     {
-      imports = [ ../pkgs/vscode-nix-extensions/home-manager.nix ];
-
       config = lib.mkMerge [
         {
           home.packages = with pkgs; [ shellcheck ];
@@ -27,6 +25,8 @@ let
             enable = true;
 
             nixExtensions.default = {
+              iconThemes.jmoo-dark-icons.path = ../resources/jmoo-dark-icons.json;
+
               paths = [
                 {
                   from = ../resources/icons;
@@ -45,10 +45,6 @@ let
                   uiTheme = "vs-dark";
                 };
               };
-
-              iconThemes = {
-                jmoo-dark-icons.path = ../resources/jmoo-dark-icons.json;
-              };
             };
 
             profiles.default = {
@@ -65,85 +61,41 @@ let
 
               keybindings = [
                 {
+                  command = "workbench.action.openRecent";
                   key = "ctrl+cmd+p";
-                  command = "workbench.action.openRecent";
                 }
                 {
+                  command = "workbench.action.openRecent";
                   key = "ctrl+alt+p";
-                  command = "workbench.action.openRecent";
                 }
                 {
-                  key = "alt+enter";
                   command = "editor.action.quickFix";
+                  key = "alt+enter";
                   when = "editorHasCodeActionsProvider && textInputFocus && !editorReadonly";
                 }
                 {
+                  command = "editor.action.formatDocument";
                   key = "alt+cmd+l";
-                  command = "editor.action.formatDocument";
                   when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
                 }
                 {
+                  command = "editor.action.formatDocument";
                   key = "ctrl+alt+l";
-                  command = "editor.action.formatDocument";
                   when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
                 }
                 {
-                  key = "ctrl+r";
                   command = "editor.action.startFindReplaceAction";
+                  key = "ctrl+r";
                   when = "editorFocus || editorIsOpen";
                 }
                 {
-                  key = "cmd+r";
                   command = "editor.action.startFindReplaceAction";
+                  key = "cmd+r";
                   when = "editorFocus || editorIsOpen";
                 }
               ];
 
               userSettings = {
-                "cSpell.words" = lib.mkDefault (builtins.fromJSON (builtins.readFile ../dictionary.json));
-
-                extensions.autoUpdate = false;
-                "extensions.autoCheckUpdates" = false;
-
-                "editor.fontFamily" = "Ubuntu Mono";
-                "editor.fontSize" = 14;
-                "editor.lineHeight" = 1.2;
-                "editor.semanticHighlighting.enabled" = true;
-                "editor.semanticTokenColorCustomizations" = {
-                  enabled = true;
-                  rules = {
-                    "*.mutable" = {
-                      "underline" = false;
-                    };
-                  };
-                };
-
-                "files.autoSave" = "afterDelay";
-
-                files.associations = {
-                  "*.json" = "jsonc";
-                };
-
-                git.openRepositoryInParentFolders = "always";
-
-                "scm.countBadge" = "off";
-
-                terminal.integrated.fontFamily = "MesloLGS NF";
-                terminal.integrated.defaultProfile.osx = "zsh";
-                terminal.external.osxExec = "iTerm.app";
-                terminal.integrated.fontSize = 13;
-
-                "update.mode" = "none";
-
-                "window.customTitleBarVisibility" = "auto";
-                "window.titleBarStyle" = "custom";
-
-                "workbench.activityBar.location" = "top";
-                "workbench.sideBar.location" = "left";
-                "workbench.colorTheme" = "jmoo-dark";
-                "workbench.iconTheme" = "jmoo-dark-icons";
-                "workbench.tree.indent" = 20;
-
                 "[css]" = {
                   "editor.defaultFormatter" = "vscode.css-language-features";
                 };
@@ -155,6 +107,50 @@ let
                 "[python]" = {
                   "editor.defaultFormatter" = "charliermarsh.ruff";
                 };
+
+                "cSpell.words" = lib.mkDefault (builtins.fromJSON (builtins.readFile ../dictionary.json));
+
+                "editor.fontFamily" = "Ubuntu Mono";
+                "editor.fontSize" = 14;
+                "editor.lineHeight" = 1.2;
+                "editor.semanticHighlighting.enabled" = true;
+                "editor.semanticTokenColorCustomizations" = {
+                  enabled = true;
+                  rules."*.mutable"."underline" = false;
+                };
+
+                "extensions.autoCheckUpdates" = false;
+                extensions.autoUpdate = false;
+
+                files.associations = {
+                  "*.json" = "jsonc";
+                };
+
+                "files.autoSave" = "afterDelay";
+
+                git.openRepositoryInParentFolders = "always";
+
+                "scm.countBadge" = "off";
+
+                terminal = {
+                  external.osxExec = "iTerm.app";
+                  integrated = {
+                    defaultProfile.osx = "zsh";
+                    fontFamily = "MesloLGS NF";
+                    fontSize = 13;
+                  };
+                };
+
+                "update.mode" = "none";
+
+                "window.customTitleBarVisibility" = "auto";
+                "window.titleBarStyle" = "custom";
+
+                "workbench.activityBar.location" = "top";
+                "workbench.colorTheme" = "jmoo-dark";
+                "workbench.iconTheme" = "jmoo-dark-icons";
+                "workbench.sideBar.location" = "left";
+                "workbench.tree.indent" = 20;
               };
             };
           };
@@ -178,9 +174,11 @@ let
             extensions = with pkgs.vscode-extensions; [ jnoortheen.nix-ide ];
 
             userSettings = {
-              nix.enableLanguageServer = true;
-              nix.serverPath = lsp.meta.mainProgram;
-              nix.serverSettings.nil.formatting.command = [ formatter.meta.mainProgram ];
+              nix = {
+                enableLanguageServer = true;
+                serverPath = lsp.meta.mainProgram;
+                serverSettings.nil.formatting.command = [ formatter.meta.mainProgram ];
+              };
             };
           };
         })
@@ -201,12 +199,25 @@ let
           ];
         })
       ];
+
+      imports = [ ../pkgs/vscode-nix-extensions/home-manager.nix ];
     };
 in
 {
   options.lab.hosts = mkHostModule (
     { config, ... }:
     {
+      config = mkIf config.vscode.enable {
+        home = mkHome {
+          inherit (config.vscode)
+            nix
+            python
+            rust
+            webdev
+            ;
+        };
+      };
+
       options.vscode = {
         enable = mkEnableOption "vscode home-manager configuration";
         nix.enable = mkEnableOption "nix language support" // {
@@ -220,17 +231,6 @@ in
         };
         webdev.enable = mkEnableOption "js/ts language support" // {
           default = true;
-        };
-      };
-
-      config = mkIf config.vscode.enable {
-        home = mkHome {
-          inherit (config.vscode)
-            nix
-            python
-            rust
-            webdev
-            ;
         };
       };
     }

@@ -30,14 +30,10 @@ let
 in
 (vscode-utils.buildVscodeMarketplaceExtension {
   mktplcRef = {
-    inherit (config) name version publisher;
+    inherit (config) name publisher version;
   };
   sourceRoot = null;
   vsix = stdenv.mkDerivation {
-    name = "${config.name}.vsix";
-    version = config.version;
-    src = ./src;
-    phases = [ "installPhase" ];
     installPhase = ''
       mkdir -p $out/nix/store
       cp -R $src/extension.js $out/
@@ -64,6 +60,10 @@ in
         ) config.paths
       )}
     '';
+    name = "${config.name}.vsix";
+    phases = [ "installPhase" ];
+    src = ./src;
+    version = config.version;
   };
 }).overrideAttrs
   { sourceRoot = null; }

@@ -11,12 +11,12 @@ in
   # `nix.enable` to manage the daemon (NixOS enables it by default).
   options.lab.hosts = mkHostModule (_: {
     config = {
-      nixos.module = nix;
       asahi.module = nix;
       darwin.module = {
         imports = [ nix ];
         nix.enable = true;
       };
+      nixos.module = nix;
     };
   });
 }

@@ -7,8 +7,6 @@ in
   options.lab.hosts = mkHostModule (
     { config, ... }:
     {
-      options.hyprpolkitagent.enable = mkEnableOption "hyprpolkitagent polkit prompt";
-
       config = mkIf config.hyprpolkitagent.enable (
         homeLinux (
           { pkgs, ... }:
@@ -21,6 +19,8 @@ in
           }
         )
       );
+
+      options.hyprpolkitagent.enable = mkEnableOption "hyprpolkitagent polkit prompt";
     }
   );
 }

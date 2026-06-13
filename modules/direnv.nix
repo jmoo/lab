@@ -16,10 +16,10 @@ in
             programs = {
               direnv = {
                 enable = true;
-                enableZshIntegration = false;
                 enableBashIntegration = false;
-                enableNushellIntegration = false;
                 enableFishIntegration = false;
+                enableNushellIntegration = false;
+                enableZshIntegration = false;
                 nix-direnv.enable = false;
               };
 

@@ -2,41 +2,68 @@
 with lib;
 {
   options = {
-    name = mkOption { type = types.str; };
-
-    version = mkOption {
-      type = types.str;
-      default = "0.0.0";
-    };
-
-    publisher = mkOption {
-      type = types.str;
-      default = "vscode-nix-extensions-generator";
-    };
-
-    paths = mkOption {
+    commands = mkOption {
       type =
         with types;
-        listOf (oneOf [
-          package
-          pathInStore
-          (submodule {
-            options = {
-              from = mkOption {
-                type = oneOf [
-                  package
-                  pathInStore
-                ];
+        attrsOf (
+          submodule (
+            { name, ... }@self:
+            {
+              config = {
+                id = mkOptionDefault "${config.name}.${name}";
+                title = mkOptionDefault self.name;
               };
-              to = mkOption { type = str; };
-            };
-          })
-        ]);
-      default = [ ];
-      description = "Nix store paths to link into the extension directory";
-    };
 
-    displayName = mkOption { type = types.str; };
+              options = {
+                commands = mkOption {
+                  type = with types; listOf str;
+                  default = [ ];
+                  description = "Commands from other extensions to execute";
+                };
+
+                enable = mkOption {
+                  type = types.bool;
+                  default = true;
+                  description = "Enable the command";
+                };
+
+                exec = mkOption {
+                  type =
+                    with types;
+                    nullOr (oneOf [
+                      str
+                      package
+                    ]);
+                  default = null;
+                  description = "Executable or shell command to execute";
+                };
+
+                id = mkOption {
+                  type = types.str;
+                  description = "Full command identifier";
+                };
+
+                require = mkOption {
+                  type =
+                    with types;
+                    nullOr (oneOf [
+                      str
+                      package
+                    ]);
+                  default = null;
+                  description = "JS Script to execute";
+                };
+
+                title = mkOption {
+                  type = types.str;
+                  description = "Human readable name for the command";
+                };
+              };
+            }
+          )
+        );
+      default = { };
+    };
 
     debug = mkEnableOption "Enable vscode extension debugging.";
 
@@ -44,6 +71,8 @@ with lib;
       type = types.lines;
       default = "";
     };
+
+    displayName = mkOption { type = types.str; };
 
     extraConfig = mkOption {
       type = types.submodule {
@@ -67,8 +96,8 @@ with lib;
 
                 label = mkOption {
                   type = with types; str;
-                  description = "Name of the theme";
                   default = name;
+                  description = "Name of the theme";
                 };
 
                 path = mkOption {
@@ -87,6 +116,35 @@ with lib;
       default = { };
     };
 
+    name = mkOption { type = types.str; };
+
+    paths = mkOption {
+      type =
+        with types;
+        listOf (oneOf [
+          package
+          pathInStore
+          (submodule {
+            options = {
+              from = mkOption {
+                type = oneOf [
+                  package
+                  pathInStore
+                ];
+              };
+              to = mkOption { type = str; };
+            };
+          })
+        ]);
+      default = [ ];
+      description = "Nix store paths to link into the extension directory";
+    };
+
+    publisher = mkOption {
+      type = types.str;
+      default = "vscode-nix-extensions-generator";
+    };
+
     themes = mkOption {
       type =
         with types;
@@ -102,8 +160,8 @@ with lib;
 
                 label = mkOption {
                   type = with types; str;
-                  description = "Name of the theme";
                   default = name;
+                  description = "Name of the theme";
                 };
 
                 path = mkOption {
@@ -131,100 +189,42 @@ with lib;
       default = { };
     };
 
-    commands = mkOption {
-      type =
-        with types;
-        attrsOf (
-          submodule (
-            { name, ... }@self:
-            {
-              options = {
-                enable = mkOption {
-                  type = types.bool;
-                  default = true;
-                  description = "Enable the command";
-                };
-
-                title = mkOption {
-                  type = types.str;
-                  description = "Human readable name for the command";
-                };
-
-                id = mkOption {
-                  type = types.str;
-                  description = "Full command identifier";
-                };
-
-                exec = mkOption {
-                  type =
-                    with types;
-                    nullOr (oneOf [
-                      str
-                      package
-                    ]);
-                  default = null;
-                  description = "Executable or shell command to execute";
-                };
-
-                require = mkOption {
-                  type =
-                    with types;
-                    nullOr (oneOf [
-                      str
-                      package
-                    ]);
-                  default = null;
-                  description = "JS Script to execute";
-                };
-
-                commands = mkOption {
-                  type = with types; listOf str;
-                  default = [ ];
-                  description = "Commands from other extensions to execute";
-                };
-              };
-
-              config = {
-                id = mkOptionDefault "${config.name}.${name}";
-                title = mkOptionDefault self.name;
-              };
-            }
-          )
-        );
-      default = { };
+    version = mkOption {
+      type = types.str;
+      default = "0.0.0";
     };
   };
 
   config = {
     displayName = mkOptionDefault config.name;
 
-    paths = foldl' (acc: x: acc ++ [ x.path ]) [ ] (
-      (attrValues config.themes) ++ (attrValues config.iconThemes)
-    );
-
     extraConfig = {
-      inherit (config)
-        name
-        version
-        description
-        publisher
-        ;
-      engines.vscode = "^1.81.1";
       categories = [ ];
-      main = "./extension.js";
-      nixExtension = {
-        inherit (config) commands;
-      };
       contributes = {
         commands = mapAttrsToList (_: cmd: {
           inherit (cmd) title;
           command = cmd.id;
         }) config.commands;
 
-        themes = map (x: x // { path = ".${x.path}"; }) (attrValues config.themes);
-
         iconThemes = map (x: x // { path = ".${x.path}"; }) (attrValues config.iconThemes);
+
+        themes = map (x: x // { path = ".${x.path}"; }) (attrValues config.themes);
+      };
+      inherit (config)
+        description
+        name
+        publisher
+        version
+        ;
+      engines.vscode = "^1.81.1";
+      main = "./extension.js";
+      nixExtension = {
+        inherit (config) commands;
       };
     };
+
+    paths = foldl' (acc: x: acc ++ [ x.path ]) [ ] (
+      (attrValues config.themes) ++ (attrValues config.iconThemes)
+    );
   };
 }

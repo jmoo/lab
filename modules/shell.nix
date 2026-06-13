@@ -42,28 +42,23 @@ let
           vim
         ];
 
-        sessionVariables = {
-          EDITOR = "vim";
-        };
+        sessionVariables.EDITOR = "vim";
 
         shellAliases = {
-          sl = "ls";
-          ls = "ls --color";
+          egrep = "egrep --color=auto";
+          fgrep = "fgrep --color=auto";
+          grep = "grep --color=auto";
+          ip = "ip --color=auto";
           l = "ls";
           la = "ls -la";
           ll = "ls -laF";
-          ip = "ip --color=auto";
-          grep = "grep --color=auto";
-          fgrep = "fgrep --color=auto";
-          egrep = "egrep --color=auto";
+          ls = "ls --color";
+          sl = "ls";
         };
       };
 
       programs = {
         bash = {
-          enable = true;
-          enableCompletion = !pkgs.stdenv.isDarwin;
-
           bashrcExtra = ''
             case "$TERM" in
                 xterm-color|*-256color) color_prompt=yes;;
@@ -87,6 +82,8 @@ let
 
             ${init}
           '';
+          enable = true;
+          enableCompletion = !pkgs.stdenv.isDarwin;
 
           shellOptions = [
             "histappend"
@@ -112,9 +109,9 @@ let
         starship = {
           enable = true;
           settings = {
+            git_status.disabled = true;
             line_break.disabled = true;
             right_format = "$time$status";
-            git_status.disabled = true;
           };
         };
 
@@ -126,10 +123,10 @@ let
         };
 
         zsh = {
-          enable = true;
           autocd = true;
-          dotDir = "${config.xdg.configHome}/zsh";
           autosuggestion.enable = true;
+          dotDir = "${config.xdg.configHome}/zsh";
+          enable = true;
           enableCompletion = true;
 
           initContent = ''
@@ -170,49 +167,39 @@ in
       };
     in
     {
-      options.shell.enable = mkEnableOption "default shell home-manager configuration";
-
       config = mkIf config.shell.enable {
-        nixos = {
-          module = {
-            imports = [
-              linuxSystem
-              nixosShellInit
-            ];
-          };
-          home = {
-            imports = [
-              home
-              (switch "nixos-rebuild")
-            ];
-          };
-        };
-
         asahi = {
-          module = {
-            imports = [
-              linuxSystem
-              nixosShellInit
-            ];
-          };
-          home = {
-            imports = [
-              home
-              (switch "nixos-rebuild")
-            ];
-          };
+          home.imports = [
+            home
+            (switch "nixos-rebuild")
+          ];
+          module.imports = [
+            linuxSystem
+            nixosShellInit
+          ];
         };
 
         darwin = {
+          home.imports = [
+            home
+            (switch "darwin-rebuild")
+          ];
           module.programs.zsh.enable = true;
-          home = {
-            imports = [
-              home
-              (switch "darwin-rebuild")
-            ];
-          };
+        };
+
+        nixos = {
+          home.imports = [
+            home
+            (switch "nixos-rebuild")
+          ];
+          module.imports = [
+            linuxSystem
+            nixosShellInit
+          ];
         };
       };
+
+      options.shell.enable = mkEnableOption "default shell home-manager configuration";
     }
   );
 }

@@ -32,20 +32,23 @@ in
             exitNode = cfg.exitNode;
           in
           {
-            services.tailscale = {
-              enable = true;
-              useRoutingFeatures = if exitNode then "server" else "client";
-            };
-
             environment.systemPackages = [
               config.services.tailscale.package
             ];
 
             networking.firewall.checkReversePath = lib.mkIf exitNode "loose";
 
+            services.tailscale = {
+              enable = true;
+              useRoutingFeatures = if exitNode then "server" else "client";
+            };
+
             systemd.services.tailscale-autoconnect = {
+              after = [
+                "network-pre.target"
+                "tailscale.service"
+              ];
               description = "Automatic connection to Tailscale";
-              serviceConfig.Type = "oneshot";
 
               script = with pkgs; ''
                 # wait for tailscaled to settle
@@ -63,15 +66,12 @@ in
                   --advertise-routes=10.10.0.0/16
               '';
 
-              after = [
-                "network-pre.target"
-                "tailscale.service"
-              ];
+              serviceConfig.Type = "oneshot";
+              wantedBy = [ "multi-user.target" ];
               wants = [
                 "network-pre.target"
                 "tailscale.service"
               ];
-              wantedBy = [ "multi-user.target" ];
             };
           }
         )

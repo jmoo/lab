@@ -7,10 +7,10 @@
 let
   inherit (lib'.lab) mkHostOptions mkHostPlatform;
   inherit (lib')
+    filterAttrs
+    mapAttrs
     mkDefault
     mkOption
-    mapAttrs
-    filterAttrs
     types
     ;
 
@@ -20,11 +20,11 @@ let
       useGlobalPkgs = true;
       useUserPackages = true;
       users.${host.user} = {
+        home.stateVersion = mkDefault "25.05";
         imports = [
           host.home
           host.darwin.home
         ];
-        home.stateVersion = mkDefault "25.05";
         programs.home-manager.enable = false;
       };
     };
@@ -32,41 +32,39 @@ let
 in
 {
   options = {
-    lab = {
-      hosts = mkHostOptions {
-        darwin = mkHostPlatform {
-          options = {
-            specialArgs = mkOption {
-              type = types.attrsOf types.anything;
-              default = { };
-            };
+    lab.hosts = mkHostOptions {
+      darwin = mkHostPlatform {
+        config = {
+          module = {
+            imports = [
+              inputs.home-manager.darwinModules.home-manager
+            ];
 
-            system = mkOption {
-              type = types.str;
-              default = "aarch64-darwin";
-            };
+            # nix and nixpkgs.{config,overlays} come from the shared feature
+            # modules (nix.nix / nixpkgs.nix).
+            nixpkgs.hostPlatform = mkDefault "aarch64-darwin";
 
-            home = mkOption {
-              description = "Home-manager configuration for this platform's user";
-              type = types.deferredModule;
-              default = { };
-            };
+            system.stateVersion = mkDefault 5;
+
+            users.users.root.home = "/var/root";
+          };
+        };
+
+        options = {
+          home = mkOption {
+            default = { };
+            description = "Home-manager configuration for this platform's user";
+            type = types.deferredModule;
           };
 
-          config = {
-            module = {
-              imports = [
-                inputs.home-manager.darwinModules.home-manager
-              ];
+          specialArgs = mkOption {
+            default = { };
+            type = types.attrsOf types.anything;
+          };
 
-              users.users.root.home = "/var/root";
-
-              # nix and nixpkgs.{config,overlays} come from the shared feature
-              # modules (nix.nix / nixpkgs.nix).
-              nixpkgs.hostPlatform = mkDefault "aarch64-darwin";
-
-              system.stateVersion = mkDefault 5;
-            };
+          system = mkOption {
+            default = "aarch64-darwin";
+            type = types.str;
           };
         };
       };
@@ -78,12 +76,12 @@ in
       darwinConfigurations = mapAttrs (
         _: host:
         inputs.nix-darwin.lib.darwinSystem {
-          system = host.darwin.system;
-          specialArgs = host.darwin.specialArgs;
           modules = [
             host.darwin.module
             (homeManager host)
           ];
+          specialArgs = host.darwin.specialArgs;
+          system = host.darwin.system;
         }
       ) (filterAttrs (_: host: host.darwin.eval) config.lab.hosts);
 

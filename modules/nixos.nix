@@ -7,10 +7,10 @@
 let
   inherit (lib'.lab) mkHostOptions mkHostPlatform;
   inherit (lib')
-    mkOption
-    mkDefault
-    mapAttrs
     filterAttrs
+    mapAttrs
+    mkDefault
+    mkOption
     nixosSystem
     types
     ;
@@ -23,11 +23,11 @@ let
       users.${host.user} =
         { osConfig, ... }:
         {
+          home.stateVersion = mkDefault osConfig.system.stateVersion;
           imports = [
             host.home
             host.nixos.home
           ];
-          home.stateVersion = mkDefault osConfig.system.stateVersion;
           programs.home-manager.enable = false;
         };
     };
@@ -35,38 +35,36 @@ let
 in
 {
   options = {
-    lab = {
-      hosts = mkHostOptions {
-        nixos = mkHostPlatform {
-          options = {
-            specialArgs = mkOption {
-              type = types.attrsOf types.anything;
-              default = { };
-            };
+    lab.hosts = mkHostOptions {
+      nixos = mkHostPlatform {
+        config = {
+          module = {
+            imports = [
+              inputs.home-manager.nixosModules.home-manager
+            ];
 
-            system = mkOption {
-              type = types.str;
-            };
+            # stateVersion is stateful — pin to the hosts' install version, not
+            # the current nixpkgs release. Override per host if newer.
+            # Locale, nix, and nixpkgs config come from the shared feature
+            # modules (locale.nix / nix.nix / nixpkgs.nix).
+            system.stateVersion = mkDefault "25.05";
+          };
+        };
 
-            home = mkOption {
-              description = "Home-manager configuration for this platform's user";
-              type = types.deferredModule;
-              default = { };
-            };
+        options = {
+          home = mkOption {
+            default = { };
+            description = "Home-manager configuration for this platform's user";
+            type = types.deferredModule;
           };
 
-          config = {
-            module = {
-              imports = [
-                inputs.home-manager.nixosModules.home-manager
-              ];
+          specialArgs = mkOption {
+            default = { };
+            type = types.attrsOf types.anything;
+          };
 
-              # stateVersion is stateful — pin to the hosts' install version, not
-              # the current nixpkgs release. Override per host if newer.
-              # Locale, nix, and nixpkgs config come from the shared feature
-              # modules (locale.nix / nix.nix / nixpkgs.nix).
-              system.stateVersion = mkDefault "25.05";
-            };
+          system = mkOption {
+            type = types.str;
           };
         };
       };
@@ -78,12 +76,12 @@ in
       nixosConfigurations = mapAttrs (
         _: host:
         nixosSystem {
-          system = host.nixos.system;
-          specialArgs = host.nixos.specialArgs;
           modules = [
             host.nixos.module
             (homeManager host)
           ];
+          specialArgs = host.nixos.specialArgs;
+          system = host.nixos.system;
         }
       ) (filterAttrs (_: host: host.nixos.eval) config.lab.hosts);
 

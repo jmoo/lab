@@ -2,8 +2,8 @@
 let
   inherit (lib'.lab) mkHostModule;
   inherit (lib')
-    mkEnableOption
     mkDefault
+    mkEnableOption
     mkIf
     ;
 
@@ -11,6 +11,11 @@ let
   system =
     { pkgs, ... }:
     {
+      environment.systemPackages = with pkgs; [
+        kdePackages.qtwayland
+        kdePackages.qtsvg
+      ];
+
       programs = {
         hyprland = {
           enable = true;
@@ -21,11 +26,6 @@ let
       };
 
       services.blueman.enable = true;
-
-      environment.systemPackages = with pkgs; [
-        kdePackages.qtwayland
-        kdePackages.qtsvg
-      ];
     };
 
   # Home config for the hyprland session. `nvidia` adds GPU session variables.
@@ -56,9 +56,9 @@ let
       ];
 
       services = {
-        swaync.enable = true;
         flameshot.enable = true;
         network-manager-applet.enable = true;
+        swaync.enable = true;
       };
 
       systemd.user.services.network-manager-applet.Unit = {
@@ -66,23 +66,15 @@ let
         PartOf = [ "graphical-session.target" ];
       };
 
-      xdg = {
-        mime.enable = true;
-        portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
-      };
-
       wayland.windowManager.hyprland = {
         enable = true;
-        # uwsm owns the systemd session, so disable home-manager's own unit.
-        systemd.enable = false;
-        xwayland.enable = true;
         extraConfig = builtins.readFile ./hyprland.conf;
 
         settings = {
           "$mod" = "SUPER";
-          "$modShift" = "SUPER+SHIFT";
-          "$modCtrl" = "SUPER+CTRL";
           "$modAlt" = "SUPER+ALT";
+          "$modCtrl" = "SUPER+CTRL";
+          "$modShift" = "SUPER+SHIFT";
           "$modShiftCtrl" = "SUPER+SHIFT+CTRL";
 
           "$terminal" = uwsm terminal;
@@ -95,6 +87,14 @@ let
             "__GLX_VENDOR_LIBRARY_NAME,nvidia"
           ];
         };
+        # uwsm owns the systemd session, so disable home-manager's own unit.
+        systemd.enable = false;
+        xwayland.enable = true;
+      };
+
+      xdg = {
+        mime.enable = true;
+        portal.extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
       };
     };
 in
@@ -102,28 +102,27 @@ in
   options.lab.hosts = mkHostModule (
     { config, ... }:
     {
+      config = mkIf config.hyprland.enable {
+        asahi = {
+          home = home config.hyprland.nvidia;
+          module = system;
+        };
+        # Companion desktop modules, on by default with hyprland.
+        greetd.enable = mkDefault true;
+        hyprlock.enable = mkDefault true;
+        hyprpolkitagent.enable = mkDefault true;
+        nixos = {
+          home = home config.hyprland.nvidia;
+          module = system;
+        };
+        theme.enable = mkDefault true;
+        ulauncher.enable = mkDefault true;
+        waybar.enable = mkDefault true;
+      };
+
       options.hyprland = {
         enable = mkEnableOption "hyprland desktop";
         nvidia = mkEnableOption "set nvidia GPU session variables";
-      };
-
-      config = mkIf config.hyprland.enable {
-        # Companion desktop modules, on by default with hyprland.
-        greetd.enable = mkDefault true;
-        theme.enable = mkDefault true;
-        waybar.enable = mkDefault true;
-        ulauncher.enable = mkDefault true;
-        hyprlock.enable = mkDefault true;
-        hyprpolkitagent.enable = mkDefault true;
-
-        nixos = {
-          module = system;
-          home = home config.hyprland.nvidia;
-        };
-        asahi = {
-          module = system;
-          home = home config.hyprland.nvidia;
-        };
       };
     }
   );
