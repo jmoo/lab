@@ -10,7 +10,7 @@ inputs: final: prev: {
   #   };
   # });
 
-  nudelta = inputs.nudelta.packages.${final.system}.default;
+  nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 
   ulauncher-uwsm = final.callPackage ./pkgs/ulauncher-uwsm { };
 

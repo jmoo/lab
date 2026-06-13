@@ -1,144 +1,96 @@
 {
-  config,
+  lib',
   inputs,
-  lib,
-  pkgs,
+  config,
   ...
 }:
-with lib;
+let
+  inherit (lib'.lab) mkHostOptions mkHostPlatform;
+  inherit (lib')
+    filterAttrs
+    mapAttrs
+    mkDefault
+    mkOption
+    nixosSystem
+    types
+    ;
+
+  # Apply this platform's home-manager configuration to the host's user.
+  homeManager = host: {
+    home-manager = {
+      useGlobalPkgs = true;
+      useUserPackages = true;
+      users.${host.user} =
+        { osConfig, ... }:
+        {
+          home.stateVersion = mkDefault osConfig.system.stateVersion;
+          imports = [
+            host.home
+            host.nixos.home
+          ];
+          programs.home-manager.enable = false;
+        };
+    };
+  };
+in
 {
-  imports = [
-    inputs.home-manager.nixosModules.home-manager
-    ./common.nix
-    ./greetd.nix
-    ./k3s.nix
-    ./ssh.nix
-  ];
+  options = {
+    lab.hosts = mkHostOptions {
+      nixos = mkHostPlatform {
+        config = {
+          module = {
+            imports = [
+              inputs.home-manager.nixosModules.home-manager
+            ];
 
-  config = mkMerge [
-    {
-      i18n.defaultLocale = "en_US.UTF-8";
-      i18n.extraLocaleSettings = {
-        LC_ADDRESS = "en_US.UTF-8";
-        LC_IDENTIFICATION = "en_US.UTF-8";
-        LC_MEASUREMENT = "en_US.UTF-8";
-        LC_MONETARY = "en_US.UTF-8";
-        LC_NAME = "en_US.UTF-8";
-        LC_NUMERIC = "en_US.UTF-8";
-        LC_PAPER = "en_US.UTF-8";
-        LC_TELEPHONE = "en_US.UTF-8";
-        LC_TIME = "en_US.UTF-8";
-      };
-
-      lab.common = {
-        home.stateVersion = mkDefault config.system.stateVersion;
-        programs.home-manager.enable = false;
-      };
-
-      nixpkgs.config.permittedInsecurePackages = [
-        "libsoup-2.74.3"
-      ];
-
-      system.stateVersion = mkDefault "25.05";
-      time.timeZone = "America/New_York";
-    }
-
-    # Hyprland
-    (mkIf config.lab.hyprland.enable {
-      environment.systemPackages = with pkgs; [
-        kdePackages.qtwayland
-        kdePackages.qtsvg
-      ];
-
-      lab.hyprland.common = {
-        nvidia = elem "nvidia" config.services.xserver.videoDrivers;
-        uwsm = true;
-      };
-
-      programs = {
-        hyprland = {
-          enable = true;
-          withUWSM = true;
+            # stateVersion is stateful — pin to the hosts' install version, not
+            # the current nixpkgs release. Override per host if newer.
+            # Locale, nix, and nixpkgs config come from the shared feature
+            # modules (locale.nix / nix.nix / nixpkgs.nix).
+            system.stateVersion = mkDefault "25.05";
+          };
         };
-        hyprlock.enable = true;
-        xwayland.enable = true;
-      };
 
-      services.blueman.enable = true;
-    })
+        options = {
+          home = mkOption {
+            default = { };
+            description = "Home-manager configuration for this platform's user";
+            type = types.deferredModule;
+          };
 
-    # Shell configuration
-    (mkIf config.lab.shell.enable {
-      environment.shellInit = "unset __HM_SESS_VARS_SOURCED; [[ -e ~/.profile ]] && . ~/.profile";
+          specialArgs = mkOption {
+            default = { };
+            type = types.attrsOf types.anything;
+          };
 
-      lab = {
-        common.home.shellAliases.switch = mkDefault "sudo nixos-rebuild switch --flake ${config.lab.source}#${config.lab.name}";
-        shell.common = {
-          enable = mkDefault true;
-        };
-      };
-
-      programs.zsh.enable = true;
-      users.defaultUserShell = pkgs.zsh;
-    })
-
-    # Network Manager
-    (mkIf config.networking.networkmanager.enable {
-      lab.common = {
-        services.network-manager-applet.enable = mkDefault true;
-
-        systemd.user.services = {
-          network-manager-applet.Unit = {
-            After = [ "graphical-session.target" ];
-            PartOf = [ "graphical-session.target" ];
+          system = mkOption {
+            type = types.str;
           };
         };
       };
-    })
+    };
+  };
 
-    # Tailscale
-    (mkIf config.services.tailscale.enable (
-      let
-        tailscale = config.services.tailscale.package;
-        exitNode = config.services.tailscale.useRoutingFeatures == "server";
-      in
-      {
-        environment.systemPackages = [
-          config.services.tailscale.package
+  config = {
+    flake = {
+      nixosConfigurations = mapAttrs (
+        _: host:
+        nixosSystem {
+          modules = [
+            host.nixos.module
+            (homeManager host)
+          ];
+          specialArgs = host.nixos.specialArgs;
+          system = host.nixos.system;
+        }
+      ) (filterAttrs (_: host: host.nixos.eval) config.lab.hosts);
+
+      nixosModules = mapAttrs (_: host: {
+        imports = [
+          host.nixos.module
+          (homeManager host)
         ];
-
-        networking.firewall.checkReversePath = mkIf exitNode "loose";
-        systemd.services.tailscale-autoconnect = {
-          description = "Automatic connection to Tailscale";
-          serviceConfig.Type = "oneshot";
-
-          script = with pkgs; ''
-            # wait for tailscaled to settle
-            sleep 10
-
-            # check if we are already authenticated to tailscale
-            status="$(${tailscale}/bin/tailscale status -json | ${jq}/bin/jq -r .BackendState)"
-            if [[ "$status" == "Running" ]]; then # if so, then do nothing
-              exit 0
-            fi
-
-            # otherwise authenticate with tailscale
-            ${tailscale}/bin/tailscale up -authkey $(cat /etc/tailscale/key) ${optionalString exitNode "--advertise-exit-node"} \
-              --snat-subnet-routes=false \
-              --advertise-routes=10.10.0.0/16
-          '';
-
-          after = [
-            "network-pre.target"
-            "tailscale.service"
-          ];
-          wants = [
-            "network-pre.target"
-            "tailscale.service"
-          ];
-          wantedBy = [ "multi-user.target" ];
-        };
-      }
-    ))
-  ];
+      }) (filterAttrs (_: host: host.nixos.enable) config.lab.hosts);
+    };
+  };
 }

@@ -1,233 +1,238 @@
-{
-  pkgs,
-  lib,
-  config,
-  ...
-}:
+{ lib', ... }:
+let
+  inherit (lib'.lab) mkHostModule;
+  inherit (lib') mkEnableOption mkIf;
 
-with builtins;
-with lib;
-
-{
-  options.lab.vscode = {
-    enable = mkEnableOption "Enable vscode home-manager configuration";
-
-    python.enable = mkEnableOption "python" // {
-      default = true;
-    };
-
-    rust.enable = mkEnableOption "rust" // {
-      default = true;
-    };
-
-    nix = {
-      enable = mkEnableOption "nix" // {
-        default = true;
-      };
-
-      formatter = mkOption {
-        type = types.package;
-        default = pkgs.nixfmt;
-      };
-
-      lsp = mkOption {
-        type = types.package;
-        default = pkgs.nil;
-      };
-    };
-
-    webdev.enable = mkEnableOption "js/ts" // {
-      default = true;
-    };
-  };
-
-  config = mkIf config.lab.vscode.enable (mkMerge [
+  # Home-manager vscode configuration. `flags` carries the per-host toggles
+  # (nix/python/rust/webdev) resolved from the flake-parts options.
+  mkHome =
+    flags:
     {
-      home.packages = with pkgs; [ shellcheck ];
+      pkgs,
+      lib,
+      ...
+    }:
+    let
+      formatter = pkgs.nixfmt;
+      lsp = pkgs.nil;
+    in
+    {
+      config = lib.mkMerge [
+        {
+          home.packages = with pkgs; [ shellcheck ];
 
-      programs.vscode = {
-        enable = true;
+          programs.vscode = {
+            enable = true;
 
-        nixExtensions.default = {
-          paths = [
-            {
-              from = ../resources/icons;
-              to = "./nix/store/icons";
-            }
-          ];
+            nixExtensions.default = {
+              iconThemes.jmoo-dark-icons.path = ../resources/jmoo-dark-icons.json;
 
-          themes = {
-            jmoo-dark = {
-              path = ../resources/jmoo-dark.json;
-              uiTheme = "vs-dark";
-            };
+              paths = [
+                {
+                  from = ../resources/icons;
+                  to = "./nix/store/icons";
+                }
+              ];
 
-            yarra-valley = {
-              path = ../resources/yarra-valley.json;
-              uiTheme = "vs-dark";
-            };
-          };
+              themes = {
+                jmoo-dark = {
+                  path = ../resources/jmoo-dark.json;
+                  uiTheme = "vs-dark";
+                };
 
-          iconThemes = {
-            jmoo-dark-icons.path = ../resources/jmoo-dark-icons.json;
-          };
-        };
-
-        profiles.default = {
-          extensions = with pkgs.vscode-extensions; [
-            ms-vscode-remote.remote-ssh
-            ms-azuretools.vscode-docker
-            usernamehw.errorlens
-            streetsidesoftware.code-spell-checker
-            tamasfe.even-better-toml
-            mads-hartmann.bash-ide-vscode
-            charliermarsh.ruff
-            esbenp.prettier-vscode
-          ];
-
-          keybindings = [
-            {
-              key = "ctrl+cmd+p";
-              command = "workbench.action.openRecent";
-            }
-
-            {
-              key = "ctrl+alt+p";
-              command = "workbench.action.openRecent";
-            }
-
-            {
-              key = "alt+enter";
-              command = "editor.action.quickFix";
-              when = "editorHasCodeActionsProvider && textInputFocus && !editorReadonly";
-            }
-
-            {
-              key = "alt+cmd+l";
-              command = "editor.action.formatDocument";
-              when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
-            }
-
-            {
-              key = "ctrl+alt+l";
-              command = "editor.action.formatDocument";
-              when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
-            }
-
-            {
-              key = "ctrl+r";
-              command = "editor.action.startFindReplaceAction";
-              when = "editorFocus || editorIsOpen";
-            }
-
-            {
-              key = "cmd+r";
-              command = "editor.action.startFindReplaceAction";
-              when = "editorFocus || editorIsOpen";
-            }
-          ];
-
-          userSettings = {
-            "cSpell.words" = mkDefault (fromJSON (readFile ../dictionary.json));
-
-            extensions.autoUpdate = false;
-            "extensions.autoCheckUpdates" = false;
-
-            "editor.fontFamily" = "Ubuntu Mono";
-            "editor.fontSize" = 14;
-            "editor.lineHeight" = 1.2;
-            "editor.semanticHighlighting.enabled" = true;
-            "editor.semanticTokenColorCustomizations" = {
-              enabled = true;
-              rules = {
-                "*.mutable" = {
-                  "underline" = false;
+                yarra-valley = {
+                  path = ../resources/yarra-valley.json;
+                  uiTheme = "vs-dark";
                 };
               };
             };
 
-            "files.autoSave" = "afterDelay";
+            profiles.default = {
+              extensions = with pkgs.vscode-extensions; [
+                ms-vscode-remote.remote-ssh
+                ms-azuretools.vscode-docker
+                usernamehw.errorlens
+                streetsidesoftware.code-spell-checker
+                tamasfe.even-better-toml
+                mads-hartmann.bash-ide-vscode
+                charliermarsh.ruff
+                esbenp.prettier-vscode
+              ];
 
-            files.associations = {
-              "*.json" = "jsonc";
-            };
+              keybindings = [
+                {
+                  command = "workbench.action.openRecent";
+                  key = "ctrl+cmd+p";
+                }
+                {
+                  command = "workbench.action.openRecent";
+                  key = "ctrl+alt+p";
+                }
+                {
+                  command = "editor.action.quickFix";
+                  key = "alt+enter";
+                  when = "editorHasCodeActionsProvider && textInputFocus && !editorReadonly";
+                }
+                {
+                  command = "editor.action.formatDocument";
+                  key = "alt+cmd+l";
+                  when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
+                }
+                {
+                  command = "editor.action.formatDocument";
+                  key = "ctrl+alt+l";
+                  when = "editorHasDocumentFormattingProvider && editorTextFocus && !editorReadonly && !inCompositeEditor";
+                }
+                {
+                  command = "editor.action.startFindReplaceAction";
+                  key = "ctrl+r";
+                  when = "editorFocus || editorIsOpen";
+                }
+                {
+                  command = "editor.action.startFindReplaceAction";
+                  key = "cmd+r";
+                  when = "editorFocus || editorIsOpen";
+                }
+              ];
 
-            git.openRepositoryInParentFolders = "always";
+              userSettings = {
+                "[css]" = {
+                  "editor.defaultFormatter" = "vscode.css-language-features";
+                };
 
-            "scm.countBadge" = "off";
+                "[jsonc]" = {
+                  "editor.defaultFormatter" = "vscode.json-language-features";
+                };
 
-            terminal.integrated.fontFamily = "MesloLGS NF";
-            terminal.integrated.defaultProfile.osx = "zsh";
-            terminal.external.osxExec = "iTerm.app";
-            terminal.integrated.fontSize = 13;
+                "[python]" = {
+                  "editor.defaultFormatter" = "charliermarsh.ruff";
+                };
 
-            "update.mode" = "none";
+                "cSpell.words" = lib.mkDefault (builtins.fromJSON (builtins.readFile ../dictionary.json));
 
-            "window.customTitleBarVisibility" = "auto";
-            "window.titleBarStyle" = "custom";
+                "editor.fontFamily" = "Ubuntu Mono";
+                "editor.fontSize" = 14;
+                "editor.lineHeight" = 1.2;
+                "editor.semanticHighlighting.enabled" = true;
+                "editor.semanticTokenColorCustomizations" = {
+                  enabled = true;
+                  rules."*.mutable"."underline" = false;
+                };
 
-            "workbench.activityBar.location" = "top";
-            "workbench.sideBar.location" = "left";
-            "workbench.colorTheme" = "jmoo-dark";
-            "workbench.iconTheme" = "jmoo-dark-icons";
-            "workbench.tree.indent" = 20;
+                "extensions.autoCheckUpdates" = false;
+                extensions.autoUpdate = false;
 
-            "[css]" = {
-              "editor.defaultFormatter" = "vscode.css-language-features";
-            };
+                files.associations = {
+                  "*.json" = "jsonc";
+                };
 
-            "[jsonc]" = {
-              "editor.defaultFormatter" = "vscode.json-language-features";
-            };
+                "files.autoSave" = "afterDelay";
 
-            "[python]" = {
-              "editor.defaultFormatter" = "charliermarsh.ruff";
-              # "editor.codeActionsOnSave" = { "source.organizeImports" = "explicit"; }
+                git.openRepositoryInParentFolders = "always";
+
+                "scm.countBadge" = "off";
+
+                terminal = {
+                  external.osxExec = "iTerm.app";
+                  integrated = {
+                    defaultProfile.osx = "zsh";
+                    fontFamily = "MesloLGS NF";
+                    fontSize = 13;
+                  };
+                };
+
+                "update.mode" = "none";
+
+                "window.customTitleBarVisibility" = "auto";
+                "window.titleBarStyle" = "custom";
+
+                "workbench.activityBar.location" = "top";
+                "workbench.colorTheme" = "jmoo-dark";
+                "workbench.iconTheme" = "jmoo-dark-icons";
+                "workbench.sideBar.location" = "left";
+                "workbench.tree.indent" = 20;
+              };
             };
           };
+        }
+
+        # Rust
+        (lib.mkIf flags.rust.enable {
+          programs.vscode.profiles.default.extensions = with pkgs.vscode-extensions; [
+            rust-lang.rust-analyzer
+          ];
+        })
+
+        # Nix
+        (lib.mkIf flags.nix.enable {
+          home.packages = [
+            formatter
+            lsp
+          ];
+
+          programs.vscode.profiles.default = {
+            extensions = with pkgs.vscode-extensions; [ jnoortheen.nix-ide ];
+
+            userSettings = {
+              nix = {
+                enableLanguageServer = true;
+                serverPath = lsp.meta.mainProgram;
+                serverSettings.nil.formatting.command = [ formatter.meta.mainProgram ];
+              };
+            };
+          };
+        })
+
+        # Webdev
+        (lib.mkIf flags.webdev.enable {
+          programs.vscode.profiles.default.extensions = with pkgs.vscode-extensions; [
+            dbaeumer.vscode-eslint
+            esbenp.prettier-vscode
+          ];
+        })
+
+        # Python
+        (lib.mkIf flags.python.enable {
+          programs.vscode.profiles.default.extensions = with pkgs.vscode-extensions; [
+            ms-python.python
+            charliermarsh.ruff
+          ];
+        })
+      ];
+
+      imports = [ ../pkgs/vscode-nix-extensions/home-manager.nix ];
+    };
+in
+{
+  options.lab.hosts = mkHostModule (
+    { config, ... }:
+    {
+      config = mkIf config.vscode.enable {
+        home = mkHome {
+          inherit (config.vscode)
+            nix
+            python
+            rust
+            webdev
+            ;
+        };
+      };
+
+      options.vscode = {
+        enable = mkEnableOption "vscode home-manager configuration";
+        nix.enable = mkEnableOption "nix language support" // {
+          default = true;
+        };
+        python.enable = mkEnableOption "python language support" // {
+          default = true;
+        };
+        rust.enable = mkEnableOption "rust language support" // {
+          default = true;
+        };
+        webdev.enable = mkEnableOption "js/ts language support" // {
+          default = true;
         };
       };
     }
-
-    # Rust
-    (mkIf config.lab.vscode.rust.enable {
-      programs.vscode.profiles.default.extensions = with pkgs.vscode-extensions; [
-        rust-lang.rust-analyzer
-      ];
-    })
-
-    # Nix
-    (mkIf config.lab.vscode.nix.enable {
-      home.packages = [
-        config.lab.vscode.nix.formatter
-        config.lab.vscode.nix.lsp
-      ];
-
-      programs.vscode.profiles.default = {
-        extensions = with pkgs.vscode-extensions; [ jnoortheen.nix-ide ];
-
-        userSettings = {
-          nix.enableLanguageServer = true;
-          nix.serverPath = config.lab.vscode.nix.lsp.meta.mainProgram;
-          nix.serverSettings.nil.formatting.command = [ config.lab.vscode.nix.formatter.meta.mainProgram ];
-        };
-      };
-    })
-
-    # Webdev
-    (mkIf config.lab.vscode.webdev.enable {
-      programs.vscode.profiles.default.extensions = with pkgs.vscode-extensions; [
-        dbaeumer.vscode-eslint
-        esbenp.prettier-vscode
-      ];
-    })
-
-    # Python
-    (mkIf config.lab.vscode.python.enable {
-      programs.vscode.profiles.default.extensions = with pkgs.vscode-extensions; [
-        ms-python.python
-        charliermarsh.ruff
-      ];
-    })
-  ]);
+  );
 }

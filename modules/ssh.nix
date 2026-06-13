@@ -1,37 +1,62 @@
-{ lib, config, ... }:
-with lib;
+{ lib', ... }:
+let
+  inherit (lib'.lab) mkHostModule forLinux;
+  inherit (lib')
+    mkEnableOption
+    mkIf
+    mkOption
+    types
+    ;
+in
 {
-  options.lab.ssh = {
-    enable = mkEnableOption "Enable openssh nixos configuration";
+  options.lab.hosts = mkHostModule (
+    { config, ... }:
+    let
+      cfg = config.ssh;
+    in
+    {
+      options.ssh = {
+        enable = mkEnableOption "openssh nixos configuration";
 
-    port = mkOption {
-      description = "Port to use for ssh";
-      type = types.number;
-      default = 22;
-    };
+        port = mkOption {
+          default = 22;
+          description = "Port to use for ssh";
+          type = types.number;
+        };
 
-    users = mkOption {
-      description = "Enable ssh for these users";
-      type = with types; listOf str;
-      default = mapAttrsToList (_: v: v.name) (filterAttrs (_: v: v.isNormalUser) config.users.users);
-    };
-  };
-
-  config = mkIf config.lab.ssh.enable {
-    networking.firewall.allowedTCPPorts = [
-      config.lab.ssh.port
-    ];
-
-    services.openssh = {
-      enable = true;
-      ports = [ config.lab.ssh.port ];
-      settings = {
-        PasswordAuthentication = true;
-        AllowUsers = config.lab.ssh.users;
-        UseDns = true;
-        X11Forwarding = false;
-        PermitRootLogin = "no";
+        users = mkOption {
+          default = null;
+          description = "Enable ssh for these users (defaults to all normal users)";
+          type = with types; nullOr (listOf str);
+        };
       };
-    };
-  };
+
+      config = mkIf cfg.enable (
+        forLinux (
+          { config, lib, ... }:
+          {
+            networking.firewall.allowedTCPPorts = [
+              cfg.port
+            ];
+
+            services.openssh = {
+              enable = true;
+              ports = [ cfg.port ];
+              settings = {
+                AllowUsers =
+                  if cfg.users != null then
+                    cfg.users
+                  else
+                    lib.mapAttrsToList (_: v: v.name) (lib.filterAttrs (_: v: v.isNormalUser) config.users.users);
+                PasswordAuthentication = true;
+                PermitRootLogin = "no";
+                UseDns = true;
+                X11Forwarding = false;
+              };
+            };
+          }
+        )
+      );
+    }
+  );
 }

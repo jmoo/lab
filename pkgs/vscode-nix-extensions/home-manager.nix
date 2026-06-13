@@ -12,13 +12,13 @@ with lib;
         types.submodule (
           { config, name, ... }:
           {
-            imports = [ ./module.nix ];
-            options = {
-              package = mkOption { type = types.package; };
-            };
             config = {
               inherit name;
               package = pkgs.callPackage ./default.nix { vscodeExtensionConfig = config; };
+            };
+            imports = [ ./module.nix ];
+            options = {
+              package = mkOption { type = types.package; };
             };
           }
         )

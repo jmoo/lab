@@ -1,39 +1,96 @@
 {
+  lib',
   inputs,
-  pkgs,
   config,
-  lib,
   ...
 }:
-with lib;
-{
-  imports = [
-    inputs.home-manager.darwinModules.home-manager
-    ./common.nix
-  ];
+let
+  inherit (lib'.lab) mkHostOptions mkHostPlatform;
+  inherit (lib')
+    filterAttrs
+    mapAttrs
+    mkDefault
+    mkOption
+    types
+    ;
 
-  config = mkMerge [
-    {
-      lab.common = {
+  # Apply the host's single home-manager configuration to its user.
+  homeManager = host: {
+    home-manager = {
+      useGlobalPkgs = true;
+      useUserPackages = true;
+      users.${host.user} = {
         home.stateVersion = mkDefault "25.05";
+        imports = [
+          host.home
+          host.darwin.home
+        ];
         programs.home-manager.enable = false;
       };
+    };
+  };
+in
+{
+  options = {
+    lab.hosts = mkHostOptions {
+      darwin = mkHostPlatform {
+        config = {
+          module = {
+            imports = [
+              inputs.home-manager.darwinModules.home-manager
+            ];
 
-      users.users.root.home = "/var/root";
-      nix.enable = true;
-      system.stateVersion = mkDefault 5;
-      nixpkgs.hostPlatform = mkDefault "aarch64-darwin";
-    }
+            # nix and nixpkgs.{config,overlays} come from the shared feature
+            # modules (nix.nix / nixpkgs.nix).
+            nixpkgs.hostPlatform = mkDefault "aarch64-darwin";
 
-    (mkIf config.lab.iterm2.enable {
-      environment.systemPackages = with pkgs; [ iterm2 ];
-    })
+            system.stateVersion = mkDefault 5;
 
-    (mkIf config.lab.shell.enable {
-      lab.common.home.shellAliases = {
-        switch = mkDefault "sudo darwin-rebuild switch --flake ${config.lab.source}#${config.lab.name}";
+            users.users.root.home = "/var/root";
+          };
+        };
+
+        options = {
+          home = mkOption {
+            default = { };
+            description = "Home-manager configuration for this platform's user";
+            type = types.deferredModule;
+          };
+
+          specialArgs = mkOption {
+            default = { };
+            type = types.attrsOf types.anything;
+          };
+
+          system = mkOption {
+            default = "aarch64-darwin";
+            type = types.str;
+          };
+        };
       };
-      programs.zsh.enable = true;
-    })
-  ];
+    };
+  };
+
+  config = {
+    flake = {
+      darwinConfigurations = mapAttrs (
+        _: host:
+        inputs.nix-darwin.lib.darwinSystem {
+          modules = [
+            host.darwin.module
+            (homeManager host)
+          ];
+          specialArgs = host.darwin.specialArgs;
+          system = host.darwin.system;
+        }
+      ) (filterAttrs (_: host: host.darwin.eval) config.lab.hosts);
+
+      darwinModules = mapAttrs (_: host: {
+        imports = [
+          host.darwin.module
+          (homeManager host)
+        ];
+      }) (filterAttrs (_: host: host.darwin.enable) config.lab.hosts);
+    };
+  };
 }

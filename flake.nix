@@ -1,17 +1,25 @@
 {
   inputs = {
+    flake-parts.url = "github:hercules-ci/flake-parts";
+
     home-manager = {
-      url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
+      url = "github:nix-community/home-manager";
     };
+
+    # Asahi uses the pinned nixos-apple-silicon nixpkgs (25.11, Aug 2025), whose
+    # lib predates home-manager master's use of `lib.genAttrs'`. Pin a matching
+    # home-manager from the same era for the asahi platform only.
+    home-manager-asahi = {
+      inputs.nixpkgs.follows = "nixos-apple-silicon/nixpkgs";
+      url = "github:nix-community/home-manager/dd026d864207";
+    };
+
+    import-tree.url = "github:denful/import-tree";
 
     nix-darwin = {
-      url = "github:lnl7/nix-darwin";
       inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    nudelta = {
-      url = "github:donn/nudelta";
+      url = "github:lnl7/nix-darwin";
     };
 
     nixos-apple-silicon = {
@@ -21,86 +29,13 @@
     };
 
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+
+    nudelta.url = "github:donn/nudelta";
   };
 
   outputs =
-    { nixpkgs, nixos-apple-silicon, ... }@inputs:
-    rec {
-      darwinConfigurations = {
-        meerkat = inputs.nix-darwin.lib.darwinSystem {
-          system = "aarch64-darwin";
-          specialArgs = {
-            inherit inputs;
-          };
-          modules = [
-            ./hosts/meerkat/darwin.nix
-            {
-              nixpkgs = {
-                config.allowUnfree = true;
-                overlays = nixpkgs.lib.attrValues overlays;
-              };
-            }
-          ];
-        };
-      };
-
-      formatter = nixpkgs.lib.mapAttrs (_: pkgs: pkgs.nixfmt-tree) legacyPackages;
-
-      nixosConfigurations = {
-        lynx = nixpkgs.lib.nixosSystem {
-          system = "x86_64-linux";
-          specialArgs = {
-            inherit inputs;
-          };
-          modules = [
-            ./hosts/lynx
-            {
-              nixpkgs = {
-                config.allowUnfree = true;
-                overlays = nixpkgs.lib.attrValues overlays;
-              };
-            }
-          ];
-        };
-
-        meerkat = nixos-apple-silicon.inputs.nixpkgs.lib.nixosSystem {
-          system = "aarch64-linux";
-          specialArgs = {
-            inherit inputs;
-          };
-          modules = [
-            ./hosts/meerkat/asahi.nix
-            { nixpkgs.overlays = nixpkgs.lib.attrValues overlays; }
-          ];
-        };
-      };
-
-      nixosModules = {
-        axolotl = import ./hosts/axolotl/default.nix;
-        lynx = import ./hosts/lynx/default.nix;
-        meerkat = import ./hosts/meerkat/asahi.nix;
-        default = import ./modules/nixos.nix;
-      };
-
-      overlays.default = import ./overlay.nix inputs;
-
-      legacyPackages = {
-        aarch64-darwin = import nixpkgs {
-          system = "aarch64-darwin";
-          config.allowUnfree = true;
-          overlays = nixpkgs.lib.attrValues overlays;
-        };
-
-        aarch64-linux = import nixpkgs {
-          system = "aarch64-linux";
-          overlays = nixpkgs.lib.attrValues overlays;
-        };
-
-        x86_64-linux = import nixpkgs {
-          system = "x86_64-linux";
-          config.allowUnfree = true;
-          overlays = nixpkgs.lib.attrValues overlays;
-        };
-      };
-    };
+    { nixpkgs, ... }@inputs:
+    (nixpkgs.lib.extend (import ./lib.nix inputs)).mkFlake {
+      inherit inputs;
+    } { };
 }

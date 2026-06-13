@@ -1,25 +1,32 @@
+{ lib', ... }:
+let
+  inherit (lib'.lab) mkHostModule;
+  inherit (lib') mkEnableOption mkIf;
+in
 {
-  pkgs,
-  lib,
-  config,
-  ...
-}:
-with lib;
-{
-  options.lab.direnv.enable = mkEnableOption "Enable direnv home-manager configuration";
+  options.lab.hosts = mkHostModule (
+    { config, ... }:
+    {
+      options.direnv.enable = mkEnableOption "direnv home-manager configuration";
 
-  config = mkIf config.lab.direnv.enable {
-    programs = {
-      direnv = {
-        enable = true;
-        enableZshIntegration = false;
-        enableBashIntegration = false;
-        enableNushellIntegration = false;
-        enableFishIntegration = false;
-        nix-direnv.enable = false;
+      config = mkIf config.direnv.enable {
+        home =
+          { pkgs, ... }:
+          {
+            programs = {
+              direnv = {
+                enable = true;
+                enableBashIntegration = false;
+                enableFishIntegration = false;
+                enableNushellIntegration = false;
+                enableZshIntegration = false;
+                nix-direnv.enable = false;
+              };
+
+              vscode.profiles.default.extensions = with pkgs.vscode-extensions; [ mkhl.direnv ];
+            };
+          };
       };
-
-      vscode.profiles.default.extensions = with pkgs.vscode-extensions; [ mkhl.direnv ];
-    };
-  };
+    }
+  );
 }

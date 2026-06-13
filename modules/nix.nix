@@ -1,5 +1,22 @@
-{ ... }:
+{ lib', ... }:
+let
+  inherit (lib'.lab) mkHostModule;
+
+  nix = {
+    nix.settings.experimental-features = "nix-command flakes";
+  };
+in
 {
-  nix.settings.experimental-features = "nix-command flakes";
-  nixpkgs.config.allowUnfree = true;
+  # Nix daemon settings, applied to every platform. nix-darwin needs
+  # `nix.enable` to manage the daemon (NixOS enables it by default).
+  options.lab.hosts = mkHostModule (_: {
+    config = {
+      asahi.module = nix;
+      darwin.module = {
+        imports = [ nix ];
+        nix.enable = true;
+      };
+      nixos.module = nix;
+    };
+  });
 }
