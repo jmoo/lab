@@ -35,7 +35,17 @@
 
   outputs =
     { nixpkgs, ... }@inputs:
-    (nixpkgs.lib.extend (import ./lib.nix inputs)).mkFlake {
-      inherit inputs;
-    } { };
+    (nixpkgs.lib.extend (import ./lib.nix inputs)).mkFlake
+      {
+        inherit inputs;
+      }
+      {
+        perSystem =
+          { pkgs, ... }:
+          {
+            packages = {
+              inherit (pkgs) open-bamboo-networking;
+            };
+          };
+      };
 }

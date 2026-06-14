@@ -29,9 +29,7 @@ in
 
   config = {
     nixpkgs = {
-      config = {
-        allowUnfree = true;
-      };
+      config.allowUnfree = true;
       overlays = [ (import ../overlay.nix inputs) ];
     };
 
