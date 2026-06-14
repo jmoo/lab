@@ -82,6 +82,7 @@ in
             gparted
             nudelta
             obsidian
+            qFlipper
             unzip
             vim
             wev
@@ -116,9 +117,9 @@ in
             };
 
             cpu.amd.updateMicrocode = mkDefault config.hardware.enableRedistributableFirmware;
-
             enableRedistributableFirmware = mkDefault true;
-
+            flipperzero.enable = true;
+            
             # Enable OpenGL
             graphics.enable = true;
 
