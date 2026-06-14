@@ -136,7 +136,7 @@ let
                   external.osxExec = "iTerm.app";
                   integrated = {
                     defaultProfile.osx = "zsh";
-                    fontFamily = "MesloLGS NF";
+                    fontFamily = "UbuntuMono Nerd Font Mono";
                     fontSize = 13;
                   };
                 };
