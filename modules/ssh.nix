@@ -48,7 +48,7 @@ in
                     cfg.users
                   else
                     lib.mapAttrsToList (_: v: v.name) (lib.filterAttrs (_: v: v.isNormalUser) config.users.users);
-                PasswordAuthentication = true;
+                PasswordAuthentication = false;
                 PermitRootLogin = "no";
                 UseDns = true;
                 X11Forwarding = false;
