@@ -36,8 +36,6 @@ in
               ];
             };
 
-            extraModulePackages = [ ];
-
             initrd = {
               availableKernelModules = [
                 "nvme"
@@ -47,8 +45,6 @@ in
                 "usb_storage"
                 "sd_mod"
               ];
-
-              kernelModules = [ ];
 
               luks.devices = {
                 # ssd 1
@@ -73,7 +69,6 @@ in
 
             loader = {
               efi.canTouchEfiVariables = true;
-              # Bootloader.
               systemd-boot.enable = true;
             };
           };

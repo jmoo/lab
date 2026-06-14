@@ -26,7 +26,7 @@ in
 
             networkmanager.enable = true;
 
-            useDHCP = lib.mkDefault true;
+            useDHCP = mkDefault true;
           };
 
           programs.wireshark.enable = true;

@@ -29,12 +29,7 @@ in
 
   config = {
     nixpkgs = {
-      config = {
-        allowUnfree = true;
-        permittedInsecurePackages = [
-          "libsoup-2.74.3"
-        ];
-      };
+      config.allowUnfree = true;
       overlays = [ (import ../overlay.nix inputs) ];
     };
 

@@ -61,7 +61,7 @@ in
                 fi
 
                 # otherwise authenticate with tailscale
-                ${tailscale}/bin/tailscale up -authkey $(cat /etc/tailscale/key) ${lib.optionalString exitNode "--advertise-exit-node"} \
+                ${tailscale}/bin/tailscale up -authkey $(tr -d '\n' < /etc/tailscale/key) ${lib.optionalString exitNode "--advertise-exit-node"} \
                   --snat-subnet-routes=false \
                   --advertise-routes=10.10.0.0/16
               '';
