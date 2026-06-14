@@ -187,7 +187,6 @@ let
         (lib.mkIf flags.webdev.enable {
           programs.vscode.profiles.default.extensions = with pkgs.vscode-extensions; [
             dbaeumer.vscode-eslint
-            esbenp.prettier-vscode
           ];
         })
 
@@ -195,7 +194,6 @@ let
         (lib.mkIf flags.python.enable {
           programs.vscode.profiles.default.extensions = with pkgs.vscode-extensions; [
             ms-python.python
-            charliermarsh.ruff
           ];
         })
       ];
