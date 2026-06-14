@@ -8,7 +8,7 @@ in
     { config, ... }:
     {
       config = mkIf config.ulauncher.enable (
-        homeLinux (
+        (homeLinux (
           { pkgs, lib, ... }:
           let
             # uwsm-aware build so launched apps land in the right systemd scope.
@@ -31,11 +31,25 @@ in
               };
             };
 
-            # $launcher keybind referenced by hyprland.conf.
+            # $launcher keybind referenced by hyprland.conf (asahi/hyprlang).
             wayland.windowManager.hyprland.settings."$launcher" =
               "${lib.getExe pkgs.uwsm} app -- ${lib.getExe ulauncher}";
           }
-        )
+        ))
+        // {
+          # Lua local for hyprland.lua (nixos only).
+          nixos.home = (
+            { pkgs, lib, ... }:
+            let
+              ulauncher = pkgs.ulauncher-uwsm;
+            in
+            {
+              wayland.windowManager.hyprland.settings.launcher = {
+                _var = "${lib.getExe pkgs.uwsm} app -- ${lib.getExe ulauncher}";
+              };
+            }
+          );
+        }
       );
 
       options.ulauncher.enable = mkEnableOption "ulauncher application launcher";
