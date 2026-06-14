@@ -31,6 +31,7 @@ in
     nixpkgs = {
       config = {
         allowUnfree = true;
+        # orca-slicer depends on libsoup 2
         permittedInsecurePackages = [
           "libsoup-2.74.3"
         ];

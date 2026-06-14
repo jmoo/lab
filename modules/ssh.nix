@@ -21,7 +21,7 @@ in
         port = mkOption {
           default = 22;
           description = "Port to use for ssh";
-          type = types.number;
+          type = types.int;
         };
 
         users = mkOption {
