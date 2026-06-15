@@ -93,6 +93,7 @@ in
         module
       ];
 
+      flake.lib = final;
       _module.args.lib' = final;
     });
 }
