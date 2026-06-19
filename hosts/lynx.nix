@@ -10,7 +10,6 @@ in
       enable = true;
       nvidia = true;
     };
-    mosh.enable = true;
     orca-slicer.enable = true;
 
     nixos = {
@@ -230,6 +229,5 @@ in
 
     user = "jmoore";
     vscode.enable = true;
-    zellij.enable = true;
   };
 }

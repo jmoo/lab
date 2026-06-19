@@ -9,6 +9,5 @@
     shell.enable = true;
     source = "github:jmoo/lab";
     user = "jmoore";
-    zellij.enable = true;
   };
 }
