@@ -22,7 +22,7 @@ let
       users.${host.user} = {
         home.stateVersion = mkDefault "25.05";
         imports = [
-          host.home
+          host.home.module
           host.darwin.home
         ];
         programs.home-manager.enable = false;

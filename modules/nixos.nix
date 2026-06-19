@@ -25,7 +25,7 @@ let
         {
           home.stateVersion = mkDefault osConfig.system.stateVersion;
           imports = [
-            host.home
+            host.home.module
             host.nixos.home
           ];
           programs.home-manager.enable = false;

@@ -10,6 +10,7 @@ in
       enable = true;
       nvidia = true;
     };
+    mosh.enable = true;
     orca-slicer.enable = true;
 
     nixos = {
@@ -119,7 +120,7 @@ in
             cpu.amd.updateMicrocode = mkDefault config.hardware.enableRedistributableFirmware;
             enableRedistributableFirmware = mkDefault true;
             flipperzero.enable = true;
-            
+
             # Enable OpenGL
             graphics.enable = true;
 
@@ -229,5 +230,6 @@ in
 
     user = "jmoore";
     vscode.enable = true;
+    zellij.enable = true;
   };
 }

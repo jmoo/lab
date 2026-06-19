@@ -163,7 +163,7 @@ in
     ghostty.enable = true;
 
     # Home config applied to the user on both platforms.
-    home =
+    home.module =
       { pkgs, ... }:
       {
         home.packages = with pkgs; [
@@ -189,6 +189,7 @@ in
 
     # Darwin-only feature.
     iterm2.enable = true;
+    mosh.enable = true;
 
     shell.enable = true;
     source = "/home/jmoore/Repos/jmoo/lab";
@@ -196,5 +197,6 @@ in
     tailscale.enable = true;
     user = "jmoore";
     vscode.enable = true;
+    zellij.enable = true;
   };
 }

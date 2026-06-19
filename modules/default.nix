@@ -22,8 +22,29 @@ in
             options = {
               home = mkOption {
                 default = { };
-                description = "Home-manager configuration applied to the user on every enabled platform";
-                type = types.deferredModule;
+                type = types.submodule (
+                  { config, ... }:
+                  {
+                    options = {
+                      eval = mkOption {
+                        default = false;
+                        description = "Whether to emit a homeConfigurations flake output for this host";
+                        type = types.bool;
+                      };
+
+                      module = mkOption {
+                        default = { };
+                        description = "Home-manager configuration applied to the user on every enabled platform";
+                        type = types.deferredModule;
+                      };
+
+                      system = mkOption {
+                        description = "Target system for standalone home-manager evaluation";
+                        type = types.str;
+                      };
+                    };
+                  }
+                );
               };
 
               name = mkOption {

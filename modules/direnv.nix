@@ -10,7 +10,7 @@ in
       options.direnv.enable = mkEnableOption "direnv home-manager configuration";
 
       config = mkIf config.direnv.enable {
-        home =
+        home.module =
           { pkgs, ... }:
           {
             programs = {

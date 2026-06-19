@@ -206,7 +206,7 @@ in
     { config, ... }:
     {
       config = mkIf config.vscode.enable {
-        home = mkHome {
+        home.module = mkHome {
           inherit (config.vscode)
             nix
             python
