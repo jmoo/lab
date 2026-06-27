@@ -167,7 +167,10 @@ in
               openFirewall = true;
             };
 
-            openssh.settings.AllowUsers = [ "nix-ssh" ];
+            openssh.settings.AllowUsers = [
+              "nix-ssh"
+              "jmoore"
+            ];
 
             pipewire = {
               alsa = {

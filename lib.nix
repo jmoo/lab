@@ -77,8 +77,8 @@ in
         );
       in
       pkgs.callPackage (
-        args:
-        pkgs.writeShellApplication {
+        { writeShellApplication, ... }@args:
+        writeShellApplication {
           inherit name;
           runtimeInputs = map (d: args.${d}) depNames;
           text = body;
