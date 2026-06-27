@@ -3,9 +3,9 @@ let
   lib' = prev.lib.extend (import ./lib.nix inputs);
   scriptsDir = ./scripts;
   scriptsEntries = builtins.readDir scriptsDir;
-  scriptFiles = builtins.filter (
-    name: scriptsEntries.${name} == "regular" && prev.lib.hasSuffix ".sh" name
-  ) (builtins.attrNames scriptsEntries);
+  scriptFiles = builtins.filter (name: scriptsEntries.${name} == "regular") (
+    builtins.attrNames scriptsEntries
+  );
 in
 {
   # # Fix core dump on asahi
@@ -37,7 +37,11 @@ in
 }
 // builtins.listToAttrs (
   map (filename: {
-    name = prev.lib.removeSuffix ".sh" filename;
+    name =
+      let
+        m = builtins.match "(.+)\\.[^.]+" filename;
+      in
+      if m != null then builtins.head m else filename;
     value = lib'.lab.mkScript final scriptsDir filename;
   }) scriptFiles
 )

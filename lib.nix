@@ -16,7 +16,6 @@ in
       nixos.module = module;
     };
 
-    # Push a system module down into every Linux platform / every platform.
     forLinux = module: {
       asahi.module = module;
       nixos.module = module;
@@ -26,20 +25,16 @@ in
       darwin.home = module;
     };
 
-    # Push a home-manager module down into each platform's home config.
-    # (For all platforms, set the host-level `home` option instead.)
     homeLinux = module: {
       asahi.home = module;
       nixos.home = module;
     };
 
-    # Like mkHostOptions but the argument is a full module (options *and*
-    # config), letting a feature module both declare host-level options and
-    # push config down into the per-platform `module` deferredModules.
     mkScript =
       pkgs: scriptsDir: filename:
       let
-        name = final.removeSuffix ".sh" filename;
+        match = builtins.match "(.+)\\.[^.]+" filename;
+        name = if match != null then builtins.head match else filename;
         src = builtins.readFile (scriptsDir + "/${filename}");
         lines = final.splitString "\n" src;
 
