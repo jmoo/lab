@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deps: nix jq
+# nix-deps: nix jq
 
 # Show all locked flake inputs with their short revision hashes.
 nix flake metadata --json \

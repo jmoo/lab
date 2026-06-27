@@ -38,11 +38,12 @@ in
         src = builtins.readFile (scriptsDir + "/${filename}");
         lines = final.splitString "\n" src;
 
-        depsLine = final.findFirst (l: final.hasPrefix "# deps:" l) null lines;
+        secondLine = if builtins.length lines > 1 then builtins.elemAt lines 1 else "";
+        depsLine = if final.hasPrefix "# nix-deps: " secondLine then secondLine else null;
         runtimeInputs =
           if depsLine != null then
             map (d: pkgs.${d}) (
-              builtins.filter (s: s != "") (final.splitString " " (final.removePrefix "# deps: " depsLine))
+              builtins.filter (s: s != "") (final.splitString " " (final.removePrefix "# nix-deps: " depsLine))
             )
           else
             [ ];
