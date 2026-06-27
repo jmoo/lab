@@ -59,23 +59,31 @@ in
 
         secondLine = if builtins.length lines > 1 then builtins.elemAt lines 1 else "";
         depsLine = if final.hasPrefix "# nix-deps: " secondLine then secondLine else null;
-        runtimeInputs =
+        depNames =
           if depsLine != null then
-            map (d: pkgs.${d}) (
-              builtins.filter (s: s != "") (final.splitString " " (final.removePrefix "# nix-deps: " depsLine))
-            )
+            builtins.filter (s: s != "") (final.splitString " " (final.removePrefix "# nix-deps: " depsLine))
           else
             [ ];
+        depsAttrs = builtins.listToAttrs (
+          map (d: {
+            name = d;
+            value = pkgs.${d};
+          }) depNames
+        );
 
         # Strip shebang so writeShellApplication can supply its own.
         body = final.concatStringsSep "\n" (
           if lines != [ ] && final.hasPrefix "#!" (builtins.head lines) then builtins.tail lines else lines
         );
       in
-      pkgs.writeShellApplication {
-        inherit name runtimeInputs;
-        text = body;
-      };
+      pkgs.callPackage (
+        args:
+        pkgs.writeShellApplication {
+          inherit name;
+          runtimeInputs = map (d: args.${d}) depNames;
+          text = body;
+        }
+      ) depsAttrs;
 
     mkHostModule =
       module:
