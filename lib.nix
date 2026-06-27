@@ -36,6 +36,32 @@ in
     # Like mkHostOptions but the argument is a full module (options *and*
     # config), letting a feature module both declare host-level options and
     # push config down into the per-platform `module` deferredModules.
+    mkScript =
+      pkgs: scriptsDir: filename:
+      let
+        name = final.removeSuffix ".sh" filename;
+        src = builtins.readFile (scriptsDir + "/${filename}");
+        lines = final.splitString "\n" src;
+
+        depsLine = final.findFirst (l: final.hasPrefix "# deps:" l) null lines;
+        runtimeInputs =
+          if depsLine != null then
+            map (d: pkgs.${d}) (
+              builtins.filter (s: s != "") (final.splitString " " (final.removePrefix "# deps: " depsLine))
+            )
+          else
+            [ ];
+
+        # Strip shebang so writeShellApplication can supply its own.
+        body = final.concatStringsSep "\n" (
+          if lines != [ ] && final.hasPrefix "#!" (builtins.head lines) then builtins.tail lines else lines
+        );
+      in
+      pkgs.writeShellApplication {
+        inherit name runtimeInputs;
+        text = body;
+      };
+
     mkHostModule =
       module:
       mkOption {
