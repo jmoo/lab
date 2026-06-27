@@ -30,6 +30,25 @@ in
       nixos.home = module;
     };
 
+    mkScripts =
+      pkgs: dir:
+      let
+        entries = builtins.readDir dir;
+        files = builtins.filter (name: entries.${name} == "regular") (builtins.attrNames entries);
+        mkName =
+          filename:
+          let
+            m = builtins.match "(.+)\\.[^.]+" filename;
+          in
+          if m != null then builtins.head m else filename;
+      in
+      builtins.listToAttrs (
+        map (filename: {
+          name = mkName filename;
+          value = final.lab.mkScript pkgs dir filename;
+        }) files
+      );
+
     mkScript =
       pkgs: scriptsDir: filename:
       let

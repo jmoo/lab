@@ -1,11 +1,6 @@
 inputs: final: prev:
 let
   lib' = prev.lib.extend (import ./lib.nix inputs);
-  scriptsDir = ./scripts;
-  scriptsEntries = builtins.readDir scriptsDir;
-  scriptFiles = builtins.filter (name: scriptsEntries.${name} == "regular") (
-    builtins.attrNames scriptsEntries
-  );
 in
 {
   # # Fix core dump on asahi
@@ -35,13 +30,4 @@ in
     vscode-nix-extensions = final.callPackage ./pkgs/vscode-nix-extensions { };
   };
 }
-// builtins.listToAttrs (
-  map (filename: {
-    name =
-      let
-        m = builtins.match "(.+)\\.[^.]+" filename;
-      in
-      if m != null then builtins.head m else filename;
-    value = lib'.lab.mkScript final scriptsDir filename;
-  }) scriptFiles
-)
+// lib'.lab.mkScripts final ./scripts
