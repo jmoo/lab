@@ -1,4 +1,38 @@
-inputs: final: prev: {
+inputs: final: prev:
+let
+  scriptsDir = ./scripts;
+  scriptsEntries = builtins.readDir scriptsDir;
+  scriptFiles = builtins.filter (
+    name: scriptsEntries.${name} == "regular" && prev.lib.hasSuffix ".sh" name
+  ) (builtins.attrNames scriptsEntries);
+
+  mkScript =
+    filename:
+    let
+      name = prev.lib.removeSuffix ".sh" filename;
+      src = builtins.readFile (scriptsDir + "/${filename}");
+      lines = prev.lib.splitString "\n" src;
+
+      depsLine = prev.lib.findFirst (l: prev.lib.hasPrefix "# deps:" l) null lines;
+      runtimeInputs =
+        if depsLine != null then
+          map (d: final.${d}) (
+            builtins.filter (s: s != "") (prev.lib.splitString " " (prev.lib.removePrefix "# deps: " depsLine))
+          )
+        else
+          [ ];
+
+      # Strip shebang so writeShellApplication can supply its own.
+      body = prev.lib.concatStringsSep "\n" (
+        if lines != [ ] && prev.lib.hasPrefix "#!" (builtins.head lines) then builtins.tail lines else lines
+      );
+    in
+    final.writeShellApplication {
+      inherit name runtimeInputs;
+      text = body;
+    };
+in
+{
   # # Fix core dump on asahi
   # # This PR gets a little farther but still segfaults
   # hyprlock = prev.hyprlock.overrideAttrs (_: {
@@ -26,3 +60,9 @@ inputs: final: prev: {
     vscode-nix-extensions = final.callPackage ./pkgs/vscode-nix-extensions { };
   };
 }
+// builtins.listToAttrs (
+  map (filename: {
+    name = prev.lib.removeSuffix ".sh" filename;
+    value = mkScript filename;
+  }) scriptFiles
+)
