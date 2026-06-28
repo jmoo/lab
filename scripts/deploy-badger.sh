@@ -4,7 +4,7 @@
 badger=${1:-badger}
 host=${2:-$HOSTNAME}
 
-out=$(nix build "github:jmoo/lab#homeConfigurations.badger.activationPackage" \
+out=$(nix build ~/Repos/jmoo/lab"#homeConfigurations.badger.activationPackage" \
   --print-out-paths \
   --no-link)
 
