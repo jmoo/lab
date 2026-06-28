@@ -15,7 +15,7 @@ MOUNTS=(
 
 if [ $# -gt 0 ]; then
   proot-distro login debian --user "$USER" "${MOUNTS[@]}" -- \
-    bash -c "source ~/.profile && $*"
+    bash -c "source ~/.bashrc && $*"
 else
   proot-distro login debian --user "$USER" "${MOUNTS[@]}"
 fi
