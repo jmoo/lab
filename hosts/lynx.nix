@@ -15,11 +15,16 @@ in
     nixos = {
       enable = true;
 
-      home.programs = {
-        claude-code.enable = true;
-        ghostty.settings.theme = mkForce "Bright Lights";
-        yt-dlp.enable = true;
-      };
+      home =
+        { pkgs, ... }:
+        {
+          home.packages = [ pkgs.deploy-badger ];
+          programs = {
+            claude-code.enable = true;
+            ghostty.settings.theme = mkForce "Bright Lights";
+            yt-dlp.enable = true;
+          };
+        };
 
       module =
         {
