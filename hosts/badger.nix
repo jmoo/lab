@@ -23,6 +23,8 @@
             '';
             packages = [ pkgs.proot-badger ];
           };
+
+          programs.claude-code.enable = true;
         };
       system = "aarch64-linux";
     };
