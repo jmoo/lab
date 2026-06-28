@@ -163,7 +163,7 @@ in
     ghostty.enable = true;
 
     # Home config applied to the user on both platforms.
-    home =
+    home.module =
       { pkgs, ... }:
       {
         home.packages = with pkgs; [

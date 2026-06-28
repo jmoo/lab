@@ -169,10 +169,7 @@ in
     {
       config = mkIf config.shell.enable {
         asahi = {
-          home.imports = [
-            home
-            (switch "nixos-rebuild")
-          ];
+          home.imports = [ (switch "nixos-rebuild") ];
           module.imports = [
             linuxSystem
             nixosShellInit
@@ -180,18 +177,14 @@ in
         };
 
         darwin = {
-          home.imports = [
-            home
-            (switch "darwin-rebuild")
-          ];
+          home.imports = [ (switch "darwin-rebuild") ];
           module.programs.zsh.enable = true;
         };
 
+        home.module = home;
+
         nixos = {
-          home.imports = [
-            home
-            (switch "nixos-rebuild")
-          ];
+          home.imports = [ (switch "nixos-rebuild") ];
           module.imports = [
             linuxSystem
             nixosShellInit

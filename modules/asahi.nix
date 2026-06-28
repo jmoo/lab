@@ -24,7 +24,7 @@ let
         {
           home.stateVersion = mkDefault osConfig.system.stateVersion;
           imports = [
-            host.home
+            host.home.module
             host.asahi.home
           ];
           programs.home-manager.enable = false;
