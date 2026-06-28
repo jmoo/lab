@@ -9,4 +9,4 @@ out=$(nix build "github:jmoo/lab#homeConfigurations.badger.activationPackage" \
   --no-link)
 
 ssh -p 8022 "jmoore@${badger}" \
-  "nix copy --from ssh-ng://jmoore@${host} ${out} && ${out}/activate"
+  "nix copy --no-check-sigs --from ssh-ng://jmoore@${host} ${out} && ${out}/activate"
