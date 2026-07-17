@@ -22,11 +22,16 @@ in
     nixos = {
       enable = true;
 
-      home.programs = {
-        claude-code.enable = true;
-        ghostty.settings.theme = mkForce "Bright Lights";
-        yt-dlp.enable = true;
-      };
+      home =
+        { pkgs, ... }:
+        {
+          home.packages = [ pkgs.deploy-badger ];
+          programs = {
+            claude-code.enable = true;
+            ghostty.settings.theme = mkForce "Bright Lights";
+            yt-dlp.enable = true;
+          };
+        };
 
       module =
         {
@@ -126,7 +131,7 @@ in
             cpu.amd.updateMicrocode = mkDefault config.hardware.enableRedistributableFirmware;
             enableRedistributableFirmware = mkDefault true;
             flipperzero.enable = true;
-            
+
             # Enable OpenGL
             graphics.enable = true;
 
@@ -174,7 +179,10 @@ in
               openFirewall = true;
             };
 
-            openssh.settings.AllowUsers = [ "nix-ssh" ];
+            openssh.settings.AllowUsers = [
+              "nix-ssh"
+              "jmoore"
+            ];
 
             pipewire = {
               alsa = {
