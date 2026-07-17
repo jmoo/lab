@@ -10,6 +10,13 @@ in
       enable = true;
       nvidia = true;
     };
+
+    obsidian.sync = {
+      enable = true;
+      vaults = [ "/home/jmoore/Repos/jmoo/notes" ];
+      service = true;
+    };
+
     orca-slicer.enable = true;
 
     nixos = {
