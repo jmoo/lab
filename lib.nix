@@ -16,7 +16,6 @@ in
       nixos.module = module;
     };
 
-    # Push a system module down into every Linux platform / every platform.
     forLinux = module: {
       asahi.module = module;
       nixos.module = module;
@@ -26,16 +25,66 @@ in
       darwin.home = module;
     };
 
-    # Push a home-manager module down into each platform's home config.
-    # (For all platforms, set the host-level `home` option instead.)
     homeLinux = module: {
       asahi.home = module;
       nixos.home = module;
     };
 
-    # Like mkHostOptions but the argument is a full module (options *and*
-    # config), letting a feature module both declare host-level options and
-    # push config down into the per-platform `module` deferredModules.
+    mkScripts =
+      pkgs: dir:
+      let
+        entries = builtins.readDir dir;
+        files = builtins.filter (name: entries.${name} == "regular") (builtins.attrNames entries);
+        mkName =
+          filename:
+          let
+            m = builtins.match "(.+)\\.[^.]+" filename;
+          in
+          if m != null then builtins.head m else filename;
+      in
+      builtins.listToAttrs (
+        map (filename: {
+          name = mkName filename;
+          value = final.lab.mkScript pkgs dir filename;
+        }) files
+      );
+
+    mkScript =
+      pkgs: scriptsDir: filename:
+      let
+        match = builtins.match "(.+)\\.[^.]+" filename;
+        name = if match != null then builtins.head match else filename;
+        src = builtins.readFile (scriptsDir + "/${filename}");
+        lines = final.splitString "\n" src;
+
+        secondLine = if builtins.length lines > 1 then builtins.elemAt lines 1 else "";
+        depsLine = if final.hasPrefix "# nix-deps: " secondLine then secondLine else null;
+        depNames =
+          if depsLine != null then
+            builtins.filter (s: s != "") (final.splitString " " (final.removePrefix "# nix-deps: " depsLine))
+          else
+            [ ];
+        depsAttrs = builtins.listToAttrs (
+          map (d: {
+            name = d;
+            value = pkgs.${d};
+          }) depNames
+        );
+
+        # Strip shebang so writeShellApplication can supply its own.
+        body = final.concatStringsSep "\n" (
+          if lines != [ ] && final.hasPrefix "#!" (builtins.head lines) then builtins.tail lines else lines
+        );
+      in
+      pkgs.callPackage (
+        { writeShellApplication, ... }@args:
+        writeShellApplication {
+          inherit name;
+          runtimeInputs = map (d: args.${d}) depNames;
+          text = body;
+        }
+      ) depsAttrs;
+
     mkHostModule =
       module:
       mkOption {

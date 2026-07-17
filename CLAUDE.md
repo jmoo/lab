@@ -71,8 +71,8 @@ Notes:
 
 ```
 flake.nix              # calls lib.nix:mkFlake
-lib.nix                # mkFlake + lab.{mkHostModule,mkHostPlatform,mkHostOptions,forLinux,forAll,homeLinux,homeDarwin}
-overlay.nix            # global overlay (nudelta, vscode-nix-extensions, ulauncher-uwsm)
+lib.nix                # mkFlake + lab.{mkHostModule,mkHostPlatform,mkHostOptions,forLinux,forAll,homeLinux,homeDarwin,mkScript,mkScripts}
+overlay.nix            # global overlay (nudelta, vscode-nix-extensions, ulauncher-uwsm, scripts/)
 modules/               # flake-parts modules, auto-imported
   default.nix          #   lab.hosts base options
   {nixos,asahi,darwin}.nix  # platforms + their *{Configurations,Modules} outputs
@@ -85,10 +85,26 @@ modules/               # flake-parts modules, auto-imported
   iterm2/              #   iterm2 + iterm2.plist
 hosts/                 # one file per host, auto-imported
 keys/                  # ssh/nix pubkeys (builtins.readFile)
+scripts/               # shell scripts auto-packaged by overlay.nix via lib.lab.mkScripts
 pkgs/ resources/ dictionary.json
 ```
 
 Non-`.nix` assets live next to their module — `import-tree` only imports `.nix`.
+
+### Scripts (`scripts/`)
+
+Every file in `scripts/` is automatically packaged by `overlay.nix` via `lib.lab.mkScripts`. The package name is the filename with its extension stripped (`flake-inputs.sh` → `pkgs.flake-inputs`).
+
+Runtime dependencies are declared on **line 2** (immediately after the shebang) with a `# nix-deps:` comment:
+
+```bash
+#!/usr/bin/env bash
+# nix-deps: nix jq
+```
+
+Under the hood `lib.lab.mkScript` calls `pkgs.callPackage`, so the result supports `.override { jq = jq_alt; }`. The shebang is stripped and `writeShellApplication` supplies its own (with `set -euo pipefail`).
+
+To use a script on a host, add e.g. `pkgs.flake-inputs` to `home.packages` or `environment.systemPackages`.
 
 ### Adding things
 

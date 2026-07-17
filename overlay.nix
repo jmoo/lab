@@ -1,4 +1,8 @@
-inputs: final: prev: {
+inputs: final: prev:
+let
+  lib' = prev.lib.extend (import ./lib.nix inputs);
+in
+{
   # # Fix core dump on asahi
   # # This PR gets a little farther but still segfaults
   # hyprlock = prev.hyprlock.overrideAttrs (_: {
@@ -26,3 +30,4 @@ inputs: final: prev: {
     vscode-nix-extensions = final.callPackage ./pkgs/vscode-nix-extensions { };
   };
 }
+// lib'.lab.mkScripts final ./scripts
