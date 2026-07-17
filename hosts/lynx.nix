@@ -25,7 +25,11 @@ in
       home =
         { pkgs, ... }:
         {
-          home.packages = [ pkgs.deploy-badger ];
+          home.packages = [
+            pkgs.deploy-badger
+            pkgs.opencode
+            pkgs.opencode-desktop
+          ];
           programs = {
             claude-code.enable = true;
             ghostty.settings.theme = mkForce "Bright Lights";
