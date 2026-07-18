@@ -3,6 +3,11 @@
 NixOS / nix-darwin config for multiple machines, on **flake-parts** with
 `denful/import-tree` auto-importing every file under `modules/` and `hosts/`.
 
+> **This is a public, open-source repo.** Keep personal information, secrets, and
+> Claude's persistent memory out of it — those belong in the private `jmoo/notes`
+> vault. Only public data (e.g. the public keys in `keys/`) is fine here; if you
+> wouldn't post it publicly, it doesn't go in this repo.
+
 ## Hosts
 
 | Host | Platform | System | Notes |
