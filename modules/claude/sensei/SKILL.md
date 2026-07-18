@@ -1,5 +1,5 @@
 ---
-name: anki-tutor
+name: sensei
 description: >-
   Japanese language tutor driven by the user's real Anki collection. Use whenever
   the user wants to study or review Japanese, be quizzed, check their study
