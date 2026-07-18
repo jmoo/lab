@@ -42,6 +42,45 @@ Returns card content and scheduling info for due cards.
 nix run .#anki-tool -- due
 nix run .#anki-tool -- due "Japanese::Vocab" --limit 10
 # {"count":10,"cards":[{"id":123,"deck":"Japanese::Vocab","fields":{"Front":"食べる","Back":"to eat"},"interval":7,"ease":2500,...}]}
+
+# --by-deck groups the due cards by deck instead of listing them
+nix run .#anki-tool -- due "日本語" --by-deck
+# {"count":98,"by_deck":{"日本語::2 - Genki 1::L06::01 Vocabulary":23,"日本語::2 - Genki 1::L07::01 Vocabulary":26,...}}
+```
+
+### `forecast [DECK]` — Upcoming daily load
+
+Projects the next N days of study load (day 0 = today). **When a deck is given** it
+reads that deck's option-group limits (`getDeckConfig`) and simulates Anki's queue:
+reviews are clamped to the daily review cap with the overflow rolling forward as
+`backlog`, and new cards are introduced up to the daily new cap until the unseen pool
+empties. Day 0's new allowance is reduced by cards already introduced today, so it
+reflects what's actually left for the rest of today. **Without a deck**, limits can't
+be attributed, so review counts are reported raw (like Anki's Future Due) and `new`
+is 0.
+
+> Approximation: new cards introduced today graduate into reviews on later days; that
+> feedback isn't simulated, so far-out review counts are slight underestimates.
+
+```bash
+nix run .#anki-tool -- forecast "日本語::2 - Genki 1" --days 7
+# {"deck":"日本語::2 - Genki 1","days":7,"limits_applied":true,"new_per_day":20,"rev_per_day":120,
+#  "unseen_pool":985,"new_pool_remaining_after":845,"totals":{"new":140,"reviews":280,"cards":420},
+#  "forecast":[{"day":0,"date":"2026-07-18","new":20,"reviews":98,"total":118,"backlog":0},...]}
+
+nix run .#anki-tool -- forecast --days 4        # whole collection, raw (limits_applied:false)
+```
+
+### `new [DECK]` — New-card queue
+
+Unseen (new, non-suspended) card pool, how many new cards were already introduced
+today, and — when a deck is given — the deck's daily new limit and how many may still
+be introduced today.
+
+```bash
+nix run .#anki-tool -- new "日本語::2 - Genki 1"
+# {"deck":"日本語::2 - Genki 1","unseen":985,"introduced_today":0,"new_per_day":20,"remaining_today":20}
+nix run .#anki-tool -- new                       # collection-wide: {"unseen":...,"introduced_today":...}
 ```
 
 ### `hard [DECK]` — Difficult cards (leeches / low ease)
@@ -65,6 +104,14 @@ nix run .#anki-tool -- find "added:7"           # cards added in last 7 days
 nix run .#anki-tool -- find "rated:1"           # cards reviewed today
 nix run .#anki-tool -- find "prop:ivl>30"       # cards with interval > 30 days
 # {"count":25,"card_ids":[123,456,789,...]}
+
+# --count returns only the match count (no ID array)
+nix run .#anki-tool -- find "deck:日本語 is:due" --count
+# {"count":98}
+
+# --by-deck groups all matches by deck (ignores --limit) — e.g. tomorrow's due, by lesson
+nix run .#anki-tool -- find "deck:日本語 prop:due=1" --by-deck
+# {"count":52,"by_deck":{"日本語::2 - Genki 1::L06::01 Vocabulary":9,"日本語::2 - Genki 1::L07::01 Vocabulary":15,...}}
 
 # With --info, returns full card details instead of just IDs
 nix run .#anki-tool -- find "それから deck:\"日本語::2 - Genki 1::L04\"" --info
@@ -214,6 +261,7 @@ All commands output a single line of JSON. Card objects have this shape:
 | `added:N` | Added in last N days |
 | `rated:N` | Reviewed in last N days |
 | `prop:ivl>N` | Interval greater than N days |
+| `prop:due=N` | Due exactly N days from today (0=today, 1=tomorrow) |
 | `prop:ease<N` | Ease factor less than N (e.g. 1.5) |
 | `prop:lapses>N` | More than N lapses |
 | `"exact phrase"` | Search for exact text |

@@ -83,6 +83,38 @@ pub fn find_cards(query: &str) -> Result<Vec<i64>, String> {
     serde_json::from_value(result).map_err(|e| format!("parse error: {e}"))
 }
 
+/// Number of cards matching a query (findCards then count).
+pub fn count_cards(query: &str) -> Result<usize, String> {
+    Ok(find_cards(query)?.len())
+}
+
+/// Daily new/review limits for the option group governing a deck. In Anki these
+/// come from the deck's config group (getDeckConfig) — reading the deck you study
+/// gives the limits that actually apply to its queue.
+pub struct DeckLimits {
+    pub new_per_day: u32,
+    pub rev_per_day: u32,
+}
+
+pub fn deck_limits(deck: &str) -> Result<DeckLimits, String> {
+    #[derive(Deserialize)]
+    struct PerDay {
+        #[serde(rename = "perDay")]
+        per_day: u32,
+    }
+    #[derive(Deserialize)]
+    struct RawConfig {
+        new: PerDay,
+        rev: PerDay,
+    }
+    let result = request("getDeckConfig", Some(json!({ "deck": deck })))?;
+    let cfg: RawConfig = serde_json::from_value(result).map_err(|e| format!("parse error: {e}"))?;
+    Ok(DeckLimits {
+        new_per_day: cfg.new.per_day,
+        rev_per_day: cfg.rev.per_day,
+    })
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CardInfo {
@@ -137,6 +169,9 @@ pub struct DeckReviewEntry {
     pub review_time: i64,
     pub card_id: i64,
     pub button_pressed: i32,
+    /// revlog type: 0=learn, 1=review, 2=relearn, 3=filtered/cram, 4=manual.
+    /// A new card's first study is a learn (0), so type==0 marks an introduction.
+    pub review_type: i32,
 }
 
 pub fn card_reviews(deck: &str, start_id: i64) -> Result<Vec<DeckReviewEntry>, String> {
@@ -154,10 +189,12 @@ pub fn card_reviews(deck: &str, start_id: i64) -> Result<Vec<DeckReviewEntry>, S
             let review_time = row[0].as_i64().unwrap_or(0);
             let card_id = row[1].as_i64().unwrap_or(0);
             let button = row[3].as_i64().unwrap_or(0) as i32;
+            let review_type = row[8].as_i64().unwrap_or(0) as i32;
             entries.push(DeckReviewEntry {
                 review_time,
                 card_id,
                 button_pressed: button,
+                review_type,
             });
         }
     }

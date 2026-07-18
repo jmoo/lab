@@ -1,9 +1,9 @@
 mod anki;
 
-use chrono::{Local, TimeZone, Timelike};
+use chrono::{Duration, Local, NaiveDate, TimeZone, Timelike};
 use clap::{Parser, Subcommand};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::process;
 
 /// Hour of local time at which Anki rolls over to a new "study day" (Anki's default).
@@ -32,6 +32,12 @@ enum Cmd {
         /// Also fetch full card info
         #[arg(short, long)]
         info: bool,
+        /// Emit only the match count ({"count": N})
+        #[arg(short, long)]
+        count: bool,
+        /// Group matches by deck ({deck: count}); counts all matches, ignores --limit
+        #[arg(short, long)]
+        by_deck: bool,
         /// Max results to return
         #[arg(short, long, default_value_t = 100)]
         limit: usize,
@@ -45,9 +51,25 @@ enum Cmd {
     Due {
         /// Deck name (omit for all)
         deck: Option<String>,
+        /// Group due cards by deck ({deck: count}) instead of listing cards
+        #[arg(short, long)]
+        by_deck: bool,
         /// Max results
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
+    },
+    /// Per-day forecast of upcoming load (limit-aware when a deck is given)
+    Forecast {
+        /// Deck name (omit for whole collection; limits only applied with a deck)
+        deck: Option<String>,
+        /// Number of days to project (day 0 = today)
+        #[arg(short, long, default_value_t = 7)]
+        days: u32,
+    },
+    /// New-card queue: unseen pool, daily limit, and how many remain today
+    New {
+        /// Deck name (omit for all)
+        deck: Option<String>,
     },
     /// Find difficult cards (leeches / low ease)
     Hard {
@@ -124,26 +146,40 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             let stats = anki::deck_stats(&decks)?;
             Ok(serde_json::to_value(stats).unwrap())
         }
-        Cmd::Find { query, info, limit } => find_output(&query, info, limit),
+        Cmd::Find {
+            query,
+            info,
+            count,
+            by_deck,
+            limit,
+        } => {
+            if by_deck {
+                let ids = anki::find_cards(&query)?;
+                return group_by_deck(&ids);
+            }
+            if count {
+                return Ok(json!({ "count": anki::count_cards(&query)? }));
+            }
+            find_output(&query, info, limit)
+        }
         Cmd::Cards { ids } => {
             let cards = anki::cards_info(&ids)?;
             let compact: Vec<_> = cards.iter().map(compact_card).collect();
             Ok(serde_json::to_value(compact).unwrap())
         }
-        Cmd::Due { deck, limit } => {
-            let query = match &deck {
-                Some(d) => format!("is:due deck:{d}"),
-                None => "is:due".to_string(),
-            };
+        Cmd::Due { deck, by_deck, limit } => {
+            let query = scoped_query(&deck, "is:due");
             let ids = anki::find_cards(&query)?;
+            if by_deck {
+                return group_by_deck(&ids);
+            }
             let ids: Vec<_> = ids.into_iter().take(limit).collect();
             cards_output(&ids)
         }
+        Cmd::Forecast { deck, days } => forecast(&deck, days),
+        Cmd::New { deck } => new_queue(&deck),
         Cmd::Hard { deck, limit } => {
-            let query = match &deck {
-                Some(d) => format!("(tag:leech OR prop:ease<1.5) -is:new deck:{d}"),
-                None => "(tag:leech OR prop:ease<1.5) -is:new".to_string(),
-            };
+            let query = scoped_query(&deck, "(tag:leech OR prop:ease<1.5) -is:new");
             let ids = anki::find_cards(&query)?;
             let ids: Vec<_> = ids.into_iter().take(limit).collect();
             if ids.is_empty() {
@@ -449,6 +485,220 @@ fn resolve_decks(deck: Option<String>) -> Result<Vec<String>, String> {
     }
 }
 
+/// An Anki search scoped to an optional deck (its whole subtree): `deck:"X" <rest>`,
+/// or just `<rest>` for the whole collection. Quoting the deck handles spaces/`::`.
+fn scoped_query(deck: &Option<String>, rest: &str) -> String {
+    match deck {
+        Some(d) => format!("deck:\"{d}\" {rest}"),
+        None => rest.to_string(),
+    }
+}
+
+/// Decks matching an optional filter: the deck itself plus its subdecks, or all.
+fn target_decks(deck: &Option<String>) -> Result<Vec<String>, String> {
+    let all: Vec<String> =
+        serde_json::from_value(anki::deck_names()?).map_err(|e| e.to_string())?;
+    Ok(match deck {
+        Some(d) => {
+            let prefix = format!("{d}::");
+            all.into_iter()
+                .filter(|name| name == d || name.starts_with(&prefix))
+                .collect()
+        }
+        None => all,
+    })
+}
+
+/// Group a set of card ids by their deck, as `{count, by_deck: {deck: n}}`.
+fn group_by_deck(ids: &[i64]) -> Result<serde_json::Value, String> {
+    if ids.is_empty() {
+        return Ok(json!({"count": 0, "by_deck": {}}));
+    }
+    let cards = anki::cards_info(ids)?;
+    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+    for c in &cards {
+        *counts.entry(c.deck_name.clone()).or_default() += 1;
+    }
+    Ok(json!({"count": cards.len(), "by_deck": counts}))
+}
+
+/// The current study day as a local date (honors the rollover hour).
+fn study_today() -> NaiveDate {
+    Local
+        .timestamp_millis_opt(today_start_ms())
+        .single()
+        .expect("valid day start")
+        .date_naive()
+}
+
+/// study-today + `offset` days, as `YYYY-MM-DD`.
+fn date_offset(offset: i64) -> String {
+    (study_today() + Duration::days(offset))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+/// Per-day projection of upcoming review + new-card load.
+///
+/// With a deck we read its option-group limits (`getDeckConfig`) and clamp: reviews
+/// are capped at rev/day with the overflow rolling forward as backlog, and new cards
+/// are introduced up to new/day until the unseen pool empties. Without a deck we
+/// can't know which limits apply, so counts are the raw scheduled totals (Anki's
+/// "Future Due"). Approximation: new cards introduced today graduate into reviews on
+/// later days; that feedback isn't simulated, so far-out reviews are slight
+/// underestimates.
+fn forecast(deck: &Option<String>, days: u32) -> Result<serde_json::Value, String> {
+    let limits = match deck {
+        Some(d) => Some(anki::deck_limits(d)?),
+        None => None,
+    };
+    let unseen_total = anki::count_cards(&scoped_query(deck, "is:new -is:suspended"))? as i64;
+
+    // Scheduled reviews per day: day 0 = everything due now (incl. overdue backlog),
+    // later days = cards due exactly that many days out.
+    let mut scheduled = Vec::with_capacity(days as usize);
+    for d in 0..days as i64 {
+        let q = if d == 0 {
+            "is:due".to_string()
+        } else {
+            format!("prop:due={d}")
+        };
+        scheduled.push(anki::count_cards(&scoped_query(deck, &q))? as i64);
+    }
+
+    let caps = limits
+        .as_ref()
+        .map(|l| (l.new_per_day as i64, l.rev_per_day as i64));
+    // New cards already introduced today eat into today's new allowance, so day 0's
+    // new intake is capped at what's left (only relevant when limits apply).
+    let introduced_today = if limits.is_some() {
+        new_introduced_today(deck)? as i64
+    } else {
+        0
+    };
+    let (loads, remaining_new) =
+        simulate_forecast(&scheduled, unseen_total, caps, introduced_today);
+
+    let mut sum_new = 0i64;
+    let mut sum_rev = 0i64;
+    let rows: Vec<_> = loads
+        .iter()
+        .enumerate()
+        .map(|(d, load)| {
+            sum_new += load.new;
+            sum_rev += load.reviews;
+            json!({
+                "day": d,
+                "date": date_offset(d as i64),
+                "new": load.new,
+                "reviews": load.reviews,
+                "total": load.new + load.reviews,
+                "backlog": load.backlog,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "deck": deck,
+        "days": days,
+        "limits_applied": limits.is_some(),
+        "new_per_day": limits.as_ref().map(|l| l.new_per_day),
+        "rev_per_day": limits.as_ref().map(|l| l.rev_per_day),
+        "unseen_pool": unseen_total,
+        "new_pool_remaining_after": remaining_new,
+        "totals": {"new": sum_new, "reviews": sum_rev, "cards": sum_new + sum_rev},
+        "forecast": rows,
+    }))
+}
+
+struct DayLoad {
+    new: i64,
+    reviews: i64,
+    backlog: i64,
+}
+
+/// Pure forecast simulation. Given per-day scheduled review counts, the unseen new
+/// pool, optional `(new_per_day, rev_per_day)` caps, and how many new cards were
+/// already introduced today: reviews each day are clamped to the review cap with the
+/// overflow rolling forward as backlog, and new cards are introduced up to the new cap
+/// until the pool empties — with day 0's new allowance reduced by `introduced_today`.
+/// Without caps, reviews pass through unclamped and no new cards are attributed.
+/// Returns the per-day loads and the new pool left over. Kept pure (no I/O) so the
+/// clamp/rollover logic is testable.
+fn simulate_forecast(
+    scheduled: &[i64],
+    unseen: i64,
+    caps: Option<(i64, i64)>,
+    introduced_today: i64,
+) -> (Vec<DayLoad>, i64) {
+    let mut remaining_new = unseen;
+    let mut carry = 0i64;
+    let loads = scheduled
+        .iter()
+        .enumerate()
+        .map(|(day, &sched)| {
+            let (reviews, new_intro) = match caps {
+                Some((new_per_day, rev_per_day)) => {
+                    let pending = carry + sched;
+                    let reviews = pending.min(rev_per_day);
+                    carry = pending - reviews;
+                    // Day 0's allowance is what's left after today's introductions.
+                    let new_cap = if day == 0 {
+                        (new_per_day - introduced_today).max(0)
+                    } else {
+                        new_per_day
+                    };
+                    let new_intro = remaining_new.min(new_cap);
+                    remaining_new -= new_intro;
+                    (reviews, new_intro)
+                }
+                None => (sched, 0),
+            };
+            DayLoad {
+                new: new_intro,
+                reviews,
+                backlog: carry,
+            }
+        })
+        .collect();
+    (loads, remaining_new)
+}
+
+/// New-card queue snapshot: unseen pool, plus (with a deck) the per-day new limit
+/// and how many may still be introduced today.
+fn new_queue(deck: &Option<String>) -> Result<serde_json::Value, String> {
+    let unseen = anki::count_cards(&scoped_query(deck, "is:new -is:suspended"))?;
+    let introduced_today = new_introduced_today(deck)?;
+
+    let mut out = json!({
+        "deck": deck,
+        "unseen": unseen,
+        "introduced_today": introduced_today,
+    });
+    if let Some(d) = deck {
+        let limits = anki::deck_limits(d)?;
+        let remaining = (limits.new_per_day as i64 - introduced_today as i64).max(0);
+        out["new_per_day"] = json!(limits.new_per_day);
+        out["remaining_today"] = json!(remaining);
+    }
+    Ok(out)
+}
+
+/// Distinct cards whose first study (revlog type 0 = learn) happened today —
+/// i.e. new cards introduced in the current study day.
+fn new_introduced_today(deck: &Option<String>) -> Result<usize, String> {
+    let today_start = today_start_ms();
+    let mut introduced: HashSet<i64> = HashSet::new();
+    for name in target_decks(deck)? {
+        for rev in anki::card_reviews(&name, today_start)? {
+            if rev.review_type == 0 {
+                introduced.insert(rev.card_id);
+            }
+        }
+    }
+    Ok(introduced.len())
+}
+
 /// Produce a compact card representation for minimal token output
 fn compact_card(card: &anki::CardInfo) -> serde_json::Value {
     let mut fields = BTreeMap::new();
@@ -580,5 +830,48 @@ mod tests {
         // A review one ms before the day's start belongs to the previous study day.
         let start = today_start_ms();
         assert_ne!(review_date(start), review_date(start - 1));
+    }
+
+    #[test]
+    fn forecast_clamps_reviews_and_rolls_backlog_forward() {
+        // 200 due today, cap 120/day: 120 shown, 80 rolls to tomorrow (+50 = 130,
+        // clamp to 120, 10 rolls), then day 2 (10 + 0) clears under cap.
+        let (loads, _) = simulate_forecast(&[200, 50, 0], 0, Some((0, 120)), 0);
+        assert_eq!(loads[0].reviews, 120);
+        assert_eq!(loads[0].backlog, 80);
+        assert_eq!(loads[1].reviews, 120);
+        assert_eq!(loads[1].backlog, 10);
+        assert_eq!(loads[2].reviews, 10);
+        assert_eq!(loads[2].backlog, 0);
+    }
+
+    #[test]
+    fn forecast_introduces_new_up_to_cap_until_pool_empties() {
+        // 25 unseen, 20/day, none introduced yet: 20 then 5 then 0; pool ends empty.
+        let (loads, remaining) = simulate_forecast(&[0, 0, 0], 25, Some((20, 120)), 0);
+        assert_eq!(loads[0].new, 20);
+        assert_eq!(loads[1].new, 5);
+        assert_eq!(loads[2].new, 0);
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn forecast_day0_new_allowance_reduced_by_cards_already_introduced() {
+        // 20/day cap, 15 already introduced today → only 5 more today, full 20 after.
+        let (loads, _) = simulate_forecast(&[0, 0], 100, Some((20, 120)), 15);
+        assert_eq!(loads[0].new, 5);
+        assert_eq!(loads[1].new, 20);
+        // Over-cap introductions today don't produce negative allowance.
+        let (over, _) = simulate_forecast(&[0], 100, Some((20, 120)), 25);
+        assert_eq!(over[0].new, 0);
+    }
+
+    #[test]
+    fn forecast_without_caps_passes_reviews_through_and_skips_new() {
+        let (loads, remaining) = simulate_forecast(&[161, 60], 500, None, 0);
+        assert_eq!(loads[0].reviews, 161);
+        assert_eq!(loads[0].new, 0);
+        assert_eq!(loads[0].backlog, 0);
+        assert_eq!(remaining, 500);
     }
 }
