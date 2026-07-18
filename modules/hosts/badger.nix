@@ -12,7 +12,7 @@
               mkdir -p "$HOME/.shortcuts" "$HOME/.termux/boot"
 
               # Real file — Termux can't follow symlinks into /nix/store
-              install -m 755 ${../scripts/proot-badger.bash} "$HOME/.shortcuts/proot-badger"
+              install -m 755 ${../../scripts/proot-badger.bash} "$HOME/.shortcuts/proot-badger"
 
               printf '%s\n' \
                 '#!/data/data/com.termux/files/usr/bin/bash' \

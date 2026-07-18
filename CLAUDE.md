@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 NixOS / nix-darwin config for multiple machines, on **flake-parts** with
-`denful/import-tree` auto-importing every file under `modules/` and `hosts/`.
+`denful/import-tree` recursively auto-importing every `.nix` under `modules/`.
 
 > **This is a public, open-source repo.** Keep personal information, secrets, and
 > Claude's persistent memory out of it — those belong in the private `jmoo/notes`
@@ -17,7 +17,7 @@ NixOS / nix-darwin config for multiple machines, on **flake-parts** with
 | meerkat | NixOS (Asahi) | aarch64-linux | Apple Silicon Linux; pinned nixpkgs (unstable kernel-panics) |
 | axolotl | NixOS | x86_64-linux | `nixosModules.axolotl` only, no live config |
 
-`meerkat` is one host (`hosts/meerkat.nix`) enabling two platforms (`asahi`, `darwin`), each with its own `module` (system) and `home` (home-manager).
+`meerkat` is one host (`modules/hosts/meerkat.nix`) enabling two platforms (`asahi`, `darwin`), each with its own `module` (system) and `home` (home-manager).
 
 ## Commands
 
@@ -34,7 +34,7 @@ NixOS / nix-darwin config for multiple machines, on **flake-parts** with
 (nixpkgs.lib.extend (import ./lib.nix inputs)).mkFlake { inherit inputs; } { }
 ```
 
-`lib.nix` extends `nixpkgs.lib` with a `lab` helper set and defines `mkFlake`, which runs `flake-parts.lib.mkFlake`, `import-tree`s `modules/` + `hosts/` (every `.nix` is a flake-parts module — no central import list), and exposes the extended lib to every module as `_module.args.lib'`.
+`lib.nix` extends `nixpkgs.lib` with a `lab` helper set and defines `mkFlake`, which runs `flake-parts.lib.mkFlake`, `import-tree`s `modules/` (every `.nix` is a flake-parts module — no central import list), and exposes the extended lib to every module as `_module.args.lib'`.
 
 ### The `lab.hosts` model
 
@@ -89,7 +89,7 @@ modules/               # flake-parts modules, auto-imported
                        #     hyprpolkitagent/waybar + .conf/.json/.css assets
   devshell.nix         #   perSystem devShells.default (Rust toolchain for crates/)
   iterm2/              #   iterm2 + iterm2.plist
-hosts/                 # one file per host, auto-imported
+  hosts/               #   one file per host (auto-imported like any module)
 keys/                  # ssh/nix pubkeys (builtins.readFile)
 scripts/               # shell scripts auto-packaged by overlay.nix via lib.lab.mkScripts
 crates/                # Rust Cargo workspace; each crate → a package via lib.lab.mkRustCrate
@@ -124,7 +124,7 @@ Under the hood `mkRustCrate` uses `rustPlatform.buildRustPackage` over the whole
 ### Adding things
 
 - **Feature:** create `modules/<name>.nix` per the pattern (toggle via `mkHostModule`, gate on enable, push with the right helper), then set `lab.hosts.<host>.<name>.enable = true`. No registration — `import-tree` finds it.
-- **Host:** create `hosts/<name>.nix` with `user`, `source`, cross-platform `home`, feature toggles, and per-platform `enable`/`system`/`module`/`home`. Hardware/disk/user config goes inline in `<platform>.module`.
+- **Host:** create `modules/hosts/<name>.nix` with `user`, `source`, cross-platform `home`, feature toggles, and per-platform `enable`/`system`/`module`/`home`. Hardware/disk/user config goes inline in `<platform>.module`.
 - **Crate:** add a dir under `crates/` with its `Cargo.toml` + `src/`, add it to the workspace `members`, and refresh `crates/Cargo.lock` (`cargo build`). It's auto-packaged as `pkgs.<package.name>` — no overlay edit. Add `<name>` to `flake.nix`'s `perSystem.packages` only if you want a `nix build .#<name>` output.
 
 ## Code style

@@ -196,7 +196,6 @@ in
     flake-parts.lib.mkFlake args' (_: {
       imports = [
         (import-tree ./modules)
-        (import-tree ./hosts)
         module
       ];
 
