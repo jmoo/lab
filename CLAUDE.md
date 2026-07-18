@@ -16,6 +16,7 @@ NixOS / nix-darwin config for multiple machines, on **flake-parts** with
 | meerkat | nix-darwin | aarch64-darwin | macOS on Apple Silicon |
 | meerkat | NixOS (Asahi) | aarch64-linux | Apple Silicon Linux; pinned nixpkgs (unstable kernel-panics) |
 | axolotl | NixOS | x86_64-linux | `nixosModules.axolotl` only, no live config |
+| badger | home-manager only | aarch64-linux | Termux/Android (Boox Note Max); emits `homeConfigurations.badger` |
 
 `meerkat` is one host (`modules/hosts/meerkat.nix`) enabling two platforms (`asahi`, `darwin`), each with its own `module` (system) and `home` (home-manager).
 
@@ -76,19 +77,18 @@ Notes:
 
 ```
 flake.nix              # calls lib.nix:mkFlake
-lib.nix                # mkFlake + lab.{mkHostModule,mkHostPlatform,mkHostOptions,forLinux,forAll,homeLinux,homeDarwin,mkScript,mkScripts,mkRustCrate,mkRustCrates}
-overlay.nix            # global overlay (nudelta, vscode-nix-extensions, ulauncher-uwsm, scripts/, crates/)
+lib.nix                # mkFlake + the `lab` helper set (push helpers, mkScript(s), mkRustCrate(s), …)
+overlay.nix            # global overlay (custom pkgs + auto-packaged scripts/ and crates/)
 modules/               # flake-parts modules, auto-imported
   default.nix          #   lab.hosts base options
   {nixos,asahi,darwin}.nix  # platforms + their *{Configurations,Modules} outputs
   nixpkgs.nix          #   nixpkgs.{config,overlays} options + systems + perSystem pkgs/legacyPackages
   treefmt.nix          #   formatter (nixfmt-tree)
   {nix,locale}.nix     #   always-on shared config (nix daemon; i18n/timezone)
-  <feature>.nix        #   ghostty, shell, direnv, vscode, theme, ssh, tailscale
-  hyprland/            #   hyprland desktop: default.nix + greetd/ulauncher/hyprlock/
-                       #     hyprpolkitagent/waybar + .conf/.json/.css assets
+  <feature>.nix        #   one file per feature toggle (ghostty, shell, …)
+  <feature>/           #   multi-file features carry their non-.nix assets alongside
+                       #     (e.g. hyprland/ with its .conf/.json/.css)
   devshell.nix         #   perSystem devShells.default (Rust toolchain for crates/)
-  iterm2/              #   iterm2 + iterm2.plist
   hosts/               #   one file per host (auto-imported like any module)
 keys/                  # ssh/nix pubkeys (builtins.readFile)
 scripts/               # shell scripts auto-packaged by overlay.nix via lib.lab.mkScripts
@@ -138,7 +138,7 @@ Under the hood `mkRustCrate` uses `rustPlatform.buildRustPackage` over the whole
 
 - **Refactors must be behavior-preserving — verify it.** A pure restructure should leave the build derivations byte-identical. Capture before/after and diff:
   `nix eval --raw .#nixosConfigurations.<h>.config.system.build.toplevel.drvPath` (and `.#darwinConfigurations.<h>.system.drvPath`). Equal drvPath ⇒ provably no change. For intentional changes, `nix run nixpkgs#nix-diff -- <old> <new>` shows what moved.
-- After editing, sanity-check evaluation of all configs (lynx, meerkat asahi+darwin) and that `nixosModules.axolotl` still resolves.
+- After editing, sanity-check evaluation of every config — the `nixosConfigurations` / `darwinConfigurations` / `homeConfigurations` (e.g. `badger`) — and that `nixosModules.axolotl` still resolves.
 - **Commit in small, logical commits, and only when asked.** Branch off `master` first if needed.
 
 ## Key details
