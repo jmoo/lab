@@ -30,6 +30,7 @@ in
         { pkgs, ... }:
         {
           home.packages = [
+            pkgs.claude-loop
             pkgs.deploy-badger
             pkgs.gh
             pkgs.jq
