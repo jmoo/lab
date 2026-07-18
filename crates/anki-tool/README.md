@@ -82,23 +82,35 @@ nix run .#anki-tool -- new "日本語::2 - Genki 1"
 nix run .#anki-tool -- new                       # collection-wide: {"unseen":...,"introduced_today":...}
 ```
 
-### `hard [DECK]` — Difficult cards (scheduler-aware)
+### `hard [DECK]` — Struggling cards (scheduler-aware, multi-lens)
 
-Finds struggling cards. The "hard" signal depends on the active scheduler, which is
-**auto-detected** (reported as `scheduler` in the output):
+Finds struggling cards through one of three **lenses**, each answering a different
+question. The scheduler is auto-detected (reported as `scheduler`); the active lens is
+reported as `lens`.
 
-- **SM-2:** leeches or ease factor below 1.5, sorted by ease (lowest first).
-- **FSRS:** leeches or FSRS difficulty above `--min-difficulty` (default 0.8), sorted by
-  lapses (worst first) — under FSRS the SM-2 ease is stale, so difficulty is the real
-  signal.
+| `--by` | Question | Signal | Schedulers |
+|--------|----------|--------|------------|
+| `retrievability` | *about to forget now* | FSRS `prop:r` < `--max-retrievability` (0.9) | FSRS only |
+| `recent` | *actively failing lately* | Again-rate over `--days` (14) from the revlog | any |
+| `difficulty` | *intrinsically hard* | FSRS `prop:d` > `--min-difficulty` (0.8); SM-2 ease < 1.5 | any |
 
-Override detection with `--scheduler {auto,sm2,fsrs}`.
+**Default (`--by auto`) reports current state**: `retrievability` on FSRS, `recent` on
+SM-2 (which has no retrievability). This is almost always what "what am I struggling
+with?" means — the student's *current* state, not their history. Reach for `recent` or
+`difficulty` explicitly when you want the trend or the intrinsic view.
+
+Results are ranked worst-first and annotated per lens (`r_under` = retrievability upper
+bound; `recent_again`/`recent_reviews` = the failing tally). Override detection with
+`--scheduler {auto,sm2,fsrs}`.
 
 ```bash
-nix run .#anki-tool -- hard
-nix run .#anki-tool -- hard "Japanese::Vocab" --limit 20
-# {"count":5,"scheduler":"fsrs","cards":[{"id":456,"fields":{"Front":"難しい","Back":"difficult"},...}]}
-nix run .#anki-tool -- hard "日本語" --min-difficulty 0.9   # only the hardest (FSRS)
+nix run .#anki-tool -- hard "日本語"                       # current state (retrievability on FSRS)
+# {"count":12,"lens":"retrievability","scheduler":"fsrs","cards":[{...,"english":"east","r_under":0.6},...]}
+
+nix run .#anki-tool -- hard "日本語" --by recent --days 14  # what you've been failing
+# {...,"lens":"recent","cards":[{...,"english":"go straight","recent_again":17,"recent_reviews":23},...]}
+
+nix run .#anki-tool -- hard "日本語" --by difficulty        # intrinsically hard (historical)
 ```
 
 ### `find <QUERY>` — Search cards

@@ -28,19 +28,42 @@ it's been awhile and work through updating your memory and current study state t
 
 **Key commands:**
 ```
-anki-tool overview              # daily snapshot (reviewed today, due, new, recent history)
+anki-tool overview              # daily snapshot (scheduler, reviewed today, due, new, history)
 anki-tool session [DECK]        # today's review recap (lapsed / hard / victories)
 anki-tool progress <DECK>       # overall progress (mature/young/unseen, per-subdeck)
 anki-tool due [DECK] --limit N  # cards due for review
-anki-tool hard [DECK] --limit N # struggling cards (leeches / low ease)
-anki-tool find "QUERY"          # search cards (IDs only)
+anki-tool forecast [DECK] --days N  # per-day upcoming due load (current state)
+anki-tool new [DECK]            # new-card queue (unseen, introduced today, remaining)
+anki-tool hard [DECK] --by LENS # struggling cards — see lenses below
+anki-tool find "QUERY"          # search cards (IDs only; --count, --by-deck)
 anki-tool find "QUERY" --info   # search cards (full details)
 anki-tool cards ID...           # card details by ID
-anki-tool reviews ID...         # review history for cards
 anki-tool sync                  # sync with AnkiWeb
 ```
 
 The live Anki data is always the source of truth — check it before trusting memory.
+
+## Identifying struggling cards — pick the right lens
+
+**A tutor adapts to the student's _current_ state.** When the user asks what they're
+struggling with, they almost always mean *right now* — not their history. `hard` offers
+three lenses; **default to current state.**
+
+- **`hard [DECK]` (default = current state)** → what they're *about to forget now*
+  (FSRS retrievability). This is the right answer to "what am I struggling with?" 99% of
+  the time. Use it first.
+- **`hard [DECK] --by recent`** → what they've been *actively failing lately* (Again-rate
+  over recent reviews). A behavioral *trend* — good for "what's been giving me trouble
+  this week" and for confirming a current-state finding with hard evidence.
+- **`hard [DECK] --by difficulty`** → *intrinsically/historically hard* cards (FSRS
+  difficulty, or SM-2 ease). **Backward-looking** — a card can be high-difficulty yet
+  fully recovered. Only use when the user explicitly wants historical/hardest-ever.
+
+**Cross-check before calling something a struggle:** a card that is high-difficulty but
+*high-retrievability* is a **past struggle the user has beaten** — report it as a win
+(a victory), not a current weakness. Don't let stale difficulty/lapse history
+masquerade as a present problem. (`overview` reports the active `scheduler`; under FSRS
+the SM-2 `ease` field is frozen and meaningless — ignore it.)
 
 ## Adjusting to the user's level
 
@@ -68,7 +91,8 @@ the ones identified under "Deck structure" or recalled from memory.
 
 ### When the user wants to study or review
 1. Check what's due: `anki-tool due "<deck>" --limit 20`.
-2. Check hard cards: `anki-tool hard "<deck>" --limit 10`.
+2. Check struggling cards: `anki-tool hard "<deck>" --limit 10` (current-state lens; see
+   "Identifying struggling cards" above for when to switch lenses).
 3. Focus on their weakest areas first.
 4. Don't just show the answer — teach the concept: break down word components, give
    mnemonics, show the word in fresh example sentences, connect it to words they

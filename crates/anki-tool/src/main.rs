@@ -15,6 +15,31 @@ enum SchedulerArg {
     Fsrs,
 }
 
+/// Which "struggle" signal `hard` selects on. `Auto` picks the most current-state
+/// signal available: retrievability on FSRS, recent-failure on SM-2.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Lens {
+    /// Most current-state signal for the active scheduler (default).
+    Auto,
+    /// About to forget: low FSRS retrievability (`prop:r`). FSRS only.
+    Retrievability,
+    /// Actively failing: high Again-rate in the recent revlog. Any scheduler.
+    Recent,
+    /// Intrinsically hard: FSRS difficulty / SM-2 low ease. Any scheduler.
+    Difficulty,
+}
+
+impl Lens {
+    fn name(self) -> &'static str {
+        match self {
+            Lens::Auto => "auto",
+            Lens::Retrievability => "retrievability",
+            Lens::Recent => "recent",
+            Lens::Difficulty => "difficulty",
+        }
+    }
+}
+
 /// Hour of local time at which Anki rolls over to a new "study day" (Anki's default).
 const ROLLOVER_HOUR: i64 = 4;
 
@@ -80,16 +105,25 @@ enum Cmd {
         /// Deck name (omit for all)
         deck: Option<String>,
     },
-    /// Find difficult cards (leeches; low ease on SM-2, high difficulty on FSRS)
+    /// Struggling cards. Default lens is current-state (retrievability on FSRS)
     Hard {
         /// Deck name (omit for all)
         deck: Option<String>,
+        /// Which struggle signal to select on
+        #[arg(long, value_enum, default_value_t = Lens::Auto)]
+        by: Lens,
         /// Scheduler to assume (auto-detected by default)
         #[arg(long, value_enum, default_value_t = SchedulerArg::Auto)]
         scheduler: SchedulerArg,
-        /// FSRS difficulty threshold: cards with prop:d above this count as hard
+        /// retrievability lens: cards with prop:r below this are "about to forget"
+        #[arg(long, default_value_t = 0.9)]
+        max_retrievability: f64,
+        /// difficulty lens (FSRS): cards with prop:d above this count as hard
         #[arg(long, default_value_t = 0.8)]
         min_difficulty: f64,
+        /// recent lens: look back this many days in the revlog
+        #[arg(long, default_value_t = 14)]
+        days: u32,
         /// Max results
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
@@ -195,35 +229,24 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
         Cmd::New { deck } => new_queue(&deck),
         Cmd::Hard {
             deck,
+            by,
             scheduler,
+            max_retrievability,
             min_difficulty,
+            days,
             limit,
         } => {
             let scheduler = resolve_scheduler(scheduler)?;
-            let query = hard_query(scheduler, &deck, min_difficulty);
-            let ids = anki::find_cards(&query)?;
-            let ids: Vec<_> = ids.into_iter().take(limit).collect();
-            if ids.is_empty() {
-                return Ok(json!({"count": 0, "scheduler": scheduler.name(), "cards": []}));
-            }
-            let cards = anki::cards_info(&ids)?;
-            let mut compact: Vec<_> = cards.iter().map(compact_card).collect();
-            match scheduler {
-                // SM-2: hardest = lowest ease.
-                anki::Scheduler::Sm2 => compact.sort_by(|a, b| {
-                    let ea = a.get("ease").and_then(|v| v.as_i64()).unwrap_or(9999);
-                    let eb = b.get("ease").and_then(|v| v.as_i64()).unwrap_or(9999);
-                    ea.cmp(&eb)
-                }),
-                // FSRS: ease is stale, so rank worst offenders by lapses (meaningful
-                // under both schedulers; per-card difficulty isn't in cardsInfo).
-                anki::Scheduler::Fsrs => compact.sort_by(|a, b| {
-                    let la = a.get("lapses").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let lb = b.get("lapses").and_then(|v| v.as_i64()).unwrap_or(0);
-                    lb.cmp(&la)
-                }),
-            }
-            Ok(json!({"count": compact.len(), "scheduler": scheduler.name(), "cards": compact}))
+            let lens = resolve_lens(by, scheduler)?;
+            hard(
+                scheduler,
+                lens,
+                &deck,
+                max_retrievability,
+                min_difficulty,
+                days,
+                limit,
+            )
         }
         Cmd::Reviews { ids } => {
             let reviews = anki::get_reviews(&ids)?;
@@ -534,15 +557,175 @@ fn resolve_scheduler(arg: SchedulerArg) -> Result<anki::Scheduler, String> {
     }
 }
 
-/// The search selecting "hard"/struggling cards for the active scheduler. SM-2 keys on
-/// low ease; FSRS keys on high difficulty (`prop:d`), since ease is stale there. Leeches
-/// count on both. Excludes new cards.
-fn hard_query(scheduler: anki::Scheduler, deck: &Option<String>, min_difficulty: f64) -> String {
+/// Resolve the `Auto` lens to the most current-state signal the scheduler supports:
+/// retrievability on FSRS, recent-failure on SM-2 (which has no retrievability). An
+/// explicit `retrievability` lens on SM-2 is an error.
+fn resolve_lens(by: Lens, scheduler: anki::Scheduler) -> Result<Lens, String> {
+    match (by, scheduler) {
+        (Lens::Auto, anki::Scheduler::Fsrs) => Ok(Lens::Retrievability),
+        (Lens::Auto, anki::Scheduler::Sm2) => Ok(Lens::Recent),
+        (Lens::Retrievability, anki::Scheduler::Sm2) => {
+            Err("retrievability lens requires FSRS; this collection is SM-2 (try --by recent)".into())
+        }
+        (other, _) => Ok(other),
+    }
+}
+
+/// Struggling cards under a given lens. Each lens ranks a different question:
+/// retrievability = about to forget now, recent = actively failing lately, difficulty
+/// = intrinsically hard. Excludes new cards. Output carries the lens + scheduler so the
+/// caller knows which signal it's seeing.
+fn hard(
+    scheduler: anki::Scheduler,
+    lens: Lens,
+    deck: &Option<String>,
+    max_retrievability: f64,
+    min_difficulty: f64,
+    days: u32,
+    limit: usize,
+) -> Result<serde_json::Value, String> {
+    // Each lens produces card ids in ranked order (worst first) plus per-card
+    // annotations to merge into the output, keyed by card id.
+    let mut annotations: HashMap<i64, serde_json::Value> = HashMap::new();
+    let ranked_ids: Vec<i64> = match lens {
+        Lens::Retrievability => retrievability_ranked(deck, max_retrievability)?
+            .into_iter()
+            .map(|(id, under)| {
+                annotations.insert(id, json!({ "r_under": under }));
+                id
+            })
+            .collect(),
+        Lens::Recent => recent_struggles(deck, days)?
+            .into_iter()
+            .map(|(id, again, total)| {
+                annotations.insert(id, json!({ "recent_again": again, "recent_reviews": total }));
+                id
+            })
+            .collect(),
+        Lens::Difficulty => difficulty_ranked(scheduler, deck, min_difficulty)?,
+        Lens::Auto => unreachable!("Auto is resolved before hard()"),
+    };
+
+    let ids: Vec<i64> = ranked_ids.into_iter().take(limit).collect();
+    if ids.is_empty() {
+        return Ok(json!({
+            "count": 0, "lens": lens.name(), "scheduler": scheduler.name(), "cards": []
+        }));
+    }
+
+    // cardsInfo returns cards in arbitrary order; re-emit them in the lens's ranking.
+    let cards = anki::cards_info(&ids)?;
+    let by_id: HashMap<i64, &anki::CardInfo> = cards.iter().map(|c| (c.card_id, c)).collect();
+    let compact: Vec<serde_json::Value> = ids
+        .iter()
+        .filter_map(|id| by_id.get(id))
+        .map(|c| {
+            let mut v = compact_card(c);
+            if let Some(extra) = annotations.get(&c.card_id).and_then(|a| a.as_object()) {
+                for (k, val) in extra {
+                    v[k.clone()] = val.clone();
+                }
+            }
+            v
+        })
+        .collect();
+
+    Ok(json!({
+        "count": compact.len(),
+        "lens": lens.name(),
+        "scheduler": scheduler.name(),
+        "cards": compact,
+    }))
+}
+
+/// Intrinsically-hard cards, ranked. SM-2 keys on low ease (leech or ease<1.5), FSRS on
+/// high difficulty (leech or prop:d over the threshold). Ranked worst-first: by ease
+/// ascending on SM-2, by lapses descending on FSRS (ease is stale there).
+fn difficulty_ranked(
+    scheduler: anki::Scheduler,
+    deck: &Option<String>,
+    min_difficulty: f64,
+) -> Result<Vec<i64>, String> {
     let signal = match scheduler {
         anki::Scheduler::Sm2 => "tag:leech OR prop:ease<1.5".to_string(),
         anki::Scheduler::Fsrs => format!("tag:leech OR prop:d>{min_difficulty}"),
     };
-    scoped_query(deck, &format!("({signal}) -is:new"))
+    let ids = anki::find_cards(&scoped_query(deck, &format!("({signal}) -is:new")))?;
+    if ids.is_empty() {
+        return Ok(ids);
+    }
+    let cards = anki::cards_info(&ids)?;
+    let mut cards: Vec<&anki::CardInfo> = cards.iter().collect();
+    match scheduler {
+        anki::Scheduler::Sm2 => {
+            cards.sort_by_key(|c| c.factor.unwrap_or(i32::MAX));
+        }
+        anki::Scheduler::Fsrs => {
+            cards.sort_by_key(|c| std::cmp::Reverse(c.lapses));
+        }
+    }
+    Ok(cards.into_iter().map(|c| c.card_id).collect())
+}
+
+/// Cards below the retrievability threshold, ranked most-at-risk first. Since
+/// `cardsInfo` doesn't return per-card `r`, we approximate each card's r by the
+/// smallest threshold bucket it falls into (a lower bucket = lower r = more at risk).
+/// Returns `(card_id, r_under)` where `r_under` is that bucket's upper bound.
+fn retrievability_ranked(
+    deck: &Option<String>,
+    max_retrievability: f64,
+) -> Result<Vec<(i64, f64)>, String> {
+    // Ascending edges up to (and including) the requested max. Smallest first so the
+    // first bucket a card appears in is its tightest upper bound on r.
+    let mut edges: Vec<f64> = [0.5, 0.6, 0.7, 0.8, 0.9]
+        .into_iter()
+        .filter(|&e| e < max_retrievability)
+        .collect();
+    edges.push(max_retrievability);
+
+    let mut bucket: HashMap<i64, f64> = HashMap::new();
+    for &e in &edges {
+        let q = scoped_query(deck, &format!("prop:r<{e} -is:new"));
+        for id in anki::find_cards(&q)? {
+            bucket.entry(id).or_insert(e);
+        }
+    }
+    let mut v: Vec<(i64, f64)> = bucket.into_iter().collect();
+    v.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(v)
+}
+
+/// Cards with at least one Again (button 1) in the last `days`, ranked by Again-rate
+/// (then Again-count). Mines the deck revlog via `cardReviews`. Returns
+/// `(card_id, again_count, total_reviews)`.
+fn recent_struggles(deck: &Option<String>, days: u32) -> Result<Vec<(i64, u32, u32)>, String> {
+    let start_ms = today_start_ms() - (days as i64 * 86400 * 1000);
+    let mut agg: HashMap<i64, (u32, u32)> = HashMap::new();
+    for name in target_decks(deck)? {
+        for rev in anki::card_reviews(&name, start_ms)? {
+            let e = agg.entry(rev.card_id).or_default();
+            e.1 += 1;
+            if rev.button_pressed == 1 {
+                e.0 += 1;
+            }
+        }
+    }
+    let mut v: Vec<(i64, u32, u32)> = agg
+        .into_iter()
+        .filter(|(_, (again, _))| *again > 0)
+        .map(|(id, (a, t))| (id, a, t))
+        .collect();
+    v.sort_by(|&(_, aa, ta), &(_, ab, tb)| rank_recent(aa, ta, ab, tb));
+    Ok(v)
+}
+
+/// Ordering for the recent lens: higher Again-rate first, ties broken by Again-count.
+fn rank_recent(aa: u32, ta: u32, ab: u32, tb: u32) -> std::cmp::Ordering {
+    let ra = aa as f64 / ta as f64;
+    let rb = ab as f64 / tb as f64;
+    rb.partial_cmp(&ra)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then(ab.cmp(&aa))
 }
 
 /// Decks matching an optional filter: the deck itself plus its subdecks, or all.
@@ -799,21 +982,30 @@ mod tests {
     }
 
     #[test]
-    fn hard_query_uses_ease_on_sm2_and_difficulty_on_fsrs() {
-        let deck = Some("日本語::2 - Genki 1".to_string());
+    fn auto_lens_is_current_state_per_scheduler() {
+        // FSRS → retrievability (native current state); SM-2 → recent (no r there).
+        assert!(matches!(
+            resolve_lens(Lens::Auto, anki::Scheduler::Fsrs),
+            Ok(Lens::Retrievability)
+        ));
+        assert!(matches!(
+            resolve_lens(Lens::Auto, anki::Scheduler::Sm2),
+            Ok(Lens::Recent)
+        ));
+        // Explicit retrievability on SM-2 is an error; explicit lenses pass through.
+        assert!(resolve_lens(Lens::Retrievability, anki::Scheduler::Sm2).is_err());
+        assert!(matches!(
+            resolve_lens(Lens::Difficulty, anki::Scheduler::Fsrs),
+            Ok(Lens::Difficulty)
+        ));
+    }
 
-        let sm2 = hard_query(anki::Scheduler::Sm2, &deck, 0.8);
-        assert!(sm2.contains("prop:ease<1.5"));
-        assert!(!sm2.contains("prop:d"));
-
-        let fsrs = hard_query(anki::Scheduler::Fsrs, &deck, 0.8);
-        assert!(fsrs.contains("prop:d>0.8"));
-        assert!(!fsrs.contains("prop:ease"));
-
-        // Both scope the deck (quoted) and exclude new cards.
-        for q in [&sm2, &fsrs] {
-            assert!(q.contains("deck:\"日本語::2 - Genki 1\""));
-            assert!(q.contains("-is:new"));
-        }
+    #[test]
+    fn recent_lens_ranks_by_again_rate_then_count() {
+        use std::cmp::Ordering;
+        // 3/4 (0.75) is worse than 1/2 (0.5).
+        assert_eq!(rank_recent(3, 4, 1, 2), Ordering::Less);
+        // Equal rate (2/4 vs 1/2 = 0.5): more absolute Agains ranks first.
+        assert_eq!(rank_recent(2, 4, 1, 2), Ordering::Less);
     }
 }
