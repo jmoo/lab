@@ -165,6 +165,16 @@ nix run .#anki-tool -- overview
 # {"scheduler":"fsrs","reviewed_today":42,"total_due":156,"total_new":300,"total_cards":5000,"deck_count":8,"recent_reviews":[["2025-01-01",35],...]}
 ```
 
+### `history [DECK]` — Review counts by day
+
+Number of reviews done per day over the last N days (default 56), from the revlog.
+Omit the deck for the whole collection. Days with no reviews are omitted.
+
+```bash
+nix run .#anki-tool -- history "日本語" --days 7
+# {"days":[["2026-07-13",167],["2026-07-14",149],...],"total":760}
+```
+
 ### `subdecks <DECK>` — List sub-decks with stats
 
 Shows all sub-decks under a parent deck with their due counts and totals.
@@ -260,7 +270,10 @@ All commands output a single line of JSON. Card objects have this shape:
 }
 ```
 
-- `ease`: 2500 = 250% (Anki's default). Lower = harder.
+- `ease`: SM-2 ease factor (2500 = 250%, lower = harder). **Only meaningful under the
+  SM-2 scheduler** — under FSRS it's a frozen pre-switch value; use the FSRS signals
+  (`prop:d`/`prop:s`/`prop:r`, e.g. via `hard`) instead. Check the active scheduler with
+  `overview`.
 - `interval`: days until next review
 - `lapses`: number of times the card was forgotten
 - `type`: one of `new`, `learning`, `review`, `relearning`
@@ -282,8 +295,11 @@ All commands output a single line of JSON. Card objects have this shape:
 | `rated:N` | Reviewed in last N days |
 | `prop:ivl>N` | Interval greater than N days |
 | `prop:due=N` | Due exactly N days from today (0=today, 1=tomorrow) |
-| `prop:ease<N` | Ease factor less than N (e.g. 1.5) |
+| `prop:ease<N` | SM-2 ease factor less than N (e.g. 1.5) |
 | `prop:lapses>N` | More than N lapses |
+| `prop:d>N` | FSRS difficulty above N (0–1) |
+| `prop:s<N` | FSRS stability below N (days) |
+| `prop:r<N` | FSRS retrievability below N (P(recall) now, 0–1) |
 | `"exact phrase"` | Search for exact text |
 | `-tag:name` | Exclude tag |
 

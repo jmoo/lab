@@ -92,7 +92,7 @@ enum Cmd {
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
     },
-    /// Per-day forecast of upcoming load (limit-aware when a deck is given)
+    /// Per-day count of cards already scheduled to come due (Anki's "Future Due")
     Forecast {
         /// Deck name (omit for whole collection; limits only applied with a deck)
         deck: Option<String>,
