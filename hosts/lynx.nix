@@ -4,6 +4,7 @@ let
 in
 {
   lab.hosts.lynx = {
+    claude.tutor.enable = true;
     direnv.enable = true;
     ghostty.enable = true;
     hyprland = {
