@@ -31,3 +31,4 @@ in
   };
 }
 // lib'.lab.mkScripts final ./scripts
+// lib'.lab.mkRustCrates final ./crates

@@ -4,6 +4,10 @@ let
 in
 {
   lab.hosts.lynx = {
+    claude = {
+      enable = true;
+      skills.sensei.enable = true;
+    };
     direnv.enable = true;
     ghostty.enable = true;
     hyprland = {
@@ -31,7 +35,6 @@ in
             pkgs.opencode-desktop
           ];
           programs = {
-            claude-code.enable = true;
             ghostty.settings.theme = mkForce "Bright Lights";
             yt-dlp.enable = true;
           };
