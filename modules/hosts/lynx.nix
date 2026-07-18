@@ -31,6 +31,8 @@ in
         {
           home.packages = [
             pkgs.deploy-badger
+            pkgs.gh
+            pkgs.jq
             pkgs.opencode
             pkgs.opencode-desktop
           ];
