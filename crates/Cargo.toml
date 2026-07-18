@@ -1,7 +1,6 @@
 [workspace]
 members = [
-  "greeting",
-  "hello-cli",
+  "anki-tool",
 ]
 resolver = "2"
 
@@ -11,3 +10,9 @@ resolver = "2"
 edition = "2021"
 license = "MIT"
 version = "0.1.0"
+
+# Cargo profiles only take effect at the workspace root, so anki-tool's release
+# tuning lives here and applies to every crate.
+[profile.release]
+lto = true
+strip = true

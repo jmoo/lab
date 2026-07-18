@@ -44,7 +44,10 @@
           { pkgs, ... }:
           {
             packages = {
-              inherit (pkgs) greeting hello-cli open-bamboo-networking;
+              inherit (pkgs)
+                anki-tool
+                open-bamboo-networking
+                ;
             };
           };
       };

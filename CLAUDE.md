@@ -114,7 +114,7 @@ A Cargo **workspace** (`crates/Cargo.toml` lists `members`; shared metadata in `
 
 Under the hood `mkRustCrate` uses `rustPlatform.buildRustPackage` over the whole workspace source (so path deps resolve) but scopes to one crate via `cargo -p <name>` — it installs that crate's binaries and runs its tests; a lib crate just gets compiled + tested. Deps are locked in `crates/Cargo.lock` (committed) and pulled via `cargoLock.lockFile`; add external crates by editing a `Cargo.toml` and running `cargo build` to refresh the lock. A crate needing custom build config (extra `buildInputs`, features, runtime wrapping) can be `.overrideAttrs`'d at the use site, or given an explicit `pkgs.<name> = …` in `overlay.nix` (defined after the `// mkRustCrates` merge so it wins). Because every crate shares the workspace as `src`, touching one crate rebuilds the others' packages (fine for a homelab; reach for `crane` if you need per-crate source isolation).
 
-`nix develop` gives a shell with the full Rust toolchain (`modules/devshell.nix`) for `cargo` work outside Nix. Use a crate on a host by adding e.g. `pkgs.hello-cli` to `home.packages` / `environment.systemPackages`.
+`nix develop` gives a shell with the full Rust toolchain (`modules/devshell.nix`) for `cargo` work outside Nix. Use a crate on a host by adding e.g. `pkgs.anki-tool` to `home.packages` / `environment.systemPackages`.
 
 ### Adding things
 
