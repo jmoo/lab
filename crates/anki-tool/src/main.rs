@@ -538,130 +538,45 @@ fn date_offset(offset: i64) -> String {
         .to_string()
 }
 
-/// Per-day projection of upcoming review + new-card load.
+/// Per-day forecast of upcoming review load, projected purely from the CURRENT state
+/// of the collection: for each day it counts the review/learning cards already
+/// scheduled to come due (Anki's "Future Due" graph). Day 0 is everything due now
+/// (including overdue), later days are cards due exactly that many days out.
 ///
-/// With a deck we read its option-group limits (`getDeckConfig`) and clamp: reviews
-/// are capped at rev/day with the overflow rolling forward as backlog, and new cards
-/// are introduced up to new/day until the unseen pool empties. Without a deck we
-/// can't know which limits apply, so counts are the raw scheduled totals (Anki's
-/// "Future Due"). Approximation: new cards introduced today graduate into reviews on
-/// later days; that feedback isn't simulated, so far-out reviews are slight
-/// underestimates.
+/// It deliberately assumes nothing about future study behavior — new cards are not
+/// distributed across days (they only enter the queue if you study them) and nothing
+/// is clamped to daily limits (that would presume you review exactly the cap). The
+/// unseen new pool and the deck's configured limits are reported as context, not
+/// projected. A behavioral study simulation would be a separate, opt-in mode.
 fn forecast(deck: &Option<String>, days: u32) -> Result<serde_json::Value, String> {
-    let limits = match deck {
-        Some(d) => Some(anki::deck_limits(d)?),
-        None => None,
-    };
-    let unseen_total = anki::count_cards(&scoped_query(deck, "is:new -is:suspended"))? as i64;
-
-    // Scheduled reviews per day: day 0 = everything due now (incl. overdue backlog),
-    // later days = cards due exactly that many days out.
-    let mut scheduled = Vec::with_capacity(days as usize);
+    let mut rows = Vec::with_capacity(days as usize);
+    let mut total_due = 0i64;
     for d in 0..days as i64 {
         let q = if d == 0 {
             "is:due".to_string()
         } else {
             format!("prop:due={d}")
         };
-        scheduled.push(anki::count_cards(&scoped_query(deck, &q))? as i64);
+        let due = anki::count_cards(&scoped_query(deck, &q))? as i64;
+        total_due += due;
+        rows.push(json!({"day": d, "date": date_offset(d), "due": due}));
     }
 
-    let caps = limits
-        .as_ref()
-        .map(|l| (l.new_per_day as i64, l.rev_per_day as i64));
-    // New cards already introduced today eat into today's new allowance, so day 0's
-    // new intake is capped at what's left (only relevant when limits apply).
-    let introduced_today = if limits.is_some() {
-        new_introduced_today(deck)? as i64
-    } else {
-        0
+    let unseen = anki::count_cards(&scoped_query(deck, "is:new -is:suspended"))?;
+    let limits = match deck {
+        Some(d) => Some(anki::deck_limits(d)?),
+        None => None,
     };
-    let (loads, remaining_new) =
-        simulate_forecast(&scheduled, unseen_total, caps, introduced_today);
-
-    let mut sum_new = 0i64;
-    let mut sum_rev = 0i64;
-    let rows: Vec<_> = loads
-        .iter()
-        .enumerate()
-        .map(|(d, load)| {
-            sum_new += load.new;
-            sum_rev += load.reviews;
-            json!({
-                "day": d,
-                "date": date_offset(d as i64),
-                "new": load.new,
-                "reviews": load.reviews,
-                "total": load.new + load.reviews,
-                "backlog": load.backlog,
-            })
-        })
-        .collect();
 
     Ok(json!({
         "deck": deck,
         "days": days,
-        "limits_applied": limits.is_some(),
+        "forecast": rows,
+        "total_due": total_due,
+        "unseen": unseen,
         "new_per_day": limits.as_ref().map(|l| l.new_per_day),
         "rev_per_day": limits.as_ref().map(|l| l.rev_per_day),
-        "unseen_pool": unseen_total,
-        "new_pool_remaining_after": remaining_new,
-        "totals": {"new": sum_new, "reviews": sum_rev, "cards": sum_new + sum_rev},
-        "forecast": rows,
     }))
-}
-
-struct DayLoad {
-    new: i64,
-    reviews: i64,
-    backlog: i64,
-}
-
-/// Pure forecast simulation. Given per-day scheduled review counts, the unseen new
-/// pool, optional `(new_per_day, rev_per_day)` caps, and how many new cards were
-/// already introduced today: reviews each day are clamped to the review cap with the
-/// overflow rolling forward as backlog, and new cards are introduced up to the new cap
-/// until the pool empties — with day 0's new allowance reduced by `introduced_today`.
-/// Without caps, reviews pass through unclamped and no new cards are attributed.
-/// Returns the per-day loads and the new pool left over. Kept pure (no I/O) so the
-/// clamp/rollover logic is testable.
-fn simulate_forecast(
-    scheduled: &[i64],
-    unseen: i64,
-    caps: Option<(i64, i64)>,
-    introduced_today: i64,
-) -> (Vec<DayLoad>, i64) {
-    let mut remaining_new = unseen;
-    let mut carry = 0i64;
-    let loads = scheduled
-        .iter()
-        .enumerate()
-        .map(|(day, &sched)| {
-            let (reviews, new_intro) = match caps {
-                Some((new_per_day, rev_per_day)) => {
-                    let pending = carry + sched;
-                    let reviews = pending.min(rev_per_day);
-                    carry = pending - reviews;
-                    // Day 0's allowance is what's left after today's introductions.
-                    let new_cap = if day == 0 {
-                        (new_per_day - introduced_today).max(0)
-                    } else {
-                        new_per_day
-                    };
-                    let new_intro = remaining_new.min(new_cap);
-                    remaining_new -= new_intro;
-                    (reviews, new_intro)
-                }
-                None => (sched, 0),
-            };
-            DayLoad {
-                new: new_intro,
-                reviews,
-                backlog: carry,
-            }
-        })
-        .collect();
-    (loads, remaining_new)
 }
 
 /// New-card queue snapshot: unseen pool, plus (with a deck) the per-day new limit
@@ -832,46 +747,4 @@ mod tests {
         assert_ne!(review_date(start), review_date(start - 1));
     }
 
-    #[test]
-    fn forecast_clamps_reviews_and_rolls_backlog_forward() {
-        // 200 due today, cap 120/day: 120 shown, 80 rolls to tomorrow (+50 = 130,
-        // clamp to 120, 10 rolls), then day 2 (10 + 0) clears under cap.
-        let (loads, _) = simulate_forecast(&[200, 50, 0], 0, Some((0, 120)), 0);
-        assert_eq!(loads[0].reviews, 120);
-        assert_eq!(loads[0].backlog, 80);
-        assert_eq!(loads[1].reviews, 120);
-        assert_eq!(loads[1].backlog, 10);
-        assert_eq!(loads[2].reviews, 10);
-        assert_eq!(loads[2].backlog, 0);
-    }
-
-    #[test]
-    fn forecast_introduces_new_up_to_cap_until_pool_empties() {
-        // 25 unseen, 20/day, none introduced yet: 20 then 5 then 0; pool ends empty.
-        let (loads, remaining) = simulate_forecast(&[0, 0, 0], 25, Some((20, 120)), 0);
-        assert_eq!(loads[0].new, 20);
-        assert_eq!(loads[1].new, 5);
-        assert_eq!(loads[2].new, 0);
-        assert_eq!(remaining, 0);
-    }
-
-    #[test]
-    fn forecast_day0_new_allowance_reduced_by_cards_already_introduced() {
-        // 20/day cap, 15 already introduced today → only 5 more today, full 20 after.
-        let (loads, _) = simulate_forecast(&[0, 0], 100, Some((20, 120)), 15);
-        assert_eq!(loads[0].new, 5);
-        assert_eq!(loads[1].new, 20);
-        // Over-cap introductions today don't produce negative allowance.
-        let (over, _) = simulate_forecast(&[0], 100, Some((20, 120)), 25);
-        assert_eq!(over[0].new, 0);
-    }
-
-    #[test]
-    fn forecast_without_caps_passes_reviews_through_and_skips_new() {
-        let (loads, remaining) = simulate_forecast(&[161, 60], 500, None, 0);
-        assert_eq!(loads[0].reviews, 161);
-        assert_eq!(loads[0].new, 0);
-        assert_eq!(loads[0].backlog, 0);
-        assert_eq!(remaining, 500);
-    }
 }

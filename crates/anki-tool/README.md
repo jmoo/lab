@@ -50,25 +50,24 @@ nix run .#anki-tool -- due "日本語" --by-deck
 
 ### `forecast [DECK]` — Upcoming daily load
 
-Projects the next N days of study load (day 0 = today). **When a deck is given** it
-reads that deck's option-group limits (`getDeckConfig`) and simulates Anki's queue:
-reviews are clamped to the daily review cap with the overflow rolling forward as
-`backlog`, and new cards are introduced up to the daily new cap until the unseen pool
-empties. Day 0's new allowance is reduced by cards already introduced today, so it
-reflects what's actually left for the rest of today. **Without a deck**, limits can't
-be attributed, so review counts are reported raw (like Anki's Future Due) and `new`
-is 0.
+Per-day count of the review/learning cards already **scheduled** to come due over the
+next N days (day 0 = today incl. overdue, later days = cards due exactly that far out).
+This is Anki's "Future Due" — a projection of the current state.
 
-> Approximation: new cards introduced today graduate into reviews on later days; that
-> feedback isn't simulated, so far-out review counts are slight underestimates.
+It assumes nothing about future study: new cards are **not** spread across days (they
+only enter the queue if you actually study them) and nothing is clamped to daily
+limits (that would presume you review exactly the cap). The unseen new pool
+(`unseen`) and the deck's configured limits (`new_per_day` / `rev_per_day`, when a
+deck is given) are reported as context, not projected. A behavioral study simulation
+would be a separate, opt-in mode.
 
 ```bash
 nix run .#anki-tool -- forecast "日本語::2 - Genki 1" --days 7
-# {"deck":"日本語::2 - Genki 1","days":7,"limits_applied":true,"new_per_day":20,"rev_per_day":120,
-#  "unseen_pool":985,"new_pool_remaining_after":845,"totals":{"new":140,"reviews":280,"cards":420},
-#  "forecast":[{"day":0,"date":"2026-07-18","new":20,"reviews":98,"total":118,"backlog":0},...]}
+# {"deck":"日本語::2 - Genki 1","days":7,
+#  "forecast":[{"day":0,"date":"2026-07-18","due":98},{"day":1,"date":"2026-07-19","due":52},...],
+#  "total_due":280,"unseen":985,"new_per_day":20,"rev_per_day":120}
 
-nix run .#anki-tool -- forecast --days 4        # whole collection, raw (limits_applied:false)
+nix run .#anki-tool -- forecast --days 4        # whole collection (limits reported as null)
 ```
 
 ### `new [DECK]` — New-card queue
@@ -271,3 +270,5 @@ All commands output a single line of JSON. Card objects have this shape:
 
 - If a query is too complex for existing commands, add a new command to anki-tool rather than scripting with python/awk/etc.
 - All processing logic should live in the tool itself so AI agents can use it without extra dependencies.
+- **Report the current state; don't assume future behavior.** Projections (like `forecast`) reflect what's already scheduled — they never presume the user will study, introduce new cards, or hit their daily caps. Simulating study behavior is a separate, opt-in concern, not the default.
+- **General purpose, no content assumptions.** Nothing hardcodes deck names, lesson structure, or card content; everything is driven by the query/deck arguments the caller supplies.
