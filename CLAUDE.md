@@ -71,8 +71,8 @@ Notes:
 
 ```
 flake.nix              # calls lib.nix:mkFlake
-lib.nix                # mkFlake + lab.{mkHostModule,mkHostPlatform,mkHostOptions,forLinux,forAll,homeLinux,homeDarwin,mkScript,mkScripts}
-overlay.nix            # global overlay (nudelta, vscode-nix-extensions, ulauncher-uwsm, scripts/)
+lib.nix                # mkFlake + lab.{mkHostModule,mkHostPlatform,mkHostOptions,forLinux,forAll,homeLinux,homeDarwin,mkScript,mkScripts,mkRustCrate,mkRustCrates}
+overlay.nix            # global overlay (nudelta, vscode-nix-extensions, ulauncher-uwsm, scripts/, crates/)
 modules/               # flake-parts modules, auto-imported
   default.nix          #   lab.hosts base options
   {nixos,asahi,darwin}.nix  # platforms + their *{Configurations,Modules} outputs
@@ -82,10 +82,12 @@ modules/               # flake-parts modules, auto-imported
   <feature>.nix        #   ghostty, shell, direnv, vscode, theme, ssh, tailscale
   hyprland/            #   hyprland desktop: default.nix + greetd/ulauncher/hyprlock/
                        #     hyprpolkitagent/waybar + .conf/.json/.css assets
+  devshell.nix         #   perSystem devShells.default (Rust toolchain for crates/)
   iterm2/              #   iterm2 + iterm2.plist
 hosts/                 # one file per host, auto-imported
 keys/                  # ssh/nix pubkeys (builtins.readFile)
 scripts/               # shell scripts auto-packaged by overlay.nix via lib.lab.mkScripts
+crates/                # Rust Cargo workspace; each crate → a package via lib.lab.mkRustCrate
 pkgs/ resources/ dictionary.json
 ```
 
@@ -106,10 +108,19 @@ Under the hood `lib.lab.mkScript` calls `pkgs.callPackage`, so the result suppor
 
 To use a script on a host, add e.g. `pkgs.flake-inputs` to `home.packages` or `environment.systemPackages`.
 
+### Crates (`crates/`)
+
+A Cargo **workspace** (`crates/Cargo.toml` lists `members`; shared metadata in `[workspace.package]`). Every member is **auto-packaged** by `overlay.nix` via `lib.lab.mkRustCrates final ./crates` (mirrors `mkScripts`): it parses the workspace + each member's `Cargo.toml` and emits `pkgs.<package.name>` per crate — add a crate to `members` and it appears as a package with **no** overlay/flake wiring. (To also surface it as a `nix build .#<name>` flake output, add `<name>` to `flake.nix`'s `perSystem.packages`.)
+
+Under the hood `mkRustCrate` uses `rustPlatform.buildRustPackage` over the whole workspace source (so path deps resolve) but scopes to one crate via `cargo -p <name>` — it installs that crate's binaries and runs its tests; a lib crate just gets compiled + tested. Deps are locked in `crates/Cargo.lock` (committed) and pulled via `cargoLock.lockFile`; add external crates by editing a `Cargo.toml` and running `cargo build` to refresh the lock. A crate needing custom build config (extra `buildInputs`, features, runtime wrapping) can be `.overrideAttrs`'d at the use site, or given an explicit `pkgs.<name> = …` in `overlay.nix` (defined after the `// mkRustCrates` merge so it wins). Because every crate shares the workspace as `src`, touching one crate rebuilds the others' packages (fine for a homelab; reach for `crane` if you need per-crate source isolation).
+
+`nix develop` gives a shell with the full Rust toolchain (`modules/devshell.nix`) for `cargo` work outside Nix. Use a crate on a host by adding e.g. `pkgs.hello-cli` to `home.packages` / `environment.systemPackages`.
+
 ### Adding things
 
 - **Feature:** create `modules/<name>.nix` per the pattern (toggle via `mkHostModule`, gate on enable, push with the right helper), then set `lab.hosts.<host>.<name>.enable = true`. No registration — `import-tree` finds it.
 - **Host:** create `hosts/<name>.nix` with `user`, `source`, cross-platform `home`, feature toggles, and per-platform `enable`/`system`/`module`/`home`. Hardware/disk/user config goes inline in `<platform>.module`.
+- **Crate:** add a dir under `crates/` with its `Cargo.toml` + `src/`, add it to the workspace `members`, and refresh `crates/Cargo.lock` (`cargo build`). It's auto-packaged as `pkgs.<package.name>` — no overlay edit. Add `<name>` to `flake.nix`'s `perSystem.packages` only if you want a `nix build .#<name>` output.
 
 ## Code style
 

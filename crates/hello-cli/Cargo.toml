@@ -1,0 +1,8 @@
+[package]
+name = "hello-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+greeting = { path = "../greeting" }

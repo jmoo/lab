@@ -1,0 +1,13 @@
+[workspace]
+members = [
+  "greeting",
+  "hello-cli",
+]
+resolver = "2"
+
+# Shared metadata for every crate in the monorepo. Individual crates inherit
+# these with `field.workspace = true` in their own Cargo.toml.
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
