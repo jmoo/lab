@@ -1,10 +1,19 @@
 mod anki;
 
 use chrono::{Duration, Local, NaiveDate, TimeZone, Timelike};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::process;
+
+/// Scheduler selection for commands whose signals differ by algorithm. `Auto` probes
+/// the collection; the explicit values force a scheduler (e.g. for testing).
+#[derive(Clone, Copy, ValueEnum)]
+enum SchedulerArg {
+    Auto,
+    Sm2,
+    Fsrs,
+}
 
 /// Hour of local time at which Anki rolls over to a new "study day" (Anki's default).
 const ROLLOVER_HOUR: i64 = 4;
@@ -71,10 +80,16 @@ enum Cmd {
         /// Deck name (omit for all)
         deck: Option<String>,
     },
-    /// Find difficult cards (leeches / low ease)
+    /// Find difficult cards (leeches; low ease on SM-2, high difficulty on FSRS)
     Hard {
         /// Deck name (omit for all)
         deck: Option<String>,
+        /// Scheduler to assume (auto-detected by default)
+        #[arg(long, value_enum, default_value_t = SchedulerArg::Auto)]
+        scheduler: SchedulerArg,
+        /// FSRS difficulty threshold: cards with prop:d above this count as hard
+        #[arg(long, default_value_t = 0.8)]
+        min_difficulty: f64,
         /// Max results
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
@@ -178,22 +193,37 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
         }
         Cmd::Forecast { deck, days } => forecast(&deck, days),
         Cmd::New { deck } => new_queue(&deck),
-        Cmd::Hard { deck, limit } => {
-            let query = scoped_query(&deck, "(tag:leech OR prop:ease<1.5) -is:new");
+        Cmd::Hard {
+            deck,
+            scheduler,
+            min_difficulty,
+            limit,
+        } => {
+            let scheduler = resolve_scheduler(scheduler)?;
+            let query = hard_query(scheduler, &deck, min_difficulty);
             let ids = anki::find_cards(&query)?;
             let ids: Vec<_> = ids.into_iter().take(limit).collect();
             if ids.is_empty() {
-                return Ok(json!({"count": 0, "cards": []}));
+                return Ok(json!({"count": 0, "scheduler": scheduler.name(), "cards": []}));
             }
             let cards = anki::cards_info(&ids)?;
             let mut compact: Vec<_> = cards.iter().map(compact_card).collect();
-            // Sort by ease ascending (hardest first)
-            compact.sort_by(|a, b| {
-                let ea = a.get("ease").and_then(|v| v.as_i64()).unwrap_or(9999);
-                let eb = b.get("ease").and_then(|v| v.as_i64()).unwrap_or(9999);
-                ea.cmp(&eb)
-            });
-            Ok(json!({"count": compact.len(), "cards": compact}))
+            match scheduler {
+                // SM-2: hardest = lowest ease.
+                anki::Scheduler::Sm2 => compact.sort_by(|a, b| {
+                    let ea = a.get("ease").and_then(|v| v.as_i64()).unwrap_or(9999);
+                    let eb = b.get("ease").and_then(|v| v.as_i64()).unwrap_or(9999);
+                    ea.cmp(&eb)
+                }),
+                // FSRS: ease is stale, so rank worst offenders by lapses (meaningful
+                // under both schedulers; per-card difficulty isn't in cardsInfo).
+                anki::Scheduler::Fsrs => compact.sort_by(|a, b| {
+                    let la = a.get("lapses").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let lb = b.get("lapses").and_then(|v| v.as_i64()).unwrap_or(0);
+                    lb.cmp(&la)
+                }),
+            }
+            Ok(json!({"count": compact.len(), "scheduler": scheduler.name(), "cards": compact}))
         }
         Cmd::Reviews { ids } => {
             let reviews = anki::get_reviews(&ids)?;
@@ -229,6 +259,7 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
                 .collect();
 
             Ok(json!({
+                "scheduler": anki::detect_scheduler()?.name(),
                 "reviewed_today": reviewed_today,
                 "total_due": total_due,
                 "total_new": total_new,
@@ -494,6 +525,26 @@ fn scoped_query(deck: &Option<String>, rest: &str) -> String {
     }
 }
 
+/// Resolve a CLI scheduler choice, auto-detecting from the collection when asked.
+fn resolve_scheduler(arg: SchedulerArg) -> Result<anki::Scheduler, String> {
+    match arg {
+        SchedulerArg::Auto => anki::detect_scheduler(),
+        SchedulerArg::Sm2 => Ok(anki::Scheduler::Sm2),
+        SchedulerArg::Fsrs => Ok(anki::Scheduler::Fsrs),
+    }
+}
+
+/// The search selecting "hard"/struggling cards for the active scheduler. SM-2 keys on
+/// low ease; FSRS keys on high difficulty (`prop:d`), since ease is stale there. Leeches
+/// count on both. Excludes new cards.
+fn hard_query(scheduler: anki::Scheduler, deck: &Option<String>, min_difficulty: f64) -> String {
+    let signal = match scheduler {
+        anki::Scheduler::Sm2 => "tag:leech OR prop:ease<1.5".to_string(),
+        anki::Scheduler::Fsrs => format!("tag:leech OR prop:d>{min_difficulty}"),
+    };
+    scoped_query(deck, &format!("({signal}) -is:new"))
+}
+
 /// Decks matching an optional filter: the deck itself plus its subdecks, or all.
 fn target_decks(deck: &Option<String>) -> Result<Vec<String>, String> {
     let all: Vec<String> =
@@ -747,4 +798,22 @@ mod tests {
         assert_ne!(review_date(start), review_date(start - 1));
     }
 
+    #[test]
+    fn hard_query_uses_ease_on_sm2_and_difficulty_on_fsrs() {
+        let deck = Some("日本語::2 - Genki 1".to_string());
+
+        let sm2 = hard_query(anki::Scheduler::Sm2, &deck, 0.8);
+        assert!(sm2.contains("prop:ease<1.5"));
+        assert!(!sm2.contains("prop:d"));
+
+        let fsrs = hard_query(anki::Scheduler::Fsrs, &deck, 0.8);
+        assert!(fsrs.contains("prop:d>0.8"));
+        assert!(!fsrs.contains("prop:ease"));
+
+        // Both scope the deck (quoted) and exclude new cards.
+        for q in [&sm2, &fsrs] {
+            assert!(q.contains("deck:\"日本語::2 - Genki 1\""));
+            assert!(q.contains("-is:new"));
+        }
+    }
 }

@@ -82,14 +82,23 @@ nix run .#anki-tool -- new "日本語::2 - Genki 1"
 nix run .#anki-tool -- new                       # collection-wide: {"unseen":...,"introduced_today":...}
 ```
 
-### `hard [DECK]` — Difficult cards (leeches / low ease)
+### `hard [DECK]` — Difficult cards (scheduler-aware)
 
-Finds cards tagged as leeches or with ease factor below 1.5. Sorted hardest first.
+Finds struggling cards. The "hard" signal depends on the active scheduler, which is
+**auto-detected** (reported as `scheduler` in the output):
+
+- **SM-2:** leeches or ease factor below 1.5, sorted by ease (lowest first).
+- **FSRS:** leeches or FSRS difficulty above `--min-difficulty` (default 0.8), sorted by
+  lapses (worst first) — under FSRS the SM-2 ease is stale, so difficulty is the real
+  signal.
+
+Override detection with `--scheduler {auto,sm2,fsrs}`.
 
 ```bash
 nix run .#anki-tool -- hard
 nix run .#anki-tool -- hard "Japanese::Vocab" --limit 20
-# {"count":5,"cards":[{"id":456,"fields":{"Front":"難しい","Back":"difficult"},"ease":1300,...}]}
+# {"count":5,"scheduler":"fsrs","cards":[{"id":456,"fields":{"Front":"難しい","Back":"difficult"},...}]}
+nix run .#anki-tool -- hard "日本語" --min-difficulty 0.9   # only the hardest (FSRS)
 ```
 
 ### `find <QUERY>` — Search cards
@@ -137,11 +146,11 @@ nix run .#anki-tool -- reviews 1494723142483
 
 ### `overview` — Collection-level stats
 
-Quick summary: cards reviewed today, total due, total new, total cards, and last 14 days of review counts.
+Quick summary: active scheduler, cards reviewed today, total due, total new, total cards, and last 14 days of review counts.
 
 ```bash
 nix run .#anki-tool -- overview
-# {"reviewed_today":42,"total_due":156,"total_new":300,"total_cards":5000,"deck_count":8,"recent_reviews":[["2025-01-01",35],...]}
+# {"scheduler":"fsrs","reviewed_today":42,"total_due":156,"total_new":300,"total_cards":5000,"deck_count":8,"recent_reviews":[["2025-01-01",35],...]}
 ```
 
 ### `subdecks <DECK>` — List sub-decks with stats

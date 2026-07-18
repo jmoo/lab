@@ -88,6 +88,40 @@ pub fn count_cards(query: &str) -> Result<usize, String> {
     Ok(find_cards(query)?.len())
 }
 
+/// The active scheduling algorithm. Affects only difficulty/"hard" signals and how a
+/// card's strength is read — everything keyed on interval/due/queue is the same.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Scheduler {
+    /// Classic SM-2: the `factor` (ease) is the difficulty signal.
+    Sm2,
+    /// FSRS: ease is frozen/meaningless; difficulty/stability/retrievability
+    /// (`prop:d` / `prop:s` / `prop:r`) are the real signals.
+    Fsrs,
+}
+
+impl Scheduler {
+    pub fn name(self) -> &'static str {
+        match self {
+            Scheduler::Sm2 => "sm2",
+            Scheduler::Fsrs => "fsrs",
+        }
+    }
+}
+
+/// Detect the active scheduler. `prop:r` (retrievability) is an FSRS-only search
+/// term — it succeeds under FSRS and errors as an invalid search under SM-2. FSRS is
+/// a collection-wide toggle, so one probe settles it. Transport/parse failures are
+/// propagated rather than misread as SM-2.
+pub fn detect_scheduler() -> Result<Scheduler, String> {
+    match find_cards("prop:r=1") {
+        Ok(_) => Ok(Scheduler::Fsrs),
+        Err(e) if e.starts_with("AnkiConnect request failed") || e.starts_with("invalid response") => {
+            Err(e)
+        }
+        Err(_) => Ok(Scheduler::Sm2),
+    }
+}
+
 /// Daily new/review limits for the option group governing a deck. In Anki these
 /// come from the deck's config group (getDeckConfig) — reading the deck you study
 /// gives the limits that actually apply to its queue.
