@@ -192,8 +192,9 @@ pub struct ReviewEntry {
 }
 
 pub fn get_reviews(card_ids: &[i64]) -> Result<HashMap<String, Vec<ReviewEntry>>, String> {
-    let str_ids: Vec<String> = card_ids.iter().map(|id| id.to_string()).collect();
-    let result = request("getReviewsOfCards", Some(json!({"cards": str_ids})))?;
+    // getReviewsOfCards matches revlog by *integer* card id — passing stringified ids
+    // returns the key with an empty array. Send the numeric ids directly.
+    let result = request("getReviewsOfCards", Some(json!({ "cards": card_ids })))?;
     serde_json::from_value(result).map_err(|e| format!("parse error: {e}"))
 }
 
