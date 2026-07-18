@@ -9,12 +9,10 @@ CLI for querying AnkiConnect, designed for AI agent consumption. All output is c
 
 ## Install / Run
 
-```bash
-# Run directly
-nix run github:jmoo/anki-tool -- <command>
+`anki-tool` lives in the [`jmoo/lab`](https://github.com/jmoo/lab) flake:
 
-# Or from a local checkout
-nix run .# -- <command>
+```bash
+nix run .#anki-tool -- <command>
 ```
 
 ## Commands
@@ -22,7 +20,7 @@ nix run .# -- <command>
 ### `decks` — List all deck names
 
 ```bash
-nix run .# -- decks
+nix run .#anki-tool -- decks
 # ["Default","Japanese::Vocab","Japanese::Grammar"]
 ```
 
@@ -31,8 +29,8 @@ nix run .# -- decks
 Shows new/learning/review counts and total cards. Omit deck name for all decks.
 
 ```bash
-nix run .# -- stats
-nix run .# -- stats "Japanese::Vocab"
+nix run .#anki-tool -- stats
+nix run .#anki-tool -- stats "Japanese::Vocab"
 # [{"name":"Japanese::Vocab","new_count":20,"learn_count":3,"review_count":45,"total_in_deck":1200}]
 ```
 
@@ -41,8 +39,8 @@ nix run .# -- stats "Japanese::Vocab"
 Returns card content and scheduling info for due cards.
 
 ```bash
-nix run .# -- due
-nix run .# -- due "Japanese::Vocab" --limit 10
+nix run .#anki-tool -- due
+nix run .#anki-tool -- due "Japanese::Vocab" --limit 10
 # {"count":10,"cards":[{"id":123,"deck":"Japanese::Vocab","fields":{"Front":"食べる","Back":"to eat"},"interval":7,"ease":2500,...}]}
 ```
 
@@ -51,8 +49,8 @@ nix run .# -- due "Japanese::Vocab" --limit 10
 Finds cards tagged as leeches or with ease factor below 1.5. Sorted hardest first.
 
 ```bash
-nix run .# -- hard
-nix run .# -- hard "Japanese::Vocab" --limit 20
+nix run .#anki-tool -- hard
+nix run .#anki-tool -- hard "Japanese::Vocab" --limit 20
 # {"count":5,"cards":[{"id":456,"fields":{"Front":"難しい","Back":"difficult"},"ease":1300,...}]}
 ```
 
@@ -61,15 +59,15 @@ nix run .# -- hard "Japanese::Vocab" --limit 20
 Uses [Anki's search syntax](https://docs.ankiweb.net/searching.html). Returns card IDs by default, or full card details with `--info`.
 
 ```bash
-nix run .# -- find "deck:Japanese tag:verb"
-nix run .# -- find "is:new" --limit 50
-nix run .# -- find "added:7"           # cards added in last 7 days
-nix run .# -- find "rated:1"           # cards reviewed today
-nix run .# -- find "prop:ivl>30"       # cards with interval > 30 days
+nix run .#anki-tool -- find "deck:Japanese tag:verb"
+nix run .#anki-tool -- find "is:new" --limit 50
+nix run .#anki-tool -- find "added:7"           # cards added in last 7 days
+nix run .#anki-tool -- find "rated:1"           # cards reviewed today
+nix run .#anki-tool -- find "prop:ivl>30"       # cards with interval > 30 days
 # {"count":25,"card_ids":[123,456,789,...]}
 
 # With --info, returns full card details instead of just IDs
-nix run .# -- find "それから deck:\"日本語::2 - Genki 1::L04\"" --info
+nix run .#anki-tool -- find "それから deck:\"日本語::2 - Genki 1::L04\"" --info
 # {"count":2,"cards":[{"id":...,"deck":"...","fields":{"english":"and then","japanese_kana":"それから"},...}]}
 ```
 
@@ -78,7 +76,7 @@ nix run .# -- find "それから deck:\"日本語::2 - Genki 1::L04\"" --info
 Fetch full content and scheduling info for specific card IDs.
 
 ```bash
-nix run .# -- cards 1494723142483 1494703460437
+nix run .#anki-tool -- cards 1494723142483 1494703460437
 # [{"id":1494723142483,"deck":"Default","model":"Basic","fields":{"Front":"hello","Back":"world"},"interval":16,"due":1,"reps":5,"lapses":0,"ease":2500,"type":"review"}]
 ```
 
@@ -87,7 +85,7 @@ nix run .# -- cards 1494723142483 1494703460437
 Get the full review log for specific cards. Each entry shows: ease button pressed (1-4), new interval, time spent (ms), and review type (0=learn, 1=review, 2=relearn, 3=filtered).
 
 ```bash
-nix run .# -- reviews 1494723142483
+nix run .#anki-tool -- reviews 1494723142483
 # {"1494723142483":[{"id":1653772912146,"ease":3,"ivl":7,"last_ivl":3,"factor":2500,"time":8500,"review_type":1}]}
 ```
 
@@ -96,7 +94,7 @@ nix run .# -- reviews 1494723142483
 Quick summary: cards reviewed today, total due, total new, total cards, and last 14 days of review counts.
 
 ```bash
-nix run .# -- overview
+nix run .#anki-tool -- overview
 # {"reviewed_today":42,"total_due":156,"total_new":300,"total_cards":5000,"deck_count":8,"recent_reviews":[["2025-01-01",35],...]}
 ```
 
@@ -105,7 +103,7 @@ nix run .# -- overview
 Shows all sub-decks under a parent deck with their due counts and totals.
 
 ```bash
-nix run .# -- subdecks "日本語"
+nix run .#anki-tool -- subdecks "日本語"
 # [{"deck_id":...,"name":"日本語::2 - Genki 1","new_count":20,"learn_count":0,"review_count":78,"total_in_deck":0},...]
 ```
 
@@ -114,7 +112,7 @@ nix run .# -- subdecks "日本語"
 Comprehensive progress breakdown: mature/young/unseen counts, leeches, and per-subdeck stats with percent-seen.
 
 ```bash
-nix run .# -- progress "日本語"
+nix run .#anki-tool -- progress "日本語"
 # {"deck":"日本語","total_cards":3541,"mature":745,"young":322,"unseen":2474,"pct_seen":30,"due_now":328,"leeches":0,"subdecks":[...]}
 ```
 
@@ -123,7 +121,7 @@ nix run .# -- progress "日本語"
 Shows what happened in today's reviews: which cards you lapsed on (Again), found hard, got right (Good/Easy), and "victories" — cards with 3+ all-time lapses that you answered correctly today.
 
 ```bash
-nix run .# -- session "日本語"
+nix run .#anki-tool -- session "日本語"
 # {"reviewed":103,"again":[...],"hard":[...],"good":78,"easy":6,"victories":[...]}
 ```
 
@@ -136,7 +134,7 @@ nix run .# -- session "日本語"
 Triggers a sync with AnkiWeb. Run this if reviews or cards seem missing or stale, or if the user asks you to sync.
 
 ```bash
-nix run .# -- sync
+nix run .#anki-tool -- sync
 # {"status":"ok"}
 ```
 
@@ -147,33 +145,33 @@ nix run .# -- sync
 For advanced queries. Add `--info` to also fetch full card details.
 
 ```bash
-nix run .# -- raw "prop:ease<1.3 deck:Japanese" --info --limit 20
+nix run .#anki-tool -- raw "prop:ease<1.3 deck:Japanese" --info --limit 20
 ```
 
 ## Common AI Agent Workflows
 
 **Daily study overview:**
 ```bash
-nix run .# -- overview
+nix run .#anki-tool -- overview
 ```
 
 **Review tough cards in a deck:**
 ```bash
-nix run .# -- hard "Japanese::Vocab" --limit 20
+nix run .#anki-tool -- hard "Japanese::Vocab" --limit 20
 ```
 
 **Find cards on a topic:**
 ```bash
-nix run .# -- find "deck:Biology mitochondria" --limit 10
+nix run .#anki-tool -- find "deck:Biology mitochondria" --limit 10
 # then fetch details:
-nix run .# -- cards <ids from above>
+nix run .#anki-tool -- cards <ids from above>
 ```
 
 **Analyze struggle patterns:**
 ```bash
-nix run .# -- hard "Japanese" --limit 10
+nix run .#anki-tool -- hard "Japanese" --limit 10
 # then get review history for those cards:
-nix run .# -- reviews <card_ids>
+nix run .#anki-tool -- reviews <card_ids>
 ```
 
 ## Output Format

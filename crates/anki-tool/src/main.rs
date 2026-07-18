@@ -1,9 +1,13 @@
 mod anki;
 
+use chrono::{Local, TimeZone, Timelike};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::process;
+
+/// Hour of local time at which Anki rolls over to a new "study day" (Anki's default).
+const ROLLOVER_HOUR: i64 = 4;
 
 #[derive(Parser)]
 #[command(name = "anki-tool", about = "Query AnkiConnect for AI agents")]
@@ -120,16 +124,7 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             let stats = anki::deck_stats(&decks)?;
             Ok(serde_json::to_value(stats).unwrap())
         }
-        Cmd::Find { query, info, limit } => {
-            let ids = anki::find_cards(&query)?;
-            let ids: Vec<_> = ids.into_iter().take(limit).collect();
-            if !info {
-                return Ok(json!({"count": ids.len(), "card_ids": ids}));
-            }
-            let cards = anki::cards_info(&ids)?;
-            let compact: Vec<_> = cards.iter().map(compact_card).collect();
-            Ok(json!({"count": compact.len(), "cards": compact}))
-        }
+        Cmd::Find { query, info, limit } => find_output(&query, info, limit),
         Cmd::Cards { ids } => {
             let cards = anki::cards_info(&ids)?;
             let compact: Vec<_> = cards.iter().map(compact_card).collect();
@@ -142,12 +137,7 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             };
             let ids = anki::find_cards(&query)?;
             let ids: Vec<_> = ids.into_iter().take(limit).collect();
-            if ids.is_empty() {
-                return Ok(json!({"count": 0, "cards": []}));
-            }
-            let cards = anki::cards_info(&ids)?;
-            let compact: Vec<_> = cards.iter().map(compact_card).collect();
-            Ok(json!({"count": compact.len(), "cards": compact}))
+            cards_output(&ids)
         }
         Cmd::Hard { deck, limit } => {
             let query = match &deck {
@@ -182,6 +172,8 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             let total_new: u32 = stats.iter().map(|s| s.new_count).sum();
             let total_cards: u32 = stats.iter().map(|s| s.total_in_deck).sum();
 
+            let reviewed_today = anki::num_reviewed_today()?;
+
             // Build recent review history from cardReviews API (last 14 days)
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -192,21 +184,9 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             for deck_name in &deck_list {
                 let reviews = anki::card_reviews(deck_name, start_ms)?;
                 for rev in reviews {
-                    let secs = rev.review_time / 1000;
-                    let days_since_epoch = secs / 86400;
-                    let date = format_epoch_days(days_since_epoch);
-                    *by_day.entry(date).or_default() += 1;
+                    *by_day.entry(review_date(rev.review_time)).or_default() += 1;
                 }
             }
-            let reviewed_today = by_day
-                .iter()
-                .last()
-                .filter(|(d, _)| {
-                    let today_days = now_ms / 1000 / 86400;
-                    **d == format_epoch_days(today_days)
-                })
-                .map(|(_, c)| *c)
-                .unwrap_or(0);
             let recent: Vec<_> = by_day
                 .into_iter()
                 .map(|(date, count)| json!([date, count]))
@@ -259,11 +239,7 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             for deck_name in &target_decks {
                 let reviews = anki::card_reviews(deck_name, start_ms)?;
                 for rev in reviews {
-                    // Convert ms timestamp to date string
-                    let secs = rev.review_time / 1000;
-                    let days_since_epoch = secs / 86400;
-                    let date = format_epoch_days(days_since_epoch);
-                    *by_day.entry(date).or_default() += 1;
+                    *by_day.entry(review_date(rev.review_time)).or_default() += 1;
                 }
             }
 
@@ -274,17 +250,7 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             }))
         }
         Cmd::Session { deck } => {
-            // Today's start as ms timestamp (use 4am UTC as Anki's default rollover)
-            let today_start = {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as i64;
-                let secs = now / 1000;
-                let day_secs = secs - (secs % 86400) + (4 * 3600);
-                let day_start = if day_secs > secs { day_secs - 86400 } else { day_secs };
-                day_start * 1000
-            };
+            let today_start = today_start_ms();
 
             // Get all decks matching the filter
             let all_decks = anki::deck_names()?;
@@ -338,13 +304,15 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             for (&card_id, eases) in &card_eases {
                 let Some(card) = card_map.get(&card_id) else { continue };
                 let worst_ease = *eases.iter().min().unwrap();
-                let final_ease = *eases.last().unwrap();
 
                 match worst_ease {
                     1 => again.push(compact_card(card)),
                     2 => hard.push(compact_card(card)),
                     _ => {
-                        if card.lapses >= 3 && final_ease >= 3 {
+                        // Reaching this arm means every press today was Good/Easy
+                        // (worst_ease >= 3); a card with a long lapse history that
+                        // still went clean is a "victory".
+                        if card.lapses >= 3 {
                             victories.push(compact_card(card));
                         }
                         if worst_ease == 4 {
@@ -447,17 +415,28 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
                 "subdecks": subdeck_stats,
             }))
         }
-        Cmd::Raw { query, info, limit } => {
-            let ids = anki::find_cards(&query)?;
-            let ids: Vec<_> = ids.into_iter().take(limit).collect();
-            if !info {
-                return Ok(json!({"count": ids.len(), "card_ids": ids}));
-            }
-            let cards = anki::cards_info(&ids)?;
-            let compact: Vec<_> = cards.iter().map(compact_card).collect();
-            Ok(json!({"count": compact.len(), "cards": compact}))
-        }
+        Cmd::Raw { query, info, limit } => find_output(&query, info, limit),
     }
+}
+
+/// Fetch compact card details for a set of ids, wrapped as `{count, cards}`.
+fn cards_output(ids: &[i64]) -> Result<serde_json::Value, String> {
+    if ids.is_empty() {
+        return Ok(json!({"count": 0, "cards": []}));
+    }
+    let cards = anki::cards_info(ids)?;
+    let compact: Vec<_> = cards.iter().map(compact_card).collect();
+    Ok(json!({"count": compact.len(), "cards": compact}))
+}
+
+/// Run a search and emit either bare card ids or full card details (with `--info`).
+fn find_output(query: &str, info: bool, limit: usize) -> Result<serde_json::Value, String> {
+    let ids = anki::find_cards(query)?;
+    let ids: Vec<_> = ids.into_iter().take(limit).collect();
+    if !info {
+        return Ok(json!({"count": ids.len(), "card_ids": ids}));
+    }
+    cards_output(&ids)
 }
 
 fn resolve_decks(deck: Option<String>) -> Result<Vec<String>, String> {
@@ -501,20 +480,26 @@ fn compact_card(card: &anki::CardInfo) -> serde_json::Value {
     })
 }
 
-/// Convert days since Unix epoch to YYYY-MM-DD string
-fn format_epoch_days(days: i64) -> String {
-    // Civil date from days since epoch (algorithm from Howard Hinnant)
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}")
+/// The local study-day (YYYY-MM-DD) a review at `ms` belongs to, honoring Anki's
+/// rollover hour — a review before rollover counts toward the previous day.
+fn review_date(ms: i64) -> String {
+    let dt = Local
+        .timestamp_millis_opt(ms - ROLLOVER_HOUR * 3_600_000)
+        .single()
+        .expect("valid review timestamp");
+    dt.format("%Y-%m-%d").to_string()
+}
+
+/// Milliseconds at the start of the current local study day (the most recent rollover).
+fn today_start_ms() -> i64 {
+    let now = Local::now();
+    let rollover_secs = ROLLOVER_HOUR * 3600;
+    let local_midnight = now.timestamp() - now.num_seconds_from_midnight() as i64;
+    let mut boundary = local_midnight + rollover_secs;
+    if now.timestamp() < boundary {
+        boundary -= 86400;
+    }
+    boundary * 1000
 }
 
 /// Minimal HTML stripping - removes tags and decodes common entities
@@ -529,11 +514,71 @@ fn strip_html(s: &str) -> String {
             _ => {}
         }
     }
-    out.replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .trim()
-        .to_string()
+    decode_entities(&out).trim().to_string()
+}
+
+/// Decode the HTML entities that show up in Anki fields: the common named ones
+/// plus numeric (`&#12354;`) and hex (`&#x3042;`) character references.
+fn decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp..];
+        let decoded = after.find(';').and_then(|semi| {
+            let entity = &after[1..semi];
+            let c = match entity {
+                "nbsp" => Some(' '),
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                _ => entity
+                    .strip_prefix("#x")
+                    .or_else(|| entity.strip_prefix("#X"))
+                    .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                    .or_else(|| entity.strip_prefix('#').and_then(|d| d.parse::<u32>().ok()))
+                    .and_then(char::from_u32),
+            };
+            c.map(|c| (c, semi))
+        });
+        match decoded {
+            Some((c, semi)) => {
+                out.push(c);
+                rest = &after[semi + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &after[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_tags_and_named_entities() {
+        assert_eq!(strip_html("<b>hi</b>&nbsp;there"), "hi there");
+        assert_eq!(strip_html("a &amp; b &lt;c&gt;"), "a & b <c>");
+    }
+
+    #[test]
+    fn decodes_numeric_and_hex_entities() {
+        assert_eq!(strip_html("&#12354;&#x3042;"), "ああ");
+        // An unterminated or unknown entity is left untouched.
+        assert_eq!(strip_html("100% &amp cats & dogs"), "100% &amp cats & dogs");
+    }
+
+    #[test]
+    fn review_before_rollover_counts_as_previous_day() {
+        // A review one ms before the day's start belongs to the previous study day.
+        let start = today_start_ms();
+        assert_ne!(review_date(start), review_date(start - 1));
+    }
 }

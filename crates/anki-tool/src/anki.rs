@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::time::Duration;
 
 const ANKI_URL: &str = "http://localhost:8765";
 
@@ -15,7 +16,13 @@ fn request(action: &str, params: Option<Value>) -> Result<Value, String> {
     if let Some(p) = params {
         body["params"] = p;
     }
-    let resp: AnkiResponse = ureq::post(ANKI_URL)
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout_read(Duration::from_secs(30))
+        .timeout_write(Duration::from_secs(10))
+        .build();
+    let resp: AnkiResponse = agent
+        .post(ANKI_URL)
         .send_json(&body)
         .map_err(|e| format!("AnkiConnect request failed: {e}"))?
         .into_json()
@@ -32,6 +39,12 @@ pub fn deck_names() -> Result<Value, String> {
     request("deckNames", None)
 }
 
+/// Full deck name -> deck id. Used to restore full names on getDeckStats output.
+pub fn deck_names_and_ids() -> Result<HashMap<String, u64>, String> {
+    let result = request("deckNamesAndIds", None)?;
+    serde_json::from_value(result).map_err(|e| format!("parse error: {e}"))
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct DeckStats {
     pub deck_id: u64,
@@ -46,20 +59,17 @@ pub fn deck_stats(decks: &[String]) -> Result<Vec<DeckStats>, String> {
     let result = request("getDeckStats", Some(json!({"decks": decks})))?;
     let map: HashMap<String, DeckStats> =
         serde_json::from_value(result).map_err(|e| format!("parse error: {e}"))?;
-    // getDeckStats returns short names; restore the full names we requested
-    let id_to_full: HashMap<String, &String> = decks
-        .iter()
-        .filter_map(|full| {
-            map.values()
-                .find(|s| full.ends_with(&s.name) || s.name == *full)
-                .map(|s| (s.deck_id.to_string(), full))
-        })
+    // getDeckStats returns short (leaf) names; restore the full names by deck id,
+    // which is unambiguous even when two decks share a leaf name.
+    let id_to_full: HashMap<u64, String> = deck_names_and_ids()?
+        .into_iter()
+        .map(|(name, id)| (id, name))
         .collect();
     let mut stats: Vec<DeckStats> = map
-        .into_iter()
-        .map(|(id, mut s)| {
-            if let Some(full) = id_to_full.get(&id) {
-                s.name = full.to_string();
+        .into_values()
+        .map(|mut s| {
+            if let Some(full) = id_to_full.get(&s.deck_id) {
+                s.name = full.clone();
             }
             s
         })
@@ -154,12 +164,10 @@ pub fn card_reviews(deck: &str, start_id: i64) -> Result<Vec<DeckReviewEntry>, S
     Ok(entries)
 }
 
-pub fn get_num_reviewed_today() -> Result<Value, String> {
-    request("getNumCardsReviewedToday", None)
-}
-
-pub fn get_reviews_by_day() -> Result<Value, String> {
-    request("getNumCardsReviewedByDay", None)
+/// Cards reviewed today, using Anki's own local day rollover.
+pub fn num_reviewed_today() -> Result<u32, String> {
+    let result = request("getNumCardsReviewedToday", None)?;
+    serde_json::from_value(result).map_err(|e| format!("parse error: {e}"))
 }
 
 pub fn sync() -> Result<Value, String> {
