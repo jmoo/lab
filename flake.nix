@@ -42,23 +42,11 @@
       {
         perSystem =
           { pkgs, ... }:
-          let
-            # The full golden specimen corpus lives in the private
-            # jmoo/nord-corpus repo (it grows to hold proprietary piano/sample
-            # data). Fetched lazily over SSH using the caller's key — this thunk
-            # is only forced when the `nord-format-corpus` check is built, so a
-            # plain `nix build .#nord-format` never fetches or needs it.
-            nord-corpus = builtins.fetchGit {
-              rev = "b80431bcccddbb07bf5bcccb7dce42968c404898";
-              url = "git+ssh://git@github.com/jmoo/nord-corpus.git";
-            };
-          in
           {
-            # "With tests" target: rebuilds nord-format and runs the full
-            # corpus-backed round-trip sweep against the fetched specimens.
-            # `nix flake check` runs it; needs access to the private corpus.
+            # Test nord-format against real clavia nord files.
+            # This requires access to a private repository (jmoo/nord-corpus)
             checks.nord-format-corpus = pkgs.nord-format.overrideAttrs (_: {
-              NORD_CORPUS_DIR = "${nord-corpus}/ne5";
+              NORD_CORPUS_DIR = "${pkgs.nord-corpus}/ne5";
               doCheck = true;
             });
 
