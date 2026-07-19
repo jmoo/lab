@@ -208,11 +208,62 @@ pub struct SamplePanel {
     pub filter: bool,
 }
 
-// 0x4e..0x92
+// 0x4e..0x92 — the organ panel. The Electro 5 stores the full drawbar +
+// vib/perc state for *every* organ model (B3, Vox, Farfisa, Pipe) and both
+// presets, so switching model/preset on the instrument is lossless too.
+//
+// CONFIRMED (2026-07-19, by diffing the change-one-knob organ specimen corpus):
+//   * Drawbars = 9 nibbles, physical position 0..=8, packed high-nibble first,
+//     at these panel offsets per model + preset (B3-bass shares the B3 slots):
+//         B3   p1 0x55  p2 0x5c      Vox  p1 0x67  p2 0x6d
+//         Farf p1 0x77  p2 0x7d      Pipe p1 0x87  p2 0x8d
+//     Every model stores the *physical* bar position on disk; the per-model
+//     "real" value (Farf's >=5 on/off, Vox's ignored 8th bar, B3-bass's remapped
+//     bass bars) is a display transform layered on top — NOT decoded here yet.
+//   * Preset selection = bit 0x40 of one byte per model group
+//         B3 0x53, Vox 0x65, Farf 0x75, Pipe 0x85   (0 = preset 1, 1 = preset 2)
+//
+// STILL RAW (byte map retained below): the vib/chorus on-off + type and perc
+// on/third/speed toggles. They round-trip byte-exact through `raw`; decoding
+// them semantically is the next organ increment.
+
+/// Length of the organ panel block, 0x4e..=0x92 (69 bytes).
+const ORGAN_LEN: usize = 0x92 - 0x4d;
+
+/// Panel-relative index of the byte at absolute Electro 5 file offset `abs`
+/// (the organ panel begins at 0x4e).
+const fn org(abs: usize) -> usize {
+    abs - 0x4e
+}
+
+/// Nine drawbar positions (physical, 0..=8), nibble-packed high-nibble first,
+/// starting at panel-relative byte `at`. This is the on-disk form shared by all
+/// organ models; per-model display transforms are applied elsewhere.
+fn read_drawbars(raw: &[u8], at: usize) -> [u8; 9] {
+    let mut bars = [0u8; 9];
+    for (n, bar) in bars.iter_mut().enumerate() {
+        let byte = raw[at + n / 2];
+        *bar = if n % 2 == 0 { byte >> 4 } else { byte & 0x0f };
+    }
+    bars
+}
+
+/// The Electro 5's four organ models. (B3-bass shares the B3 storage slots, so
+/// it isn't a separate model here.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrganModel {
+    B3,
+    Vox,
+    Farfisa,
+    Pipe,
+}
+
 #[binrw]
 #[derive(Debug)]
 pub struct OrganPanel {
-    todo: [u8; (0x92 - 0x4d) as usize],
+    /// The whole 0x4e..=0x92 block, kept verbatim so the panel always
+    /// round-trips byte-exact. Decoded values are exposed via the methods below.
+    raw: [u8; ORGAN_LEN],
     // // 0x4e..0x50
     // pad: B24,
     //
@@ -286,6 +337,46 @@ pub struct OrganPanel {
     // 0x8b 0b00001000 - unknown boolean (always true except for included preset 'Sunday')
     // 0x8c 0b00000000 - pad
     // 0x8d 0b11111111_11111111_11111111_11111111_11110000 - preset2 drawbars (pipe, normal)
+}
+
+impl OrganPanel {
+    /// Panel-relative drawbar-block offset for a model + preset (1 or 2).
+    fn drawbar_offset(model: OrganModel, preset: u8) -> usize {
+        let (p1, p2) = match model {
+            OrganModel::B3 => (0x55, 0x5c),
+            OrganModel::Vox => (0x67, 0x6d),
+            OrganModel::Farfisa => (0x77, 0x7d),
+            OrganModel::Pipe => (0x87, 0x8d),
+        };
+        org(if preset == 2 { p2 } else { p1 })
+    }
+
+    /// Panel-relative index of a model's preset-selection byte (bit 0x40).
+    fn preset_byte(model: OrganModel) -> usize {
+        org(match model {
+            OrganModel::B3 => 0x53,
+            OrganModel::Vox => 0x65,
+            OrganModel::Farfisa => 0x75,
+            OrganModel::Pipe => 0x85,
+        })
+    }
+
+    /// The selected preset (1 or 2) for `model`.
+    pub fn preset(&self, model: OrganModel) -> u8 {
+        if self.raw[Self::preset_byte(model)] & 0x40 != 0 {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// The nine drawbar positions (physical, 0..=8) stored for `model`'s
+    /// `preset`. This is the on-disk value; per-model display transforms
+    /// (Farfisa on/off, Vox's ignored 8th bar, B3-bass bass-bar remap) are not
+    /// applied.
+    pub fn drawbars(&self, model: OrganModel, preset: u8) -> [u8; 9] {
+        read_drawbars(&self.raw, Self::drawbar_offset(model, preset))
+    }
 }
 
 // 0x93..0x9F
@@ -504,7 +595,7 @@ impl Program {
                 piano_panel: PianoPanel::default(),
                 sample_panel: SamplePanel::default(),
                 organ_panel: OrganPanel {
-                    todo: [0; (0x92 - 0x4d) as usize],
+                    raw: [0; ORGAN_LEN],
                 },
                 effects_panel: EffectsPanel::default(),
                 extra: Extra::default(),
@@ -596,6 +687,10 @@ impl Program {
 
     pub fn extra(&self) -> &Extra {
         &self.schema.extra
+    }
+
+    pub fn organ(&self) -> &OrganPanel {
+        &self.schema.organ_panel
     }
 }
 

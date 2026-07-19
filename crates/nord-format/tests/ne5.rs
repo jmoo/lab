@@ -882,54 +882,113 @@ fn test_ne5_program_read_sample() {
 
 #[test]
 fn test_ne5_program_read_write_organ() {
+    use nord_format::electro5::OrganModel;
+
     let test_files = corpus_dir().join("programs/organ");
     if !have(&test_files) {
         return;
     }
 
-    let paths = fs::read_dir(&test_files).unwrap();
-
-    let organ_re =
-        Regex::new(r"([0-9])([0-9])([0-9])([0-9])(_|([0-9])([0-9]))([0-9a-z]{9})[.](skip[.])?ne5p$")
-            .unwrap();
-
-    for path in paths {
-        let inner = path.unwrap();
-
-        if !inner.metadata().unwrap().is_file() {
-            continue;
-        }
-
-        let path = inner.path().display().to_string();
-
-        if let Some(matches) = organ_re.captures(path.as_str()) {
-            let program = nord_format::from_path(path.as_str()).unwrap();
-            let contents = read(path.as_str()).unwrap();
-
-            if matches.get(9).is_some() {
-                continue;
-            };
-
-            let _type_a = matches.get(6).is_some();
-            let _preset = u8::from_str(matches.get(1).unwrap().as_str()).unwrap();
-            let _drawbars = matches.get(8).unwrap().as_str();
-
-            match program {
-                Entity::Program(nord_format::Program::Electro5(mut program)) => {
-                    let mut output: Vec<u8> = Vec::new();
-                    program.write_to(&mut Cursor::new(&mut output)).unwrap();
-
-                    assert_eq!(
-                        contents.as_slice(),
-                        output.as_slice(),
-                        "read/write mismatch in file {}",
-                        path
-                    );
-                }
-                _ => panic!("expected electro5 song in file {}", path),
-            }
-        } else if !path.contains("README.md") {
-            print!("invalid file name: {}", path)
+    // Filename drawbar char -> physical position (0..=8). Digits and the two
+    // letter ranges all encode the same nine physical positions; only the
+    // display "real" value differs (a..i => real 0, j..r => real 1).
+    fn physical(c: u8) -> u8 {
+        match c {
+            b'0'..=b'8' => c - b'0',
+            b'a'..=b'i' => c - b'a',
+            b'j'..=b'r' => c - b'j',
+            _ => panic!("bad drawbar char: {}", c as char),
         }
     }
+
+    // Filename model digit -> (model, on-disk value == physical position?).
+    // B3/Vox/Pipe store the physical bar position, so their drawbars are
+    // asserted directly. B3-bass (1) remaps its bass bars and Farfisa (4)
+    // quantizes intermediate values on disk (e.g. physical 5 -> 4), so their
+    // exact values aren't asserted yet — the bytes still round-trip.
+    fn model_of(d: u8) -> (OrganModel, bool) {
+        match d {
+            0 => (OrganModel::B3, true),
+            1 => (OrganModel::B3, false),
+            2 => (OrganModel::Pipe, true),
+            3 => (OrganModel::Vox, true),
+            4 => (OrganModel::Farfisa, false),
+            _ => panic!("unknown organ model digit {d}"),
+        }
+    }
+
+    // The three filename shapes actually present in the corpus:
+    //   type-A  PtcdefgDDDDDDDDD  (16 digits: 7 B3 toggle fields + 9 drawbars)
+    //   type-B  PMrs_DDDDDDDDD    (preset, model, rot_speed, rot_stop + 9 drawbars)
+    //   type-C  PMrs_EEEEE        (preset, model, rot_speed, rot_stop + 5 perc/vib)
+    let type_a = Regex::new(r"^(\d)\d{6}([0-8]{9})\.ne5p$").unwrap();
+    let type_b = Regex::new(r"^(\d)(\d)(\d)(\d)_([0-8a-r]{9})\.ne5p$").unwrap();
+    let type_c = Regex::new(r"^(\d)(\d)(\d)(\d)_[0-9]{5}\.ne5p$").unwrap();
+
+    let mut drawbar_checks = 0usize;
+
+    for entry in fs::read_dir(&test_files).unwrap() {
+        let entry = entry.unwrap();
+        if !entry.metadata().unwrap().is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == "README.md" || name.contains(".skip.") {
+            continue;
+        }
+        let path = entry.path();
+
+        // (model, preset, expected drawbar chars if any, storage==physical)
+        let (model, preset, drawbars, physical_storage): (OrganModel, u8, Option<String>, bool) =
+            if let Some(m) = type_a.captures(&name) {
+                (OrganModel::B3, m[1].parse().unwrap(), Some(m[2].to_string()), true)
+            } else if let Some(m) = type_b.captures(&name) {
+                let (model, phys) = model_of(m[2].parse().unwrap());
+                (model, m[1].parse().unwrap(), Some(m[5].to_string()), phys)
+            } else if let Some(m) = type_c.captures(&name) {
+                let (model, _) = model_of(m[2].parse().unwrap());
+                (model, m[1].parse().unwrap(), None, false)
+            } else {
+                panic!("unrecognized organ file name: {name}");
+            };
+
+        let contents = read(&path).unwrap();
+        let mut program = match nord_format::from_path(&path).unwrap() {
+            Entity::Program(nord_format::Program::Electro5(p)) => p,
+            _ => panic!("expected electro5 program in file {name}"),
+        };
+
+        // Preset selection decodes to the value encoded in the filename.
+        assert_eq!(
+            program.organ().preset(model),
+            preset,
+            "preset selection mismatch in {name}",
+        );
+
+        // Drawbars decode to the filename's physical positions (except B3-bass).
+        if let (Some(chars), true) = (drawbars.as_ref(), physical_storage) {
+            let expected: Vec<u8> = chars.bytes().map(physical).collect();
+            let got = program.organ().drawbars(model, preset);
+            assert_eq!(
+                got.as_slice(),
+                expected.as_slice(),
+                "drawbar decode mismatch in {name} ({model:?} preset {preset})",
+            );
+            drawbar_checks += 1;
+        }
+
+        // Round-trip stays byte-exact regardless of how much is decoded.
+        let mut output: Vec<u8> = Vec::new();
+        program.write_to(&mut Cursor::new(&mut output)).unwrap();
+        assert_eq!(
+            contents.as_slice(),
+            output.as_slice(),
+            "read/write mismatch in {name}",
+        );
+    }
+
+    assert!(
+        drawbar_checks > 0,
+        "no organ drawbar assertions ran — is the organ corpus present?"
+    );
 }

@@ -5,6 +5,7 @@
 
 use clap::{Parser, Subcommand};
 use nord_format::common::bank::Item;
+use nord_format::electro5::{Instrument, OrganModel};
 use nord_format::{Entity, Program, Settings, Song};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -106,6 +107,27 @@ fn print_summary(entity: &Entity) {
             );
             println!("  part mix:  {} (lower/upper %)", p.part_mix().as_string());
             println!("  gain:      {}", p.gain());
+
+            // Organ drawbars (selected preset per model), when the organ is in use.
+            if p.lower_part() == Instrument::Organ || p.upper_part() == Instrument::Organ {
+                println!("  organ:     drawbars of the selected preset, per model");
+                for (model, label) in [
+                    (OrganModel::B3, "b3  "),
+                    (OrganModel::Vox, "vox "),
+                    (OrganModel::Farfisa, "farf"),
+                    (OrganModel::Pipe, "pipe"),
+                ] {
+                    let preset = p.organ().preset(model);
+                    let bars = p
+                        .organ()
+                        .drawbars(model, preset)
+                        .iter()
+                        .map(u8::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    println!("    {label} p{preset}  {bars}");
+                }
+            }
         }
         Entity::Song(Song::Electro5(s)) => {
             let l = s.location();
