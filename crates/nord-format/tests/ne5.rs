@@ -12,10 +12,19 @@ use std::str::FromStr;
 
 /// Root of the Electro 5 specimen corpus.
 ///
-/// Defaults to the crate's committed `tests/corpus` (a small curated set kept in
-/// the workspace so the suite is self-contained). Point `NORD_CORPUS_DIR` at the
-/// full specimen set in the `nord-utils` RE workbench to run the exhaustive
-/// change-one-knob round-trip sweep across every panel.
+/// The corpus is **not** shipped in this repo — it lives in the private
+/// `jmoo/nord-corpus` repo (it will grow to hold proprietary piano/sample data).
+/// Point `NORD_CORPUS_DIR` at a checkout's `ne5/` dir to run the full
+/// change-one-knob round-trip sweep:
+///
+/// ```sh
+/// NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 cargo test -p nord-format
+/// ```
+///
+/// The Nix `nord-format-corpus` check sets this automatically (fetching the
+/// corpus lazily over SSH). When it's unset the corpus-backed tests **skip**, so
+/// the open minimal suite (compile + type/logic tests) still runs for anyone.
+/// The fallback path is a local convenience: drop specimens in `tests/corpus/`.
 fn corpus_dir() -> PathBuf {
     match std::env::var_os("NORD_CORPUS_DIR") {
         Some(dir) => PathBuf::from(dir),
@@ -25,7 +34,7 @@ fn corpus_dir() -> PathBuf {
 
 /// Returns `true` if the fixture exists; otherwise logs a skip and returns
 /// `false`, so a corpus-driven test stays green when the specimens aren't
-/// present (fresh checkout without the workbench, curated corpus not populated).
+/// present (no `NORD_CORPUS_DIR`, no access to the private corpus).
 fn have(path: &Path) -> bool {
     if path.exists() {
         true
