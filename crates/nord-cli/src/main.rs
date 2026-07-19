@@ -148,9 +148,16 @@ fn print_summary(entity: &Entity) {
                 println!("    slot {}:  program {}", slot + 1, location(p.x(), p.y()));
             }
         }
-        Entity::Settings(Settings::Electro5(_)) => {
+        Entity::Settings(Settings::Electro5(s)) => {
             println!("  type:      Electro 5 settings (ne5s)");
-            println!("  note:      body decode still partial; round-trips byte-exact");
+            println!("  note:      field decode pending specimens; raw body below");
+            let hex: String = s
+                .raw()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!("  body:      {hex}");
         }
         Entity::Piano(_) => {
             println!("  type:      piano (npno) — header/reference only");

@@ -6,6 +6,11 @@ use std::fmt::Debug;
 use std::io;
 
 pub const FORMAT: &str = "ne5s";
+
+/// Length of the settings body block (`0x2c..=0x4d`), the region covered by the
+/// CRC. Currently held verbatim; see [`Settings`] for the decode target.
+const BODY_LEN: usize = 0x4e - 0x2c;
+
 pub type Location = RangedU16Pair<0, 0>;
 pub type Header = common::Header<Location>;
 
@@ -22,10 +27,38 @@ struct Schema {
     #[bw(try_calc = w.checksum())]
     crc32: u32,
 
+    /// The raw settings body (`0x2c..=0x4d`), stored verbatim so the file
+    /// round-trips byte-exact. Field decode is pending a specimen corpus — see
+    /// the catalog on [`Settings`].
     #[brw(big, pad_before = 16)]
-    body: [u8; (0x4e - 0x2c) as usize],
+    raw: [u8; BODY_LEN],
 }
 
+/// The Electro 5 global settings (`ne5s`): system, MIDI, and sound preferences.
+///
+/// **Decode status: raw only.** The body round-trips byte-exact, but individual
+/// fields are not yet mapped to offsets. Unlike the program panels, the RE notes
+/// for settings are a *field catalog without byte offsets*, and only one
+/// specimen (the default) exists — so there's no differential corpus to locate
+/// fields with. Decoding is unblocked by capturing change-one-setting specimens
+/// (see the "settings capture checklist" in `Projects/Nord Utils.md`).
+///
+/// Target field catalog (from the RE README), to decode once specimens exist:
+///
+/// **System:** memory protection; rotary ctrl type (closed/open/half-moon);
+/// rotary pedal mode (hold/toggle); sustain pedal mode; B3 trig mode
+/// (normal/fast); output routing (stereo / L+U split); sustain pedal type;
+/// ctrl pedal type (ev7/fc7/exp2/xvp10/fv500l/fatar-SL); global transpose
+/// (-6..6 semitones); fine tune (-50..50 cent); ctrl pedal gain (1..10).
+///
+/// **MIDI:** local control; global channel (off/1..16); lower/upper receive
+/// channels; upper split channel; control-change mode; program-change mode;
+/// transpose-at (in/out).
+///
+/// **Sound:** piano string-resonance level (-6..6 dB); B3 tonewheel mode
+/// (clean/vintage1-3); B3 keyclick level; B3 keybounce; B3 perc DB9 mute; B3
+/// perc decay fast/slow; B3 perc volume normal/soft; rotary speaker type;
+/// rotary bass/horn balance; rotary horn speed/acc; rotary rotor speed/acc.
 #[derive(Debug)]
 pub struct Settings {
     schema: Schema,
@@ -36,7 +69,7 @@ impl Settings {
         Settings {
             schema: Schema {
                 header: Header::new(1, FORMAT, (0, 0).try_into().unwrap()),
-                body: [0; (0x4e - 0x2c) as usize],
+                raw: [0; BODY_LEN],
                 version: 0,
             },
         }
@@ -56,6 +89,13 @@ impl Settings {
             Ok(_) => Ok(()),
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
         }
+    }
+
+    /// The raw 34-byte settings body (`0x2c..=0x4d`). Field decode is not yet
+    /// implemented (see the [`Settings`] catalog); this exposes the bytes for
+    /// inspection and future reverse-engineering.
+    pub fn raw(&self) -> &[u8] {
+        &self.schema.raw
     }
 }
 
