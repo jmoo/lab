@@ -882,7 +882,7 @@ fn test_ne5_program_read_sample() {
 
 #[test]
 fn test_ne5_program_read_write_organ() {
-    use nord_format::electro5::OrganModel;
+    use nord_format::electro5::{OrganModel, PercSpeed, VibChorus};
 
     let test_files = corpus_dir().join("programs/organ");
     if !have(&test_files) {
@@ -917,15 +917,44 @@ fn test_ne5_program_read_write_organ() {
         }
     }
 
+    // Filename vib-type digit (0..5) -> mode. Filename order is v2,c2,v3,c3,v1,c1.
+    fn vib_of(i: u8) -> VibChorus {
+        use VibChorus::*;
+        [V2, C2, V3, C3, V1, C1][i as usize]
+    }
+    // Filename perc-speed digit (0..3) -> speed.
+    fn speed_of(e: u8) -> PercSpeed {
+        use PercSpeed::*;
+        [Off, Soft, Fast, Both][e as usize]
+    }
+    let dig = |m: &regex::Captures, i: usize| m[i].parse::<u8>().unwrap();
+
+    // Per-file vib/perc toggles decoded from the filename, if it encodes them.
+    enum Toggles {
+        // type-A: full B3 percussion + vibrato state
+        B3 {
+            perc_on: bool,
+            perc_third: bool,
+            perc_speed: PercSpeed,
+            vib_on: bool,
+            vib_type: VibChorus,
+        },
+        // type-C: Vox/Farfisa vibrato only (they have no percussion)
+        Vib { vib_on: bool, vib_type: VibChorus },
+        // type-B drawbar specimens carry no toggle info
+        None,
+    }
+
     // The three filename shapes actually present in the corpus:
-    //   type-A  PtcdefgDDDDDDDDD  (16 digits: 7 B3 toggle fields + 9 drawbars)
-    //   type-B  PMrs_DDDDDDDDD    (preset, model, rot_speed, rot_stop + 9 drawbars)
-    //   type-C  PMrs_EEEEE        (preset, model, rot_speed, rot_stop + 5 perc/vib)
-    let type_a = Regex::new(r"^(\d)\d{6}([0-8]{9})\.ne5p$").unwrap();
+    //   type-A  P d c t s v y DDDDDDDDD   (16 digits: 7 B3 toggle fields + 9 drawbars)
+    //   type-B  PMrs_DDDDDDDDD            (preset, model, rot_speed, rot_stop + 9 drawbars)
+    //   type-C  PMrs_ctsvy               (preset, model, rot_speed, rot_stop + 5 perc/vib)
+    let type_a = Regex::new(r"^(\d)(\d)(\d)(\d)(\d)(\d)(\d)([0-8]{9})\.ne5p$").unwrap();
     let type_b = Regex::new(r"^(\d)(\d)(\d)(\d)_([0-8a-r]{9})\.ne5p$").unwrap();
-    let type_c = Regex::new(r"^(\d)(\d)(\d)(\d)_[0-9]{5}\.ne5p$").unwrap();
+    let type_c = Regex::new(r"^(\d)(\d)(\d)(\d)_(\d)(\d)(\d)(\d)(\d)\.ne5p$").unwrap();
 
     let mut drawbar_checks = 0usize;
+    let mut toggle_checks = 0usize;
 
     for entry in fs::read_dir(&test_files).unwrap() {
         let entry = entry.unwrap();
@@ -938,43 +967,79 @@ fn test_ne5_program_read_write_organ() {
         }
         let path = entry.path();
 
-        // (model, preset, expected drawbar chars if any, storage==physical)
-        let (model, preset, drawbars, physical_storage): (OrganModel, u8, Option<String>, bool) =
-            if let Some(m) = type_a.captures(&name) {
-                (OrganModel::B3, m[1].parse().unwrap(), Some(m[2].to_string()), true)
-            } else if let Some(m) = type_b.captures(&name) {
-                let (model, phys) = model_of(m[2].parse().unwrap());
-                (model, m[1].parse().unwrap(), Some(m[5].to_string()), phys)
-            } else if let Some(m) = type_c.captures(&name) {
-                let (model, _) = model_of(m[2].parse().unwrap());
-                (model, m[1].parse().unwrap(), None, false)
-            } else {
-                panic!("unrecognized organ file name: {name}");
+        // (model, preset, expected drawbar chars if any, storage==physical, toggles)
+        let (model, preset, drawbars, physical_storage, toggles): (
+            OrganModel,
+            u8,
+            Option<String>,
+            bool,
+            Toggles,
+        ) = if let Some(m) = type_a.captures(&name) {
+            let toggles = Toggles::B3 {
+                perc_on: dig(&m, 3) == 1,
+                perc_third: dig(&m, 4) == 1,
+                perc_speed: speed_of(dig(&m, 5)),
+                vib_on: dig(&m, 6) == 1,
+                vib_type: vib_of(dig(&m, 7)),
             };
+            (OrganModel::B3, dig(&m, 1), Some(m[8].to_string()), true, toggles)
+        } else if let Some(m) = type_b.captures(&name) {
+            let (model, phys) = model_of(dig(&m, 2));
+            (model, dig(&m, 1), Some(m[5].to_string()), phys, Toggles::None)
+        } else if let Some(m) = type_c.captures(&name) {
+            let (model, _) = model_of(dig(&m, 2));
+            let toggles = Toggles::Vib {
+                vib_on: dig(&m, 8) == 1,
+                vib_type: vib_of(dig(&m, 9)),
+            };
+            (model, dig(&m, 1), None, false, toggles)
+        } else {
+            panic!("unrecognized organ file name: {name}");
+        };
 
         let contents = read(&path).unwrap();
         let mut program = match nord_format::from_path(&path).unwrap() {
             Entity::Program(nord_format::Program::Electro5(p)) => p,
             _ => panic!("expected electro5 program in file {name}"),
         };
+        let organ = program.organ();
 
         // Preset selection decodes to the value encoded in the filename.
-        assert_eq!(
-            program.organ().preset(model),
-            preset,
-            "preset selection mismatch in {name}",
-        );
+        assert_eq!(organ.preset(model), preset, "preset mismatch in {name}");
 
         // Drawbars decode to the filename's physical positions (except B3-bass).
         if let (Some(chars), true) = (drawbars.as_ref(), physical_storage) {
             let expected: Vec<u8> = chars.bytes().map(physical).collect();
-            let got = program.organ().drawbars(model, preset);
             assert_eq!(
-                got.as_slice(),
+                organ.drawbars(model, preset).as_slice(),
                 expected.as_slice(),
                 "drawbar decode mismatch in {name} ({model:?} preset {preset})",
             );
             drawbar_checks += 1;
+        }
+
+        // Vibrato / percussion toggles.
+        match toggles {
+            Toggles::B3 {
+                perc_on,
+                perc_third,
+                perc_speed,
+                vib_on,
+                vib_type,
+            } => {
+                assert_eq!(organ.b3_perc_on(preset), perc_on, "b3 perc_on in {name}");
+                assert_eq!(organ.b3_perc_third(), perc_third, "b3 perc_third in {name}");
+                assert_eq!(organ.b3_perc_speed(), perc_speed, "b3 perc_speed in {name}");
+                assert_eq!(organ.vib_on(model, preset), vib_on, "b3 vib_on in {name}");
+                assert_eq!(organ.vib_type(model), Some(vib_type), "b3 vib_type in {name}");
+                toggle_checks += 1;
+            }
+            Toggles::Vib { vib_on, vib_type } => {
+                assert_eq!(organ.vib_on(model, preset), vib_on, "vib_on in {name}");
+                assert_eq!(organ.vib_type(model), Some(vib_type), "vib_type in {name}");
+                toggle_checks += 1;
+            }
+            Toggles::None => {}
         }
 
         // Round-trip stays byte-exact regardless of how much is decoded.
@@ -988,7 +1053,7 @@ fn test_ne5_program_read_write_organ() {
     }
 
     assert!(
-        drawbar_checks > 0,
-        "no organ drawbar assertions ran — is the organ corpus present?"
+        drawbar_checks > 0 && toggle_checks > 0,
+        "no organ assertions ran — is the organ corpus present?"
     );
 }

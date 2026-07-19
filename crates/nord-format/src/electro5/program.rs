@@ -339,6 +339,27 @@ pub struct OrganPanel {
     // 0x8d 0b11111111_11111111_11111111_11111111_11110000 - preset2 drawbars (pipe, normal)
 }
 
+/// A vibrato (`V`) or chorus (`C`) organ modulation at one of three depths.
+/// Which subset is available depends on the model (see [`OrganPanel::vib_type`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VibChorus {
+    V1,
+    C1,
+    V2,
+    C2,
+    V3,
+    C3,
+}
+
+/// B3 percussion decay speed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PercSpeed {
+    Off,
+    Soft,
+    Fast,
+    Both,
+}
+
 impl OrganPanel {
     /// Panel-relative drawbar-block offset for a model + preset (1 or 2).
     fn drawbar_offset(model: OrganModel, preset: u8) -> usize {
@@ -376,6 +397,62 @@ impl OrganPanel {
     /// applied.
     pub fn drawbars(&self, model: OrganModel, preset: u8) -> [u8; 9] {
         read_drawbars(&self.raw, Self::drawbar_offset(model, preset))
+    }
+
+    /// Panel-relative index of the per-preset vib/perc byte for `model`, or
+    /// `None` for Pipe (no vib/perc). For B3 this byte also holds percussion.
+    fn effect_byte(model: OrganModel, preset: u8) -> Option<usize> {
+        let (p1, p2) = match model {
+            OrganModel::B3 => (0x59, 0x60),
+            OrganModel::Vox => (0x6b, 0x71),
+            OrganModel::Farfisa => (0x7b, 0x81),
+            OrganModel::Pipe => return None,
+        };
+        Some(org(if preset == 2 { p2 } else { p1 }))
+    }
+
+    /// Whether vibrato/chorus is on for `model`'s `preset`.
+    pub fn vib_on(&self, model: OrganModel, preset: u8) -> bool {
+        match Self::effect_byte(model, preset) {
+            Some(i) => self.raw[i] & 0x08 != 0,
+            None => false,
+        }
+    }
+
+    /// The vibrato/chorus mode selected for `model` (shared across presets), or
+    /// `None` for Pipe. Each model exposes a different subset of the six modes,
+    /// so the stored 3-bit value indexes into a per-model table.
+    pub fn vib_type(&self, model: OrganModel) -> Option<VibChorus> {
+        use VibChorus::*;
+        let (byte, table): (usize, &[VibChorus]) = match model {
+            OrganModel::B3 => (org(0x51), &[V1, C1, V2, C2, V3, C3]),
+            OrganModel::Vox => (org(0x63), &[V1, V2, V3]),
+            OrganModel::Farfisa => (org(0x73), &[V1, V2, C2, C3]),
+            OrganModel::Pipe => return None,
+        };
+        table.get((self.raw[byte] >> 5) as usize).copied()
+    }
+
+    /// Whether B3 percussion is on for `preset` (B3 only).
+    pub fn b3_perc_on(&self, preset: u8) -> bool {
+        self.raw[org(if preset == 2 { 0x60 } else { 0x59 })] & 0x04 != 0
+    }
+
+    /// Whether B3 percussion uses the third harmonic (shared across presets).
+    pub fn b3_perc_third(&self) -> bool {
+        self.raw[org(0x51)] & 0x10 != 0
+    }
+
+    /// B3 percussion decay speed (shared across presets). Note the on-disk
+    /// encoding is not monotonic — the two speed bits store 2/1/3 for
+    /// soft/fast/both.
+    pub fn b3_perc_speed(&self) -> PercSpeed {
+        match (self.raw[org(0x51)] >> 2) & 0x03 {
+            0 => PercSpeed::Off,
+            2 => PercSpeed::Soft,
+            1 => PercSpeed::Fast,
+            _ => PercSpeed::Both,
+        }
     }
 }
 

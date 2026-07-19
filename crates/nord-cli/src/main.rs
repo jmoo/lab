@@ -108,24 +108,34 @@ fn print_summary(entity: &Entity) {
             println!("  part mix:  {} (lower/upper %)", p.part_mix().as_string());
             println!("  gain:      {}", p.gain());
 
-            // Organ drawbars (selected preset per model), when the organ is in use.
+            // Organ state (selected preset per model), when the organ is in use.
             if p.lower_part() == Instrument::Organ || p.upper_part() == Instrument::Organ {
-                println!("  organ:     drawbars of the selected preset, per model");
+                let o = p.organ();
+                println!("  organ:     drawbars / vibrato / percussion, selected preset per model");
                 for (model, label) in [
                     (OrganModel::B3, "b3  "),
                     (OrganModel::Vox, "vox "),
                     (OrganModel::Farfisa, "farf"),
                     (OrganModel::Pipe, "pipe"),
                 ] {
-                    let preset = p.organ().preset(model);
-                    let bars = p
-                        .organ()
-                        .drawbars(model, preset)
-                        .iter()
-                        .map(u8::to_string)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    println!("    {label} p{preset}  {bars}");
+                    let preset = o.preset(model);
+                    let bars: String = o.drawbars(model, preset).iter().map(u8::to_string).collect();
+                    let vib = match o.vib_type(model) {
+                        Some(v) if o.vib_on(model, preset) => format!("  vib {v:?}"),
+                        Some(_) => "  vib off".to_string(),
+                        None => String::new(),
+                    };
+                    let perc = if matches!(model, OrganModel::B3) {
+                        if o.b3_perc_on(preset) {
+                            let third = if o.b3_perc_third() { " +3rd" } else { "" };
+                            format!("  perc {:?}{third}", o.b3_perc_speed())
+                        } else {
+                            "  perc off".to_string()
+                        }
+                    } else {
+                        String::new()
+                    };
+                    println!("    {label} p{preset}  {bars}{vib}{perc}");
                 }
             }
         }

@@ -4,7 +4,7 @@ pub use settings::Settings;
 pub mod song;
 pub use song::Song;
 pub mod program;
-pub use program::{OrganModel, Program};
+pub use program::{OrganModel, PercSpeed, Program, VibChorus};
 #[cfg(feature = "bundle")]
 pub mod bundle;
 use crate::common;
