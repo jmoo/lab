@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "anki-tool",
+  "nord-format",
 ]
 resolver = "2"
 

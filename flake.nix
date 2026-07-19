@@ -46,6 +46,7 @@
             packages = {
               inherit (pkgs)
                 anki-tool
+                nord-format
                 open-bamboo-networking
                 ;
             };
