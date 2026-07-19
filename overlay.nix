@@ -14,6 +14,12 @@ in
   #   };
   # });
 
+  # Private repository of clavia nord files to test nord-format against
+  nord-corpus = builtins.fetchGit {
+    rev = "b80431bcccddbb07bf5bcccb7dce42968c404898";
+    url = "git+ssh://git@github.com/jmoo/nord-corpus.git";
+  };
+
   nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 
   open-bamboo-networking = final.callPackage ./pkgs/open-bamboo-networking { };

@@ -43,9 +43,22 @@
         perSystem =
           { pkgs, ... }:
           {
+            # Test nord-format against real clavia nord files.
+            # This requires access to a private repository (jmoo/nord-corpus)
+            checks.nord-format-corpus = pkgs.nord-format.overrideAttrs (old: {
+              NORD_CORPUS_DIR = "${pkgs.nord-corpus}/ne5";
+              cargoTestFlags = old.cargoTestFlags ++ [
+                "--features"
+                "corpus"
+              ];
+              doCheck = true;
+            });
+
             packages = {
               inherit (pkgs)
                 anki-tool
+                nord-cli
+                nord-format
                 open-bamboo-networking
                 ;
             };
