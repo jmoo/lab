@@ -44,9 +44,14 @@
           { pkgs, ... }:
           {
             # Test nord-format against real clavia nord files.
-            # This requires access to a private repository (jmoo/nord-corpus)
-            checks.nord-format-corpus = pkgs.nord-format.overrideAttrs (_: {
+            # This requires access to a private repository (jmoo/nord-corpus).
+            # The corpus-backed tests are gated behind the `corpus` feature.
+            checks.nord-format-corpus = pkgs.nord-format.overrideAttrs (old: {
               NORD_CORPUS_DIR = "${pkgs.nord-corpus}/ne5";
+              cargoTestFlags = old.cargoTestFlags ++ [
+                "--features"
+                "corpus"
+              ];
               doCheck = true;
             });
 

@@ -14,6 +14,10 @@ default = []
 # bundle`. Off by default so parse-only consumers (and the corpus round-trip
 # tests, which never touch bundles) stay lean.
 bundle = ["dep:zip"]
+# The corpus-backed round-trip/decode tests (tests/ne5.rs) need the private
+# specimen corpus (NORD_CORPUS_DIR). Off by default so the open minimal suite
+# runs anywhere; the Nix `nord-format-corpus` check enables it. Test-only.
+corpus = []
 
 [dependencies]
 binrw = "0.14"

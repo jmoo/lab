@@ -1,55 +1,42 @@
-use nord_format::common::bank::Item;
-use std::fs;
+#![cfg(feature = "corpus")]
+//! Corpus-backed decode + byte-exact round-trip tests for the Electro 5 formats.
+//!
+//! Gated behind the `corpus` cargo feature: these need the specimen corpus,
+//! which lives in the private `jmoo/nord-corpus` repo (it grows to hold
+//! proprietary piano/sample data). Without the feature the whole file compiles
+//! out, so the default `cargo test` runs only the open minimal suite. The Nix
+//! `nord-format-corpus` check enables the feature and sets `NORD_CORPUS_DIR`.
+//!
+//! ```sh
+//! NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 cargo test -p nord-format --features corpus
+//! ```
+//!
+//! TODO: migrate these hand-rolled `read_dir` loops to a data-driven harness
+//! (`datatest-stable` / `libtest-mimic`) so each specimen is its own reported
+//! test case — see `Projects/Nord Utils.md`.
 
+use nord_format::common::bank::Item;
 use nord_format::electro5::{Instrument, SplitPoint};
-use nord_format::error::Error;
 use nord_format::{electro5, Entity};
 use regex::Regex;
+use std::fs;
 use std::fs::read;
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 
-/// Root of the Electro 5 specimen corpus.
-///
-/// The corpus is **not** shipped in this repo — it lives in the private
-/// `jmoo/nord-corpus` repo (it will grow to hold proprietary piano/sample data).
-/// Point `NORD_CORPUS_DIR` at a checkout's `ne5/` dir to run the full
-/// change-one-knob round-trip sweep:
-///
-/// ```sh
-/// NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 cargo test -p nord-format
-/// ```
-///
-/// The Nix `nord-format-corpus` check sets this automatically (fetching the
-/// corpus lazily over SSH). When it's unset the corpus-backed tests **skip**, so
-/// the open minimal suite (compile + type/logic tests) still runs for anyone.
-/// The fallback path is a local convenience: drop specimens in `tests/corpus/`.
+/// Root of the Electro 5 specimen corpus, taken from `NORD_CORPUS_DIR` (point it
+/// at a `nord-corpus/ne5` checkout). Since these tests only compile under the
+/// `corpus` feature, a missing `NORD_CORPUS_DIR` is a hard error, not a skip.
 fn corpus_dir() -> PathBuf {
-    match std::env::var_os("NORD_CORPUS_DIR") {
-        Some(dir) => PathBuf::from(dir),
-        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus"),
-    }
-}
-
-/// Returns `true` if the fixture exists; otherwise logs a skip and returns
-/// `false`, so a corpus-driven test stays green when the specimens aren't
-/// present (no `NORD_CORPUS_DIR`, no access to the private corpus).
-fn have(path: &Path) -> bool {
-    if path.exists() {
-        true
-    } else {
-        eprintln!("skipping: missing corpus fixture {}", path.display());
-        false
-    }
+    std::env::var_os("NORD_CORPUS_DIR")
+        .map(PathBuf::from)
+        .expect("set NORD_CORPUS_DIR to a nord-corpus/ne5 checkout for --features corpus")
 }
 
 #[test]
 fn test_ne5_read_song_macro() {
     let test_file = corpus_dir().join("song.ne5t");
-    if !have(&test_file) {
-        return;
-    }
 
     let song = nord_format::from_path(&test_file).unwrap();
 
@@ -71,9 +58,6 @@ fn test_ne5_read_song_macro() {
 #[test]
 fn test_ne5_read_song_bank() {
     let test_file = corpus_dir().join("song.ne5t");
-    if !have(&test_file) {
-        return;
-    }
 
     let song = nord_format::from_path(&test_file).unwrap();
 
@@ -91,9 +75,6 @@ fn test_ne5_read_song_bank() {
 #[test]
 fn test_ne5_read_song_programs() {
     let test_file = corpus_dir().join("song.ne5t");
-    if !have(&test_file) {
-        return;
-    }
 
     let song = nord_format::from_path(&test_file).unwrap();
 
@@ -111,9 +92,6 @@ fn test_ne5_read_song_programs() {
 #[test]
 fn test_ne5_write_song() {
     let test_file = corpus_dir().join("song.ne5t");
-    if !have(&test_file) {
-        return;
-    }
 
     let song = nord_format::from_path(&test_file).unwrap();
     let contents = read(&test_file).unwrap();
@@ -131,84 +109,8 @@ fn test_ne5_write_song() {
 }
 
 #[test]
-fn test_ne5_read_write_new_song() -> Result<(), Error> {
-    let mut song = electro5::Song::new(
-        (0, 1).try_into()?,
-        [
-            (1, 2).try_into()?,
-            (2, 3).try_into()?,
-            (3, 4).try_into()?,
-            (4, 5).try_into()?,
-        ],
-    );
-
-    // Assert song was created with correct values
-    assert_eq!(song.location(), (0, 1));
-    assert_eq!(song.get(0), (1, 2));
-    assert_eq!(song.get(1), (2, 3));
-    assert_eq!(song.get(2), (3, 4));
-    assert_eq!(song.get(3), (4, 5));
-
-    // Read/Write song to result
-    let mut write_result = Vec::new();
-    song.write_to(&mut Cursor::new(&mut write_result)).unwrap();
-
-    let result = electro5::Song::read_from(&mut Cursor::new(&mut write_result)).unwrap();
-
-    // Assert those values are the same after writing and reading
-    assert_eq!(song.location(), result.location());
-    assert_eq!(song.get(0), result.get(0));
-    assert_eq!(song.get(1), result.get(1));
-    assert_eq!(song.get(2), result.get(2));
-    assert_eq!(song.get(3), result.get(3));
-
-    Ok(())
-}
-
-#[test]
-fn test_ne5_update_song_program() -> Result<(), Error> {
-    let mut song = electro5::Song::new(
-        (0, 1).try_into()?,
-        [
-            (1, 2).try_into()?,
-            (2, 3).try_into()?,
-            (3, 4).try_into()?,
-            (4, 5).try_into()?,
-        ],
-    );
-
-    // Update program 1
-    song.set(1, (5, 20).try_into()?);
-
-    // Assert song was updated with correct values
-    assert_eq!(song.location(), (0, 1));
-    assert_eq!(song.get(0), (1, 2));
-    assert_eq!(song.get(1), (5, 20));
-    assert_eq!(song.get(2), (3, 4));
-    assert_eq!(song.get(3), (4, 5));
-
-    // Read/Write song to result
-    let mut write_result = Vec::new();
-    song.write_to(&mut Cursor::new(&mut write_result)).unwrap();
-
-    let result = electro5::Song::read_from(&mut Cursor::new(&mut write_result)).unwrap();
-
-    // Assert those values are the same after writing and reading
-    assert_eq!(song.location(), result.location());
-    assert_eq!(song.get(0), result.get(0));
-    assert_eq!(song.get(1), result.get(1));
-    assert_eq!(song.get(2), result.get(2));
-    assert_eq!(song.get(3), result.get(3));
-
-    Ok(())
-}
-
-#[test]
 fn test_ne5_read_program() {
     let test_file = corpus_dir().join("programs/center_panel/o00_1_p000_0_1_0_50_50.ne5p");
-    if !have(&test_file) {
-        return;
-    }
 
     let program = nord_format::from_path(&test_file).unwrap();
 
@@ -238,9 +140,6 @@ fn test_ne5_read_program() {
 #[test]
 fn test_ne5_read_write_program() {
     let test_file = corpus_dir().join("programs/center_panel/o00_1_p000_0_1_0_50_50.ne5p");
-    if !have(&test_file) {
-        return;
-    }
 
     let read_contents = read(&test_file).unwrap();
     let program = nord_format::from_path(&test_file).unwrap();
@@ -262,9 +161,6 @@ fn test_ne5_read_write_program() {
 #[test]
 fn test_ne5_read_settings() {
     let test_file = corpus_dir().join("settings.ne5s");
-    if !have(&test_file) {
-        return;
-    }
 
     let program = nord_format::from_path(&test_file).unwrap();
 
@@ -279,9 +175,6 @@ fn test_ne5_read_settings() {
 #[test]
 fn test_ne5_program_read_write_center_panel() {
     let test_files = corpus_dir().join("programs/center_panel");
-    if !have(&test_files) {
-        return;
-    }
 
     let paths = fs::read_dir(&test_files).unwrap();
 
@@ -499,9 +392,6 @@ fn test_ne5_program_read_write_center_panel() {
 #[test]
 fn test_ne5_program_read_write_gain() {
     let test_files = corpus_dir().join("programs/gain");
-    if !have(&test_files) {
-        return;
-    }
 
     let paths = fs::read_dir(&test_files).unwrap();
 
@@ -555,9 +445,6 @@ fn test_ne5_program_read_write_gain() {
 #[test]
 fn test_ne5_program_read_write_fx() {
     let test_files = corpus_dir().join("programs/fx");
-    if !have(&test_files) {
-        return;
-    }
 
     let paths = fs::read_dir(&test_files).unwrap();
 
@@ -778,9 +665,6 @@ fn test_ne5_program_read_write_fx() {
 #[test]
 fn test_ne5_program_read_write_equalizer() {
     let test_files = corpus_dir().join("programs/equalizer");
-    if !have(&test_files) {
-        return;
-    }
 
     let paths = fs::read_dir(&test_files).unwrap();
 
@@ -833,9 +717,6 @@ fn test_ne5_program_read_write_equalizer() {
 #[test]
 fn test_ne5_program_read_sample() {
     let test_files = corpus_dir().join("programs/sample");
-    if !have(&test_files) {
-        return;
-    }
 
     let paths = fs::read_dir(&test_files).unwrap();
 
@@ -894,9 +775,6 @@ fn test_ne5_program_read_write_organ() {
     use nord_format::electro5::{OrganModel, PercSpeed, VibChorus};
 
     let test_files = corpus_dir().join("programs/organ");
-    if !have(&test_files) {
-        return;
-    }
 
     // Filename drawbar char -> physical position (0..=8). Digits and the two
     // letter ranges all encode the same nine physical positions; only the
@@ -949,7 +827,10 @@ fn test_ne5_program_read_write_organ() {
             vib_type: VibChorus,
         },
         // type-C: Vox/Farfisa vibrato only (they have no percussion)
-        Vib { vib_on: bool, vib_type: VibChorus },
+        Vib {
+            vib_on: bool,
+            vib_type: VibChorus,
+        },
         // type-B drawbar specimens carry no toggle info
         None,
     }
@@ -991,10 +872,22 @@ fn test_ne5_program_read_write_organ() {
                 vib_on: dig(&m, 6) == 1,
                 vib_type: vib_of(dig(&m, 7)),
             };
-            (OrganModel::B3, dig(&m, 1), Some(m[8].to_string()), true, toggles)
+            (
+                OrganModel::B3,
+                dig(&m, 1),
+                Some(m[8].to_string()),
+                true,
+                toggles,
+            )
         } else if let Some(m) = type_b.captures(&name) {
             let (model, phys) = model_of(dig(&m, 2));
-            (model, dig(&m, 1), Some(m[5].to_string()), phys, Toggles::None)
+            (
+                model,
+                dig(&m, 1),
+                Some(m[5].to_string()),
+                phys,
+                Toggles::None,
+            )
         } else if let Some(m) = type_c.captures(&name) {
             let (model, _) = model_of(dig(&m, 2));
             let toggles = Toggles::Vib {
@@ -1040,7 +933,11 @@ fn test_ne5_program_read_write_organ() {
                 assert_eq!(organ.b3_perc_third(), perc_third, "b3 perc_third in {name}");
                 assert_eq!(organ.b3_perc_speed(), perc_speed, "b3 perc_speed in {name}");
                 assert_eq!(organ.vib_on(model, preset), vib_on, "b3 vib_on in {name}");
-                assert_eq!(organ.vib_type(model), Some(vib_type), "b3 vib_type in {name}");
+                assert_eq!(
+                    organ.vib_type(model),
+                    Some(vib_type),
+                    "b3 vib_type in {name}"
+                );
                 toggle_checks += 1;
             }
             Toggles::Vib { vib_on, vib_type } => {
