@@ -110,3 +110,84 @@ impl Song {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Song;
+    use crate::common::bank::Item;
+    use crate::error::Error;
+    use std::io::Cursor;
+
+    #[test]
+    fn read_write_new_song() -> Result<(), Error> {
+        let mut song = Song::new(
+            (0, 1).try_into()?,
+            [
+                (1, 2).try_into()?,
+                (2, 3).try_into()?,
+                (3, 4).try_into()?,
+                (4, 5).try_into()?,
+            ],
+        );
+
+        // Assert song was created with correct values
+        assert_eq!(song.location(), (0, 1));
+        assert_eq!(song.get(0), (1, 2));
+        assert_eq!(song.get(1), (2, 3));
+        assert_eq!(song.get(2), (3, 4));
+        assert_eq!(song.get(3), (4, 5));
+
+        // Read/Write song to result
+        let mut write_result = Vec::new();
+        song.write_to(&mut Cursor::new(&mut write_result)).unwrap();
+
+        let result = Song::read_from(&mut Cursor::new(&mut write_result)).unwrap();
+
+        // Assert those values are the same after writing and reading
+        assert_eq!(song.location(), result.location());
+        assert_eq!(song.get(0), result.get(0));
+        assert_eq!(song.get(1), result.get(1));
+        assert_eq!(song.get(2), result.get(2));
+        assert_eq!(song.get(3), result.get(3));
+
+        Ok(())
+    }
+
+    #[test]
+    fn update_song_program() -> Result<(), Error> {
+        let mut song = Song::new(
+            (0, 1).try_into()?,
+            [
+                (1, 2).try_into()?,
+                (2, 3).try_into()?,
+                (3, 4).try_into()?,
+                (4, 5).try_into()?,
+            ],
+        );
+
+        // Update program 1
+        song.set(1, (5, 20).try_into()?);
+
+        // Assert song was updated with correct values
+        assert_eq!(song.location(), (0, 1));
+        assert_eq!(song.get(0), (1, 2));
+        assert_eq!(song.get(1), (5, 20));
+        assert_eq!(song.get(2), (3, 4));
+        assert_eq!(song.get(3), (4, 5));
+
+        // Read/Write song to result
+        let mut write_result = Vec::new();
+        song.write_to(&mut Cursor::new(&mut write_result)).unwrap();
+
+        let result = Song::read_from(&mut Cursor::new(&mut write_result)).unwrap();
+
+        // Assert those values are the same after writing and reading
+        assert_eq!(song.location(), result.location());
+        assert_eq!(song.get(0), result.get(0));
+        assert_eq!(song.get(1), result.get(1));
+        assert_eq!(song.get(2), result.get(2));
+        assert_eq!(song.get(3), result.get(3));
+
+        Ok(())
+    }
+}
