@@ -65,9 +65,7 @@ refinement — never a risk to the write path.
 Unit tests live inline (`#[cfg(test)] mod tests`) and run on a plain
 `cargo test`. The **corpus integration suite** (`tests/ne5.rs`) is gated behind
 the `corpus` feature because it needs the specimen corpus, which lives in a
-separate private repo (`jmoo/nord-corpus`) — it grows to hold proprietary Nord
-piano/sample data. This is the SQLite model: an open minimal suite plus an
-access-gated full suite.
+separate private repo (`jmoo/nord-corpus`)
 
 ```sh
 cargo test -p nord-format                       # minimal suite (inline unit tests)
@@ -75,11 +73,11 @@ cargo test -p nord-format                       # minimal suite (inline unit tes
 # Full corpus sweep — point NORD_CORPUS_DIR at a nord-corpus/ne5 checkout:
 NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
   cargo test -p nord-format --features corpus
+
+# With nix
+nix build .#checks.<system>.nord-format-corpus
 ```
 
-Under Nix, `nix build .#checks.<system>.nord-format-corpus` (or `nix flake
-check`) fetches the corpus lazily over SSH and runs the full sweep; a plain
-`nix build .#nord-format` never needs it.
 
 ## Where this fits
 
@@ -88,6 +86,27 @@ any Nord model — full file read/write plus USB — feature-complete with the
 closed-source Nord Sound Manager. This crate is the format layer; a device/USB
 crate and a thin CLI ([`nord-cli`](../nord-cli)) sit on top. Reverse-engineering
 notes and the byte maps still being worked out live with the specimen corpus.
+
+## Prior art
+
+Building on the Nord reverse-engineering community rather than from scratch:
+
+- **[`Chris55/ns3-program-viewer`](https://github.com/Chris55/ns3-program-viewer)**
+  — a read-only web viewer for Nord Stage 2 / 2EX / 3 programs.
+- **[`Chris55/nord-documentation`](https://github.com/Chris55/nord-documentation)**
+  ([rendered](https://chris55.github.io/nord-documentation/)) — community byte-map
+  docs for Nord Stage 2/3 and Lead A1, built with the same hex-diff method.
+
+Our differentiation is Rust, **writing** (not just reading), and eventually USB.
+The intent is two-way: consume those byte maps to bootstrap Stage support, and
+contribute the Electro 5 reverse engineering back.
+
+## Disclaimer
+
+Not affiliated with, authorized, or endorsed by Clavia DMI AB. "Nord", "Clavia",
+and "Electro" are trademarks of Clavia DMI AB, used here only to identify the
+hardware these formats come from. All reverse engineering is of files produced by
+hardware the author owns, for interoperability.
 
 [`binrw`]: https://docs.rs/binrw
 [`Entity`]: https://docs.rs/nord-format
