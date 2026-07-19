@@ -81,15 +81,13 @@ nix build .#checks.<system>.nord-format-corpus
 
 ## Where this fits
 
-Part of the Nord toolkit whose north star is a Rust library for interacting with
-any Nord model — full file read/write plus USB — feature-complete with the
-closed-source Nord Sound Manager. This crate is the format layer; a device/USB
-crate and a thin CLI ([`nord-cli`](../nord-cli)) sit on top. Reverse-engineering
-notes and the byte maps still being worked out live with the specimen corpus.
+This project started in 2024 as my personal 'learn rust' project. The goal was to be able to read/write clavia files for my electro 5. After I got most of the ne5 formats RE'd, I got a new job that was pretty demanding and I didn't have much free time to continue.
+
+The goal now is to finish reverse engineering ne5 files, add support for more models, and to reverse engineer the USB protocol. The end game is to have a portable toolkit that could be the foundation of an open source nord manager alternative with linux support.
 
 ## Prior art
 
-Building on the Nord reverse-engineering community rather than from scratch:
+ Shout out to @Chris55. I wish I had discovered his work before I started. It would have made some of the initial reverse engineering easier. Once I finish decoding the ne5, I plan to contribute the ICD back to these projects.
 
 - **[`Chris55/ns3-program-viewer`](https://github.com/Chris55/ns3-program-viewer)**
   — a read-only web viewer for Nord Stage 2 / 2EX / 3 programs.
@@ -97,9 +95,7 @@ Building on the Nord reverse-engineering community rather than from scratch:
   ([rendered](https://chris55.github.io/nord-documentation/)) — community byte-map
   docs for Nord Stage 2/3 and Lead A1, built with the same hex-diff method.
 
-Our differentiation is Rust, **writing** (not just reading), and eventually USB.
-The intent is two-way: consume those byte maps to bootstrap Stage support, and
-contribute the Electro 5 reverse engineering back.
+Why maintain a separate project? Primarily because this is a rust learning project for me and I've written enough js in my life to not really want to write it in my free time. Also, the goal of this project are r/w + usb, not just read.
 
 ## Disclaimer
 
