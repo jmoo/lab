@@ -212,7 +212,6 @@ pub struct SamplePanel {
 // vib/perc state for *every* organ model (B3, Vox, Farfisa, Pipe) and both
 // presets, so switching model/preset on the instrument is lossless too.
 //
-// CONFIRMED (2026-07-19, by diffing the change-one-knob organ specimen corpus):
 //   * Drawbars = 9 nibbles, physical position 0..=8, packed high-nibble first,
 //     at these panel offsets per model + preset (B3-bass shares the B3 slots):
 //         B3   p1 0x55  p2 0x5c      Vox  p1 0x67  p2 0x6d

@@ -34,16 +34,7 @@ struct Schema {
     raw: [u8; BODY_LEN],
 }
 
-/// The Electro 5 global settings (`ne5s`): system, MIDI, and sound preferences.
-///
-/// **Decode status: raw only.** The body round-trips byte-exact, but individual
-/// fields are not yet mapped to offsets. Unlike the program panels, the RE notes
-/// for settings are a *field catalog without byte offsets*, and only one
-/// specimen (the default) exists — so there's no differential corpus to locate
-/// fields with. Decoding is unblocked by capturing change-one-setting specimens
-/// (see the "settings capture checklist" in `Projects/Nord Utils.md`).
-///
-/// Target field catalog (from the RE README), to decode once specimens exist:
+/// Electro 5 global settings (`ne5s`): system, MIDI, and sound preferences.
 ///
 /// **System:** memory protection; rotary ctrl type (closed/open/half-moon);
 /// rotary pedal mode (hold/toggle); sustain pedal mode; B3 trig mode
