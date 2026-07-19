@@ -5,44 +5,89 @@ Parse and write **Clavia / Nord** keyboard binary file formats from Rust.
 This is the pure format-logic crate of the Nord toolkit: the `CBIN` container,
 the CRC-32 (ISO-HDLC) range checksum, and per-model entity layouts. It depends
 only on [`binrw`] (plus `zip` behind the `bundle` feature for backup bundles) and
-does no USB, OS, or I/O beyond `Read`/`Seek`/`Write`, so it is trivially testable
+does no USB, OS, or I/O beyond `Read`/`Seek`/`Write` — so it's trivially testable
 against a specimen corpus and reusable by higher layers (a device/USB crate, a
 CLI) without dragging in a transport stack.
 
-Ported from the `binrw` generation of `jmoo/nord-utils`; that repo remains the
-reverse-engineering workbench (specimens, capture dumps, protocol notes).
+## What it handles
 
-## Status
+| Format | Parse | Write (byte-exact) | Semantic decode |
+|---|:--:|:--:|---|
+| `ne5p` program | ✅ | ✅ | Center / piano / sample / FX / EQ panels ✅. **Organ**: drawbars, preset, vibrato/chorus (all models) and B3 percussion ✅ — B3-bass & Farfisa drawbar *display* transforms still pending. |
+| `ne5t` song / set | ✅ | ✅ | ✅ (four program slots) |
+| `ne5s` settings | ✅ | ✅ | Raw body only — round-trips byte-exact; field decode is pending a specimen corpus (the System/MIDI/Sound catalog is documented on `electro5::settings::Settings`). |
+| `npno` piano / `nsmp` sample | ✅ (header) | ✅ | Header / reference only. |
+| backup bundle (ZIP) | ✅ | — | Partial; behind the `bundle` feature. |
 
-- **Electro 5** (`ne5p` program, `ne5t` song/set, `ne5s` settings) — decoded and
-  **corpus-verified**: `parse → write` round-trips byte-for-byte. The organ panel
-  is carried as a raw passthrough (framing verified; semantic decode is the known
-  gap — see the byte-map in `src/electro5/program.rs`).
-- `npno` piano / `nsmp` sample — header only.
-- Backup **bundles** (ZIP + entities) behind the `bundle` feature.
+Everything that parses **round-trips byte-for-byte**, verified against a
+change-one-knob specimen corpus.
 
-## Invariant: lossless round-trip
+## Usage
 
-Unknown regions are represented as raw byte blocks, so `parse → write` is always
-byte-identical even where semantics are incomplete. Every new decoded field is a
-safe, incremental refinement.
+```rust
+use nord_format::{from_path, Entity, Program};
+use nord_format::common::bank::Item; // for `.location()`
+use nord_format::electro5::OrganModel;
+
+let entity = from_path("patch.ne5p")?;
+
+if let Entity::Program(Program::Electro5(p)) = entity {
+    println!("location: {:?}", p.location());
+    println!("lower/upper: {:?} / {:?}", p.lower_part(), p.upper_part());
+
+    // Organ state is decoded per model + selected preset:
+    let preset = p.organ().preset(OrganModel::B3);
+    println!("B3 drawbars: {:?}", p.organ().drawbars(OrganModel::B3, preset));
+    println!("B3 vibrato:  {:?}", p.organ().vib_type(OrganModel::B3));
+}
+```
+
+`from_path` / `from_stream` sniff the container and return an [`Entity`]; the
+`electro5` module holds the concrete `Program`/`Song`/`Settings` layouts and the
+`OrganModel` / `VibChorus` / `PercSpeed` decode types.
+
+## Lossless round-trip is the core invariant
+
+Unknown regions are kept as **raw byte blocks** and decoded values are exposed as
+read-only views over them, so `parse → write` is byte-identical even where the
+semantics are incomplete. Every newly decoded field is a safe, incremental
+refinement — never a risk to the write path.
 
 ## Features
 
-- `bundle` (opt-in) — ZIP-based backup bundles. Off by default so parse-only
-  consumers (and the corpus round-trip tests, which never touch bundles) stay
-  lean; enable with `--features bundle`.
+- **`bundle`** — ZIP-based backup bundles (pulls in the `zip` stack). Off by
+  default so parse-only consumers stay lean; enable with `--features bundle`.
+- **`corpus`** — *test-only*. Gates the corpus-backed integration tests
+  (`tests/ne5.rs`); see below.
 
-## Tests & the specimen corpus
+## Tests
 
-The round-trip tests are driven by a change-one-knob specimen corpus whose
-filenames encode the settings. By default they read the crate's committed
-`tests/corpus` and **skip** any panel whose fixtures are absent, so a fresh
-checkout stays green. Point `NORD_CORPUS_DIR` at the full specimen set in the
-`nord-utils` workbench to run the exhaustive sweep across every panel:
+Unit tests live inline (`#[cfg(test)] mod tests`) and run on a plain
+`cargo test`. The **corpus integration suite** (`tests/ne5.rs`) is gated behind
+the `corpus` feature because it needs the specimen corpus, which lives in a
+separate private repo (`jmoo/nord-corpus`) — it grows to hold proprietary Nord
+piano/sample data. This is the SQLite model: an open minimal suite plus an
+access-gated full suite.
 
 ```sh
-NORD_CORPUS_DIR=~/Repos/jmoo/nord-utils/archive/resources/ne5 cargo test -p nord-format
+cargo test -p nord-format                       # minimal suite (inline unit tests)
+
+# Full corpus sweep — point NORD_CORPUS_DIR at a nord-corpus/ne5 checkout:
+NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+  cargo test -p nord-format --features corpus
 ```
 
+Under Nix, `nix build .#checks.<system>.nord-format-corpus` (or `nix flake
+check`) fetches the corpus lazily over SSH and runs the full sweep; a plain
+`nix build .#nord-format` never needs it.
+
+## Where this fits
+
+Part of the Nord toolkit whose north star is a Rust library for interacting with
+any Nord model — full file read/write plus USB — feature-complete with the
+closed-source Nord Sound Manager. This crate is the format layer; a device/USB
+crate and a thin CLI ([`nord-cli`](../nord-cli)) sit on top. Reverse-engineering
+notes and the byte maps still being worked out live with the specimen corpus.
+
 [`binrw`]: https://docs.rs/binrw
+[`Entity`]: https://docs.rs/nord-format
