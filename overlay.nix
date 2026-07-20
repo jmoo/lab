@@ -1,40 +1,45 @@
-inputs: final: prev:
+inputs:
 let
-  lib' = prev.lib.extend (import ./lib.nix inputs);
+  lib' = inputs.nixpkgs.lib.extend (import ./lib.nix inputs);
+  inherit (lib'.lab) mkScripts mkRustCrates;
 in
-{
-  # # Fix core dump on asahi
-  # # This PR gets a little farther but still segfaults
-  # hyprlock = prev.hyprlock.overrideAttrs (_: {
-  #   src = final.fetchFromGitHub {
-  #     owner = "jaakkomoller";
-  #     repo = "hyprlock";
-  #     rev = "839";
-  #     hash = "sha256-raYdkw32pEE9HetrIu7jHOWiSmp8YTBLMPVekV46+I4=";
-  #   };
-  # });
+lib'.composeManyExtensions [
+  (final: _: mkScripts final ./scripts)
+  (final: _: mkRustCrates final ./crates)
+  (final: prev: {
+    # # Fix core dump on asahi
+    # # This PR gets a little farther but still segfaults
+    # hyprlock = prev.hyprlock.overrideAttrs (_: {
+    #   src = final.fetchFromGitHub {
+    #     owner = "jaakkomoller";
+    #     repo = "hyprlock";
+    #     rev = "839";
+    #     hash = "sha256-raYdkw32pEE9HetrIu7jHOWiSmp8YTBLMPVekV46+I4=";
+    #   };
+    # });
 
-  # Private repository of clavia nord files to test nord-format against
-  nord-corpus = builtins.fetchGit {
-    rev = "b80431bcccddbb07bf5bcccb7dce42968c404898";
-    url = "git+ssh://git@github.com/jmoo/nord-corpus.git";
-  };
+    nord-cli = prev.lib.addMetaAttrs { mainProgram = "nord"; } prev.nord-cli;
 
-  nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
+    # Private repository of clavia nord files to test nord-format against
+    nord-corpus = builtins.fetchGit {
+      rev = "b80431bcccddbb07bf5bcccb7dce42968c404898";
+      url = "git+ssh://git@github.com/jmoo/nord-corpus.git";
+    };
 
-  open-bamboo-networking = final.callPackage ./pkgs/open-bamboo-networking { };
+    nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 
-  ulauncher-uwsm = final.callPackage ./pkgs/ulauncher-uwsm { };
+    open-bamboo-networking = final.callPackage ./pkgs/open-bamboo-networking { };
 
-  vscode-extensions = prev.vscode-extensions // {
-    mkVscodeNixExtension =
-      config:
-      final.vscode-extensions.vscode-nix-extensions.override {
-        vscodeExtensionModule = config;
-      };
+    ulauncher-uwsm = final.callPackage ./pkgs/ulauncher-uwsm { };
 
-    vscode-nix-extensions = final.callPackage ./pkgs/vscode-nix-extensions { };
-  };
-}
-// lib'.lab.mkScripts final ./scripts
-// lib'.lab.mkRustCrates final ./crates
+    vscode-extensions = prev.vscode-extensions // {
+      mkVscodeNixExtension =
+        config:
+        final.vscode-extensions.vscode-nix-extensions.override {
+          vscodeExtensionModule = config;
+        };
+
+      vscode-nix-extensions = final.callPackage ./pkgs/vscode-nix-extensions { };
+    };
+  })
+]
