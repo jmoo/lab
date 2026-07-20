@@ -100,6 +100,10 @@ in
             networkmanager.enable = true;
           };
 
+          # ulauncher (webkitgtk-4.0) pulls the EOL libsoup 2 on the pinned Asahi
+          # nixpkgs; permit it so the config evaluates.
+          nixpkgs.config.permittedInsecurePackages = [ "libsoup-2.74.3" ];
+
           services = {
             openssh.settings.AllowUsers = [ "nix-ssh" ];
 
