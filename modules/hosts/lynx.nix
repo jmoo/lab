@@ -6,7 +6,10 @@ in
   lab.hosts.lynx = {
     claude = {
       enable = true;
-      skills.sensei.enable = true;
+      skills.sensei = {
+        enable = true;
+        tracker.enable = true;
+      };
     };
     direnv.enable = true;
     ghostty.enable = true;
