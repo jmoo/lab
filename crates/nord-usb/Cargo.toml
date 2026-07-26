@@ -18,12 +18,15 @@ web = ["dep:web-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sy
 # Drive the protocol from committed corpus captures, with no hardware. Used by
 # the golden-shape tests; platform-independent, so it runs on wasm32 too.
 replay = []
+# Block on the async API from synchronous callers (the CLI). Tiny; not a runtime.
+blocking = ["dep:pollster"]
 # Corpus-backed golden shape tests (NORD_CORPUS_DIR), mirroring nord-format.
 corpus = ["replay"]
 
 [dependencies]
 nord-format = { path = "../nord-format" }
 thiserror = "2"
+pollster = { version = "0.4", optional = true }
 
 nusb = { version = "0.1", optional = true }
 

@@ -3,6 +3,8 @@
 //! Not a product; it exists to exercise the parser and surface API friction.
 //! For now it does one thing: parse Nord file(s) and print what was decoded.
 
+mod device;
+
 use clap::{Parser, Subcommand};
 use nord_format::common::bank::Item;
 use nord_format::electro5::{Instrument, OrganModel};
@@ -30,6 +32,30 @@ enum Command {
         #[arg(long)]
         raw: bool,
     },
+
+    /// Talk to an attached instrument over USB. Read-only for now.
+    Device {
+        #[command(subcommand)]
+        action: DeviceAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum DeviceAction {
+    /// Report what is stored on the instrument, per object class.
+    ///
+    /// Read-only: this sends one query per class and reads counters back. Nothing
+    /// on the instrument is modified.
+    Status {
+        /// Replay a recorded exchange instead of opening a device. Useful for
+        /// demos and for exercising the whole path without hardware.
+        #[arg(long, value_name = "SCRIPT")]
+        replay: Option<PathBuf>,
+
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -56,6 +82,21 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
+            }
+        }
+
+        Command::Device { action } => {
+            let DeviceAction::Status { replay, json } = action;
+            let source = match replay {
+                Some(path) => device::Source::Replay(path),
+                None => device::Source::Usb,
+            };
+            match device::run(source, json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
             }
         }
     }

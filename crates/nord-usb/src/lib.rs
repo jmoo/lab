@@ -27,4 +27,17 @@ pub mod wire;
 pub use error::{Error, Result};
 pub use session::{ReadOnly, ReadWrite, Session};
 pub use transport::Transport;
-pub use wire::{Location, Message, Service};
+pub use wire::{Location, Message, ObjectClass, Service, Status};
+
+#[cfg(feature = "replay")]
+pub use transport::ReplayTransport;
+
+/// Block on a future without pulling in a full async runtime.
+///
+/// The crate is deliberately runtime-agnostic (see [`transport::Transport`] for why
+/// there are no `Send` bounds), so this exists for CLIs and tests that just want the
+/// answer. Browser callers already have an executor and should not use it.
+#[cfg(feature = "blocking")]
+pub fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+    pollster::block_on(fut)
+}

@@ -1,0 +1,119 @@
+//! End-to-end test of the read-only status operation, driven by a replayed exchange.
+//!
+//! The script below is the real traffic NSM produced for a program-class transaction,
+//! taken off the wire. It is protocol framing only — no instrument content — and it
+//! makes this a strong test: the code under test has to reproduce a real host's bytes
+//! exactly, not merely agree with its own encoder.
+//!
+//! No hardware, no platform dependency: this runs anywhere the crate compiles,
+//! including under Wine, qemu and wasm.
+
+#![cfg(feature = "replay")]
+
+use nord_usb::op;
+use nord_usb::transport::{Direction, ReplayTransport, Step};
+use nord_usb::wire::ObjectClass;
+use nord_usb::Session;
+
+fn hex(s: &str) -> Vec<u8> {
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+}
+
+fn step(d: Direction, s: &str) -> Step {
+    Step { direction: d, bytes: hex(s) }
+}
+
+/// One complete program-class transaction: open, STATUS, close.
+fn program_status_script() -> Vec<Step> {
+    use Direction::{In, Out};
+    vec![
+        // UI/session handshake
+        step(Out, "0000001200000006000000010000000006a1"),
+        step(In, "000000160000000600000001000000010000000044ec"),
+        // SESSION_OPEN, class 4 (programs)
+        step(Out, "000000160000000c0000000a0000000400000004a218"),
+        step(In, "0000001a0000000c0000000a00000005000000000000000467b0"),
+        // STATUS -> count 375, free 3525, used 52875
+        step(Out, "000000160000000c0000000a00000008000000042933"),
+        step(In, "0000002a0000000c0000000a0000000900000000000001770000 0dc50000ce8b0000000000000000ac2e".replace(' ', "").as_str()),
+        // SESSION_CLOSE, then the UI side
+        step(Out, "000000120000000c0000000a000000066500"),
+        step(In, "000000160000000c0000000a00000007000000000c4e"),
+        step(Out, "0000001200000006000000010000000226e3"),
+        step(In, "0000001600000006000000010000000300000000006f"),
+    ]
+}
+
+/// Minimal executor — the crate is async but deliberately runtime-agnostic, and a
+/// replayed exchange never actually pends, so a busy-poll is sufficient and keeps
+/// tokio out of the dependency tree.
+fn block_on<F: std::future::Future>(mut fut: F) -> F::Output {
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    fn vtable() -> &'static RawWakerVTable {
+        &RawWakerVTable::new(|_| RawWaker::new(std::ptr::null(), vtable()), |_| {}, |_| {}, |_| {})
+    }
+    let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), vtable())) };
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = unsafe { std::pin::Pin::new_unchecked(&mut fut) };
+    loop {
+        if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
+            return v;
+        }
+    }
+}
+
+#[test]
+fn status_round_trips_a_real_transaction() {
+    let mut t = ReplayTransport::new(program_status_script());
+
+    let got = block_on(async {
+        let mut s = Session::open(&mut t, ObjectClass::Program).await.unwrap();
+        let status = op::status(&mut s).await.unwrap();
+        s.commit().await.unwrap();
+        status
+    });
+
+    assert_eq!(got.class, ObjectClass::Program);
+    assert_eq!(got.count, 375);
+    assert_eq!(got.free, 3525);
+    assert_eq!(got.used, 52875);
+    // free + used is the class capacity; deleting programs was seen to shift the
+    // split without changing the total.
+    assert_eq!(got.total(), 56400);
+
+    // Every scripted step consumed: the transaction ran to completion, and — because
+    // ReplayTransport is Exact by default — every byte sent matched the real host's.
+    assert!(t.is_exhausted(), "did not consume the whole exchange");
+    assert_eq!(t.sent().len(), 5, "expected 5 host messages in this transaction");
+}
+
+#[test]
+fn wrong_bytes_are_caught() {
+    // Opening the wrong class must not silently "work": the bytes differ from the
+    // script, so the exact-match transport rejects them.
+    let mut t = ReplayTransport::new(program_status_script());
+    let err = block_on(async {
+        match Session::open(&mut t, ObjectClass::Piano).await {
+            Ok(s) => {
+                s.abort();
+                None
+            }
+            Err(e) => Some(e),
+        }
+    });
+    assert!(err.is_some(), "opening the wrong object class should have been rejected");
+}
+
+#[test]
+fn lenient_mode_tolerates_differing_requests() {
+    let mut t = ReplayTransport::new(program_status_script()).lenient();
+    let ok = block_on(async {
+        let mut s = Session::open(&mut t, ObjectClass::Piano).await?;
+        let st = op::status(&mut s).await?;
+        s.commit().await?;
+        Ok::<_, nord_usb::Error>(st)
+    });
+    // The replayed response still describes programs; lenient mode is for demos, not
+    // for asserting correctness.
+    assert_eq!(ok.unwrap().count, 375);
+}

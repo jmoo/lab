@@ -176,19 +176,76 @@
       # without the corresponding hardware.
       #
       # Linux-only: these emulators are not a sane proposition on aarch64-darwin.
+      # The read-only inventory sweep, replayed. Exercises transport → wire → session
+      # → op → CLI without a device, so the same proof runs on every target.
+      pocScript = ../crates/nord-usb/tests/fixtures/inventory.script;
+
+      # Execute the protocol test suite on an actual wasm VM.
+      #
+      # `wasm32-unknown-unknown` can only be *built* here — running it needs a browser
+      # (that is where WebUSB lives). `wasm32-wasip1` runs the same protocol code under
+      # wasmtime, so the logic gets real runtime coverage on a wasm target even though
+      # the browser backend itself cannot be exercised in CI.
+      wasmRuntimeTest =
+        let
+          triple = "wasm32-wasip1";
+          toolchain = fenixPkgs.combine [
+            fenixPkgs.stable.cargo
+            fenixPkgs.stable.rustc
+            fenixPkgs.targets.${triple}.stable.rust-std
+          ];
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = toolchain;
+            rustc = toolchain;
+          };
+        in
+        pkgs.stdenv.mkDerivation {
+          pname = "nord-usb-wasm-runtime";
+          inherit version;
+          src = workspace;
+          cargoDeps = rustPlatform.importCargoLock { lockFile = workspace + "/Cargo.lock"; };
+          nativeBuildInputs = [
+            toolchain
+            rustPlatform.cargoSetupHook
+            pkgs.wasmtime
+            # Build scripts and proc-macros still compile for the host.
+            pkgs.stdenv.cc
+          ];
+          buildPhase = ''
+            runHook preBuild
+            # wasmtime wants somewhere to cache compiled modules; the sandbox has no
+            # HOME, so give it one rather than letting it fail on /homeless-shelter.
+            export HOME="$TMPDIR/home"
+            mkdir -p "$HOME"
+            export CARGO_TARGET_WASM32_WASIP1_RUNNER=wasmtime
+            cargo test --release --offline -p nord-usb \
+              --no-default-features --features replay --target ${triple} 2>&1 | tee test.log
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            grep -q '0 failed' test.log || { echo "wasm test run reported failures"; exit 1; }
+            mkdir -p "$out"; cp test.log "$out/"
+            runHook postInstall
+          '';
+          meta.description = "nord-usb protocol suite executed on a wasm VM";
+        };
+
       mkRunCheck =
         {
           name,
           pkg,
           bin,
-          emulator,
-          runner,
+          emulator ? null,
+          runner ? "",
           expectUsage,
         }:
         pkgs.runCommand "${name}-test"
           {
-            nativeBuildInputs = [ emulator ];
-            meta.description = "Run the cross-built ${bin} under ${emulator.pname or "an emulator"}";
+            nativeBuildInputs = lib.optional (emulator != null) emulator;
+            meta.description = "Run ${bin} end to end${
+              lib.optionalString (emulator != null) " under ${emulator.pname or "an emulator"}"
+            }";
           }
           ''
             # Emulators want a writable HOME; wine additionally refuses a prefix it
@@ -200,19 +257,34 @@
             export WINEDLLOVERRIDES="mscoree,mshtml="
             mkdir -p "$HOME"
 
-            echo "running ${bin} --help …"
-            ${runner} ${pkg}/${bin} --help > out.txt 2>err.txt || {
-              echo "${bin} failed to run:"; cat err.txt; exit 1;
-            }
-            cat out.txt
+            run() { ${runner} ${pkg}/${bin} "$@"; }
 
-            grep -q 'Usage: ${expectUsage}' out.txt || {
-              echo "unexpected output — wanted 'Usage: ${expectUsage}':"; cat out.txt; exit 1;
+            echo "== ${bin} --help =="
+            run --help > help.txt 2>err.txt || { echo "failed to run:"; cat err.txt; exit 1; }
+            cat help.txt
+            grep -q 'Usage: ${expectUsage}' help.txt || {
+              echo "unexpected output — wanted 'Usage: ${expectUsage}'"; exit 1;
             }
-            grep -q 'inspect' out.txt || { echo "missing the inspect subcommand"; exit 1; }
 
-            echo "ok: ${bin} runs and reports its interface"
-            mkdir -p "$out"; cp out.txt "$out/help.txt"
+            # The POC itself: a full read-only inventory sweep over a replayed
+            # exchange. This is the proof that the protocol stack works on this
+            # target, not merely that the binary starts.
+            echo
+            echo "== ${bin} device status --replay =="
+            run device status --replay ${pocScript} > poc.txt 2>err.txt || {
+              echo "device status failed:"; cat err.txt; exit 1;
+            }
+            cat poc.txt
+
+            for want in pianos samples programs 'set lists' 375 52875; do
+              grep -q "$want" poc.txt || {
+                echo "POC output missing '$want'"; cat poc.txt; exit 1;
+              }
+            done
+
+            echo
+            echo "ok: ${bin} completed the read-only inventory sweep"
+            mkdir -p "$out"; cp help.txt poc.txt "$out/"
           '';
     in
     {
@@ -225,12 +297,21 @@
         // {
           nord-usb-native = pkgs.nord-usb;
           nord-format-native = pkgs.nord-format;
+          nord-usb-wasm-runtime = wasmRuntimeTest;
+
+          # The POC on the host's own platform, no emulator involved.
+          nord-cli-native-poc = mkRunCheck {
+            name = "nord-cli-native-poc";
+            pkg = pkgs.nord-cli;
+            bin = "bin/nord";
+            expectUsage = "nord";
+          };
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           # No Windows machine exists in this setup, so Wine is the only way this
           # target is ever actually executed.
-          nord-cli-windows-wine = mkRunCheck {
-            name = "nord-cli-windows-wine";
+          nord-cli-windows-poc = mkRunCheck {
+            name = "nord-cli-windows-poc";
             pkg = crossed.nord-cli-windows;
             bin = "nord.exe";
             emulator = pkgs.wine64;
@@ -240,8 +321,8 @@
         }
         // lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # aarch64 Linux is what meerkat runs; qemu-user covers it from here.
-          nord-cli-linux-aarch64-qemu = mkRunCheck {
-            name = "nord-cli-linux-aarch64-qemu";
+          nord-cli-linux-aarch64-poc = mkRunCheck {
+            name = "nord-cli-linux-aarch64-poc";
             pkg = crossed.nord-cli-linux-aarch64;
             bin = "nord";
             emulator = pkgs.qemu;

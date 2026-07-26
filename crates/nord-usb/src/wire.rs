@@ -177,6 +177,101 @@ impl Message {
     }
 }
 
+/// What kind of object a session is about.
+///
+/// `SESSION_OPEN` carries one of these, and [`cmd::STATUS`] then reports on that class
+/// alone — which is why the same instrument reports different totals depending on what
+/// was opened. Names are inferred from item counts cross-checked against a full backup
+/// (29 pianos, 139 samples, ~375 programs); the numeric codes are what the device
+/// actually sends, so an unrecognised one is preserved rather than rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectClass {
+    Piano,
+    Sample,
+    Program,
+    SetList,
+    Unknown(u32),
+}
+
+impl ObjectClass {
+    pub fn from_raw(v: u32) -> Self {
+        match v {
+            1 => ObjectClass::Piano,
+            3 => ObjectClass::Sample,
+            4 => ObjectClass::Program,
+            5 => ObjectClass::SetList,
+            other => ObjectClass::Unknown(other),
+        }
+    }
+
+    pub fn to_raw(self) -> u32 {
+        match self {
+            ObjectClass::Piano => 1,
+            ObjectClass::Sample => 3,
+            ObjectClass::Program => 4,
+            ObjectClass::SetList => 5,
+            ObjectClass::Unknown(v) => v,
+        }
+    }
+
+    /// The classes worth querying for an inventory. Codes 6 and 7 also answer, but
+    /// reported zero items on every instrument seen so far.
+    pub const INVENTORY: [ObjectClass; 4] =
+        [ObjectClass::Piano, ObjectClass::Sample, ObjectClass::Program, ObjectClass::SetList];
+
+    pub fn label(self) -> String {
+        match self {
+            ObjectClass::Piano => "pianos".into(),
+            ObjectClass::Sample => "samples".into(),
+            ObjectClass::Program => "programs".into(),
+            ObjectClass::SetList => "set lists".into(),
+            ObjectClass::Unknown(v) => format!("class {v}"),
+        }
+    }
+}
+
+/// What [`cmd::STATUS`] reports, for whichever [`ObjectClass`] the session opened.
+///
+/// `free + used` is constant per class (the class's total capacity). Deleting programs
+/// was observed to raise `free` and lower `used` by the same amount, which is what
+/// fixes the orientation — otherwise the two are indistinguishable.
+///
+/// The unit is not identified. It is *not* bytes: the program class totals 56,400,
+/// which is far too small. Treat the numbers as opaque blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Status {
+    pub class: ObjectClass,
+    pub count: u32,
+    pub free: u32,
+    pub used: u32,
+}
+
+impl Status {
+    pub fn total(&self) -> u32 {
+        self.free + self.used
+    }
+
+    pub fn used_percent(&self) -> f32 {
+        let total = self.total();
+        if total == 0 {
+            0.0
+        } else {
+            100.0 * self.used as f32 / total as f32
+        }
+    }
+
+    /// Decode a [`cmd::STATUS`] response. Arguments after the status word are
+    /// `count, free, used, …`.
+    pub fn decode(class: ObjectClass, msg: &Message) -> Result<Self> {
+        let p = msg.payload();
+        if p.len() < 12 {
+            return Err(Error::Truncated { got: p.len(), need: 12 });
+        }
+        let word = |i: usize| u32::from_be_bytes(p[i * 4..i * 4 + 4].try_into().unwrap());
+        Ok(Self { class, count: word(0), free: word(1), used: word(2) })
+    }
+}
+
 /// A bank/slot address. **Zero-indexed on the wire**, one-indexed in the UI and in
 /// every capture directory name — `move_prog_8-13_to_7-16` puts `7, 12, 6, 15` on
 /// the wire.
