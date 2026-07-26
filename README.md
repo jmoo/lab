@@ -16,6 +16,16 @@ Playground for personal projects and NixOS / nix-darwin config for my machines.
 | | Name | Description |
 |---|------|-------------|
 | 🎴 | anki-tool | CLI for querying AnkiConnect, designed for AI agent consumption |
-| 🎹 | nord-format | Parse and write Clavia / Nord keyboard binary file formats with rust |
-| 🎛️ | nord-cli | Command-line tool for inspecting Clavia / Nord keyboard files |
+| 🎹 | nord-format | Clavia / Nord file parser/writer implementation in rust |
+| 🎛️ | nord-cli | Command-line tool for interacting with Clavia / Nord keyboards and files |
+| 🔌 | nord-usb | Clavia / Nord USB protocol implementation in rust |
 | 🧩 | vscode-nix-extensions | Generate VS Code extensions from Nix expressions |
+
+
+
+## Disclaimer
+
+Not affiliated with, authorized, or endorsed by Clavia DMI AB. (https://www.nordkeyboards.com) 
+"Nord", "Clavia", and "Electro" are trademarks of Clavia DMI AB, used here only to identify the
+hardware these formats come from. All Clavia / Nord artifacts included in this repo
+are synthetic test artifacts produced by the author of this repo.
