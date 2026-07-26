@@ -117,3 +117,29 @@ fn lenient_mode_tolerates_differing_requests() {
     // for asserting correctness.
     assert_eq!(ok.unwrap().count, 375);
 }
+
+/// Fixed-size classes report slots; variable-size ones must not pretend to.
+///
+/// Numbers are off a real Electro 5: adding one program moved used by exactly 141
+/// (53439 -> 53580), and 56400 / 141 is 400 — the instrument's 8 banks x 50 slots.
+#[test]
+fn derives_slots_only_for_fixed_size_classes() {
+    use nord_usb::wire::Status;
+
+    let programs = Status { class: ObjectClass::Program, count: 380, free: 2820, used: 53580 };
+    assert_eq!(programs.blocks_per_item(), Some(141));
+    assert_eq!(programs.slots(), Some(400));
+
+    let set_lists = Status { class: ObjectClass::SetList, count: 63, free: 5206, used: 2394 };
+    assert_eq!(set_lists.blocks_per_item(), Some(38));
+    assert_eq!(set_lists.slots(), Some(200));
+
+    // Pianos genuinely vary in size, so there is no per-item constant to report.
+    let pianos = Status { class: ObjectClass::Piano, count: 29, free: 1, used: 4012 };
+    assert_eq!(pianos.blocks_per_item(), None);
+    assert_eq!(pianos.slots(), None);
+
+    // An empty class must not divide by zero.
+    let empty = Status { class: ObjectClass::Unknown(6), count: 0, free: 363, used: 0 };
+    assert_eq!(empty.slots(), None);
+}

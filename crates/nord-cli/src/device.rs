@@ -54,20 +54,27 @@ fn print_table(report: &[Status]) {
         println!("no classes answered");
         return;
     }
-    println!("{:<10} {:>7} {:>9} {:>9} {:>7}", "class", "items", "used", "capacity", "full");
+    println!("{:<10} {:>20} {:>7}  {}", "class", "used", "full", "of");
+    let mut any_variable = false;
     for s in report {
-        println!(
-            "{:<10} {:>7} {:>9} {:>9} {:>6.1}%",
-            s.class.label(),
-            s.count,
-            s.used,
-            s.total(),
-            s.used_percent(),
-        );
+        // Fixed-size classes are far clearer as slots than as raw blocks: programs
+        // report 400, which is exactly the instrument's 8 banks x 50.
+        let (used, of) = match s.slots() {
+            Some(slots) => (
+                format!("{} / {} slots", s.count, slots),
+                format!("{} blocks each", s.blocks_per_item().unwrap_or(0)),
+            ),
+            None => {
+                any_variable = true;
+                (format!("{} / {} blocks", s.used, s.total()), format!("{} items", s.count))
+            }
+        };
+        println!("{:<10} {:>20} {:>6.1}%  {}", s.class.label(), used, s.used_percent(), of);
     }
-    // The unit is not identified -- it is definitely not bytes -- so say so rather
-    // than implying a precision we do not have.
-    println!("\n(capacity is in device-internal blocks, not bytes)");
+    if any_variable {
+        // Only worth saying for the classes where the number is genuinely opaque.
+        println!("\n(blocks are a device-internal unit, not bytes)");
+    }
 }
 
 fn print_json(report: &[Status]) {

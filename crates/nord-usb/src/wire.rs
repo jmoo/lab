@@ -251,6 +251,31 @@ impl Status {
         self.free + self.used
     }
 
+    /// Blocks per item, when every item of this class costs the same.
+    ///
+    /// Fixed-size classes divide exactly: on a real Electro 5, programs cost **141**
+    /// blocks each (`379 × 141 = 53439`, then `380 × 141 = 53580` after adding one)
+    /// and set lists cost **38**. Variable-size classes — pianos and samples, where
+    /// the content really does differ per item — do not divide evenly and yield
+    /// `None`.
+    pub fn blocks_per_item(&self) -> Option<u32> {
+        if self.count == 0 || self.used == 0 || self.used % self.count != 0 {
+            return None;
+        }
+        let per = self.used / self.count;
+        // Only trust it if the class capacity is also a whole number of items;
+        // otherwise the division is a coincidence.
+        (per != 0 && self.total() % per == 0).then_some(per)
+    }
+
+    /// Total item slots, for classes where items are fixed-size.
+    ///
+    /// Far more meaningful than raw blocks: programs report 400, which is exactly the
+    /// 8 banks × 50 slots of an Electro 5.
+    pub fn slots(&self) -> Option<u32> {
+        self.blocks_per_item().map(|per| self.total() / per)
+    }
+
     pub fn used_percent(&self) -> f32 {
         let total = self.total();
         if total == 0 {
