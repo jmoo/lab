@@ -106,3 +106,38 @@ pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Entity, Error> {
         Err(e) => Err(e.into()),
     }
 }
+
+/// Serialise an [`Entity`] back to the bytes of its file — the counterpart to
+/// [`from_stream`].
+///
+/// Every concrete type has a `write_to`, but the enum had no way out, so a caller
+/// holding an `Entity` could not round-trip it without re-matching every variant and
+/// depending on `binrw` directly. Keeping that inside the crate is the point: `binrw`
+/// is an implementation detail.
+///
+/// For every format this crate decodes, `to_bytes(from_stream(x)) == x` byte-for-byte.
+/// That is the crate's central invariant — decoded values are read-only views over a
+/// verbatim body, so a re-emit cannot drift — and `nord verify` exists to check it
+/// against real specimens.
+///
+/// Bundles are unsupported: [`electro5::Bundle`] is a ZIP walk over other entities,
+/// not a `binrw` structure, so there is nothing to re-emit.
+pub fn to_bytes(entity: &mut Entity) -> Result<Vec<u8>, Error> {
+    use std::io::Cursor;
+
+    let mut out = Cursor::new(Vec::new());
+    match entity {
+        Entity::Program(Program::Electro5(p)) => p.write_to(&mut out)?,
+        Entity::Song(Song::Electro5(s)) => s.write_to(&mut out)?,
+        Entity::Settings(Settings::Electro5(s)) => s.write_to(&mut out)?,
+        Entity::Piano(p) => p.write_to(&mut out)?,
+        Entity::Sample(s) => s.write_to(&mut out)?,
+        #[cfg(feature = "bundle")]
+        Entity::Bundle(_) => {
+            return Err(Error::ParseError(ParseError::UnknownFormat(
+                "bundle (an archive, not a re-emittable entity)".to_string(),
+            )))
+        }
+    }
+    Ok(out.into_inner())
+}

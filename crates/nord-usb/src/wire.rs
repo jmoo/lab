@@ -182,44 +182,81 @@ pub struct ProgramInfo {
     pub body_len: u32,
     /// Four-character CBIN format tag, e.g. `ne5p`.
     pub format: String,
+    /// Schema/content version, the same field the CBIN header carries at `0x14` and
+    /// the one NSM prints in its "Version" column.
+    ///
+    /// Per format tag, not a per-item counter: `ne5p` reports 4 and `ne5t` reports 0 or
+    /// 1. For library content it is the version in the object's own *name*, ×100 —
+    /// `Royal Grand 3D YaS6 XL 5.4` reports `540`.
+    pub version: u32,
     /// CRC-32 of the body, as the device reports it. Lets a read be verified
     /// against the device's own checksum rather than trusting the transfer.
+    ///
+    /// `None` for classes the device does not checksum — pianos and samples report
+    /// `0xffffffff` rather than a real value, which is normalised away here so callers
+    /// cannot mistake it for a checksum to verify against.
     pub crc32: Option<u32>,
-    /// Slot name as shown on the instrument.
+    /// Slot name as shown on the instrument. Stored nowhere in the file itself.
     pub name: String,
 }
 
 impl ProgramInfo {
+    /// Fixed offsets ahead of the name: bank, slot, body_len, format, version, and the
+    /// two `0xffffffff` words, then the name's own length.
+    const NAME_LEN_AT: usize = 28;
+
     pub fn decode(msg: &Message) -> Result<Self> {
+        // See `Dependency::decode_all` — `payload` only strips the status word for a
+        // message marked as a response, so decoding a request here would shift every
+        // offset by four.
+        if !msg.is_response() {
+            return Err(Error::InvalidArgument(
+                "object info must be decoded from a response (use Message::decode_response)".into(),
+            ));
+        }
         let p = msg.payload();
-        if p.len() < 20 {
-            return Err(Error::Truncated { got: p.len(), need: 20 });
+        if p.len() < Self::NAME_LEN_AT + 4 {
+            return Err(Error::Truncated { got: p.len(), need: Self::NAME_LEN_AT + 4 });
         }
         let word = |i: usize| u32::from_be_bytes(p[i..i + 4].try_into().unwrap());
-        let format = String::from_utf8_lossy(&p[12..16]).into_owned();
 
-        // The name is a big-endian length-prefixed ASCII string. Its offset shifts
-        // with the reply variant, so scan for a plausible length word rather than
-        // hard-coding a position we have only seen one example of.
-        let mut name = String::new();
-        let mut crc32 = None;
-        let mut i = 16;
-        while i + 4 <= p.len() {
-            let n = word(i) as usize;
-            if n > 0 && n <= 32 && i + 4 + n <= p.len() && p[i + 4..i + 4 + n].is_ascii() {
-                name = String::from_utf8_lossy(&p[i + 4..i + 4 + n]).trim_end().to_owned();
-                break;
-            }
-            i += 4;
+        // The layout is fixed, confirmed across ten replies spanning all four format
+        // tags (ne5p, ne5t, npno, nsmp) in the set-list bundle capture:
+        //
+        //   bank | slot | body_len | format[4] | version | word | word
+        //        | name_len | name | pad to 8 | crc32
+        //
+        // The two words at 20 and 24 are `0xffffffff` for the slot-addressed classes
+        // but carry content-specific values for library objects, so they are read as
+        // opaque and skipped rather than asserted.
+        //
+        // An earlier version scanned forward for the first plausible length word
+        // instead, because only one example was available. That scan was bounded at
+        // `n <= 32` — and this capture contains a 54-character sample name
+        // ("3 Violins SM_Chamberlin_MMaster mono small version 2.0"), which it would
+        // have skipped straight past, returning the wrong name or none at all.
+        let name_len = word(Self::NAME_LEN_AT) as usize;
+        let name_start = Self::NAME_LEN_AT + 4;
+        let name_end = name_start + name_len;
+        if name_end > p.len() {
+            return Err(Error::Truncated { got: p.len(), need: name_end });
         }
-        if p.len() >= 4 {
-            crc32 = Some(u32::from_be_bytes(p[p.len() - 4..].try_into().unwrap()));
-        }
+        let name = String::from_utf8_lossy(&p[name_start..name_end]).trim_end().to_owned();
+
+        // Trailing word, past the padding. Absent if the reply stops at the name.
+        let crc32 = match p.len() >= name_end + 4 {
+            true => match word(p.len() - 4) {
+                u32::MAX => None,
+                crc => Some(crc),
+            },
+            false => None,
+        };
 
         Ok(Self {
             location: Location { bank: word(0), slot: word(4) },
             body_len: word(8),
-            format,
+            format: String::from_utf8_lossy(&p[12..16]).into_owned(),
+            version: word(16),
             crc32,
             name,
         })
@@ -671,6 +708,47 @@ mod tests {
             super::ui::percent(100).encode(),
             hex("0000001600000006000000010000000700010064927b"),
         );
+    }
+
+    /// Object info decodes identically across all four format tags, from real replies
+    /// in the set-list bundle capture. This pins three things at once: `version` is at
+    /// a fixed offset (and is the name's own version x100 for library content), the
+    /// name length is read rather than guessed, and `0xffffffff` means "not
+    /// checksummed" rather than being handed back as a checksum.
+    #[test]
+    fn object_info_decodes_every_format() {
+        let cases: &[(&str, &str, u32, Option<u32>, &str)] = &[
+            ("000000450000000c0000000a0000001f00000000000000050000000c000000796e65357000000004ffffffffffffffff00000003666f6f000000000000000021ab3d01a1ee",
+             "ne5p", 4, Some(0x21ab_3d01), "foo"),
+            ("000000460000000c0000000a0000001f000000000000000000000007000000126e65357400000001ffffffffffffffff00000004746573740000000000000000dce9a145bf84",
+             "ne5t", 1, Some(0xdce9_a145), "test"),
+            ("0000005c0000000c0000000a0000001f0000000000000000000000000c7db5446e706e6f0000021c5e98c95affffffff0000001a526f79616c204772616e64203344205961533620584c20352e340000000500000000ffffffffc30b",
+             "npno", 540, None, "Royal Grand 3D YaS6 XL 5.4"),
+            ("000000610000000c0000000a0000001f0000000000000000000000000011da986e736d70000000c8554100ec000800000000001f41636f7573746963205069616e6f20335f5f4b6f7267206d6f6e6f20322e300000000000000000ffffffff366f",
+             "nsmp", 200, None, "Acoustic Piano 3__Korg mono 2.0"),
+        ];
+        for (raw, format, version, crc32, name) in cases {
+            let info = ProgramInfo::decode(&Message::decode_response(&hex(raw)).unwrap()).unwrap();
+            assert_eq!(&info.format, format);
+            assert_eq!(info.version, *version, "{format}");
+            assert_eq!(info.crc32, *crc32, "{format}");
+            assert_eq!(&info.name, name);
+        }
+    }
+
+    /// A 54-character sample name, straight off the wire. The superseded name-scanning
+    /// heuristic was bounded at 32 and would have skipped this entirely.
+    #[test]
+    fn object_info_reads_names_longer_than_the_old_scan_bound() {
+        let info = ProgramInfo::decode(
+            &Message::decode_response(&hex(
+                "000000780000000c0000000a0000001f00000000000000000000004b002700f66e736d70000000c8554777330009000200000036332056696f6c696e7320534d5f4368616d6265726c696e5f4d4d6173746572206d6f6e6f20736d616c6c2076657273696f6e20322e300000000000000000ffffffff062d",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(info.name, "3 Violins SM_Chamberlin_MMaster mono small version 2.0");
+        assert_eq!(info.name.len(), 54);
     }
 
     /// A label too long for the one-byte length field is refused, not truncated. The

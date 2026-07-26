@@ -353,3 +353,35 @@ pub fn deps(at: Location, class: u32) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Report everything the instrument knows about one slot. Read-only.
+///
+/// This is `0x1e`, the richest single response on the wire: it carries the body length,
+/// format tag, version, name and CRC-32 — i.e. every field of the CBIN header, which is
+/// never itself transmitted, plus the name, which no `.ne5p`/`.ne5t` file stores at all.
+/// So this is the one command that shows what a `nord device read` would reconstruct,
+/// without reading the body.
+pub fn info(at: Location, class: u32) -> Result<(), String> {
+    let class = ObjectClass::from_raw(class);
+    let mut t = open_usb()?;
+    let info = nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, class).await?;
+        let info = usb_op::info(&mut s, at).await?;
+        s.commit().await?;
+        Ok::<_, nord_usb::Error>(info)
+    })
+    .map_err(|e| e.to_string())?;
+
+    println!("  location:  {}", shown(info.location));
+    println!("  name:      {:?}", info.name);
+    println!("  format:    {}", info.format);
+    println!("  version:   {}", info.version);
+    println!("  body:      {} bytes", info.body_len);
+    match info.crc32 {
+        // Library content (pianos, samples) reports 0xffffffff: no checksum is kept for
+        // objects this large.
+        Some(crc) => println!("  crc32:     {crc:#010x}"),
+        None => println!("  crc32:     none (not checksummed for this class)"),
+    }
+    Ok(())
+}

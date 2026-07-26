@@ -33,6 +33,18 @@ enum Command {
         raw: bool,
     },
 
+    /// Re-encode file(s) and check the result is byte-identical to the input.
+    ///
+    /// The crate's central invariant: decoded values are read-only views over a
+    /// verbatim body, so a parse followed by a re-emit cannot drift. Nothing else in
+    /// this CLI exercises the write path, so this is the only place that would catch a
+    /// field being reconstructed rather than preserved.
+    Verify {
+        /// Files to round-trip. Bundles are archives, not re-emittable entities.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
+
     /// Talk to an attached instrument over USB: inventory, read, write, and organise
     /// slots. Mutating actions require --yes.
     Device {
@@ -56,6 +68,20 @@ enum DeviceAction {
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
+    },
+
+    /// Report everything the instrument knows about one slot. Read-only.
+    ///
+    /// Shows the fields the CBIN header carries but the wire never transmits — format
+    /// tag, version, CRC-32 — plus the slot name, which no file stores at all.
+    Info {
+        /// Slot as shown on the instrument, e.g. 7-4.
+        #[arg(value_name = "BANK-SLOT")]
+        at: String,
+
+        /// Object class: 4 programs (default), 5 set lists, 1 pianos, 3 samples.
+        #[arg(long, default_value_t = 4)]
+        class: u32,
     },
 
     /// Read a program off the instrument into a .ne5p file. Read-only.
@@ -191,6 +217,14 @@ fn main() -> ExitCode {
             }
         }
 
+        Command::Verify { files } => match verify(&files) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        },
+
         Command::Device { action } => {
             let result = match action {
                 DeviceAction::Status { replay, json } => {
@@ -223,6 +257,9 @@ fn main() -> ExitCode {
                 DeviceAction::Select { at, class } => {
                     device::parse_location(&at).and_then(|at| device::select(at, class))
                 }
+                DeviceAction::Info { at, class } => {
+                    device::parse_location(&at).and_then(|at| device::info(at, class))
+                }
                 DeviceAction::Deps { at, class } => {
                     device::parse_location(&at).and_then(|at| device::deps(at, class))
                 }
@@ -248,6 +285,63 @@ fn yn(b: bool) -> &'static str {
         "yes"
     } else {
         "no"
+    }
+}
+
+/// Parse each file and re-emit it, checking the bytes come back identical.
+///
+/// Reports the offset of the first difference rather than just "differs": for a
+/// bit-packed format that offset is usually enough to name the field on its own.
+fn verify(files: &[PathBuf]) -> Result<(), String> {
+    let mut failed = 0usize;
+    for path in files {
+        let original = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                println!("error  {} ({e})", path.display());
+                failed += 1;
+                continue;
+            }
+        };
+        let reencoded = nord_format::from_path(path)
+            .and_then(|mut entity| nord_format::to_bytes(&mut entity));
+        match reencoded {
+            Ok(bytes) if bytes == original => {
+                println!("ok     {} ({} bytes)", path.display(), original.len());
+            }
+            Ok(bytes) => {
+                failed += 1;
+                let at = bytes
+                    .iter()
+                    .zip(&original)
+                    .position(|(a, b)| a != b)
+                    .map(|i| format!("{i:#x}"))
+                    .unwrap_or_else(|| "the end (length differs)".to_string());
+                println!(
+                    "DIFFER {} (in {} bytes, out {}; first difference at {at})",
+                    path.display(),
+                    original.len(),
+                    bytes.len(),
+                );
+            }
+            Err(e) => {
+                failed += 1;
+                println!("error  {} ({e})", path.display());
+            }
+        }
+    }
+    match failed {
+        0 => Ok(()),
+        n => Err(format!("{n} of {} file(s) did not round-trip", files.len())),
+    }
+}
+
+/// Format a library dependency id the way it is worth reading: hex, matching what
+/// `nord device deps` reports for the same program.
+fn dep_id(id: u32) -> String {
+    match id {
+        0 => "none".to_string(),
+        id => format!("{id:#010x}"),
     }
 }
 
@@ -284,6 +378,30 @@ fn print_summary(entity: &Entity) {
             );
             println!("  part mix:  {} (lower/upper %)", p.part_mix().as_string());
             println!("  gain:      {}", p.gain());
+
+            let (piano, sample) = (p.piano(), p.sample());
+            println!(
+                "  piano:     category {}  model {}  clav {}  acoustics {}  touch {}  mono {}",
+                piano.category,
+                piano.piano_model,
+                piano.clav_model,
+                piano.acoustics,
+                piano.touch,
+                yn(piano.mono),
+            );
+            println!(
+                "  sample:    number {}  attack {}  decay/rel {}  dynamics {}  filter {}",
+                sample.number, sample.attack, sample.decay_release, sample.dynamics,
+                yn(sample.filter),
+            );
+            // The two library references. `nord device deps` reports these same ids
+            // for this program with the piano's and sample's *names* attached — the
+            // file itself stores only the id, so that is the only way to resolve them.
+            println!(
+                "  depends:   piano {}  sample {}",
+                dep_id(piano.id),
+                dep_id(sample.id),
+            );
 
             // Organ state (selected preset per model), when the organ is in use.
             if p.lower_part() == Instrument::Organ || p.upper_part() == Instrument::Organ {

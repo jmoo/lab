@@ -827,6 +827,21 @@ impl Program {
     pub fn organ(&self) -> &OrganPanel {
         &self.schema.organ_panel
     }
+
+    /// The piano panel, including [`PianoPanel::id`] — the program's **piano dependency
+    /// reference**. It is the same id the instrument reports for this program over USB
+    /// in a `DEPENDENCIES` reply, which is what lets a file on disk be matched to the
+    /// library content it needs. The wire carries the piano's *name* too; the file does
+    /// not, so resolving one to the other needs the device or a bundle manifest.
+    pub fn piano(&self) -> &PianoPanel {
+        &self.schema.piano_panel
+    }
+
+    /// The sample panel, including [`SamplePanel::id`] — the sample dependency
+    /// reference, the counterpart to [`Program::piano`].
+    pub fn sample(&self) -> &SamplePanel {
+        &self.schema.sample_panel
+    }
 }
 
 impl bank::Item<Location> for Program {
