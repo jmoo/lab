@@ -174,21 +174,33 @@ pub struct Message {
     /// Everything between the command word and the CRC. For a response this still
     /// includes the leading status word — use [`Message::status`] to read it.
     pub args: Vec<u8>,
+    /// Set by the decoder from the direction the bytes travelled. Not inferable from
+    /// the command code — see [`Message::is_response`].
+    is_response: bool,
 }
 
 impl Message {
+    /// A request, to send to the device.
     pub fn new(service: Service, subsystem: u32, command: u32, args: Vec<u8>) -> Self {
-        Self { service, subsystem, command, args }
+        Self { service, subsystem, command, args, is_response: false }
     }
 
-    /// Responses carry an odd command code, one above the request they answer.
+    /// Whether this message was decoded as a device response.
+    ///
+    /// **Direction, not parity.** An earlier version inferred this from the command
+    /// being odd, which held for every op decoded at the time and is wrong in general:
+    /// the "select in instrument" command is `0x2f` (odd) with response `0x30` (even),
+    /// exactly inverting the guess. The `response == request + 1` rule does hold — only
+    /// the parity of the request does not. Getting this backwards silently misaligns
+    /// [`Self::payload`] by four bytes and hides device errors, so it is now recorded
+    /// at decode time by the side that knows.
     pub fn is_response(&self) -> bool {
-        self.command & 1 == 1
+        self.is_response
     }
 
     /// The status word a response leads with. `Some(0)` is success.
     pub fn status(&self) -> Option<u32> {
-        if !self.is_response() || self.args.len() < 4 {
+        if !self.is_response || self.args.len() < 4 {
             return None;
         }
         Some(u32::from_be_bytes(self.args[..4].try_into().ok()?))
@@ -197,7 +209,7 @@ impl Message {
     /// Arguments with the response status word stripped, so request and response
     /// argument lists line up.
     pub fn payload(&self) -> &[u8] {
-        if self.is_response() && self.args.len() >= 4 {
+        if self.is_response && self.args.len() >= 4 {
             &self.args[4..]
         } else {
             &self.args
@@ -216,6 +228,15 @@ impl Message {
         out
     }
 
+    /// Decode bytes received *from* the device.
+    pub fn decode_response(buf: &[u8]) -> Result<Self> {
+        let mut m = Self::decode(buf)?;
+        m.is_response = true;
+        Ok(m)
+    }
+
+    /// Decode bytes without asserting a direction; treated as a request.
+    /// Prefer [`Self::decode_response`] for anything read off the wire.
     pub fn decode(buf: &[u8]) -> Result<Self> {
         if buf.len() < HEADER_LEN + CRC_LEN {
             return Err(Error::Truncated { got: buf.len(), need: HEADER_LEN + CRC_LEN });
@@ -237,6 +258,7 @@ impl Message {
             subsystem: u32::from_be_bytes(buf[8..12].try_into().unwrap()),
             command: u32::from_be_bytes(buf[12..16].try_into().unwrap()),
             args: buf[HEADER_LEN..split].to_vec(),
+            is_response: false,
         })
     }
 }
@@ -414,7 +436,7 @@ mod tests {
     #[test]
     fn response_is_request_plus_one_plus_status() {
         let req = Message::decode(&hex(MOVE)).unwrap();
-        let resp = Message::decode(&hex(MOVE_RESP)).unwrap();
+        let resp = Message::decode_response(&hex(MOVE_RESP)).unwrap();
 
         assert_eq!(resp.command, req.command + 1);
         assert!(resp.is_response());
@@ -423,6 +445,35 @@ mod tests {
         assert_eq!(resp.payload(), req.payload());
         // ...which is exactly why responses run 4 bytes longer.
         assert_eq!(hex(MOVE_RESP).len() - hex(MOVE).len(), 4);
+    }
+
+    /// Direction cannot be inferred from the command code.
+    ///
+    /// "Select in instrument" is `0x2f` -> `0x30`: an **odd** request with an **even**
+    /// response, inverting the parity guess that held for every other decoded op. Both
+    /// messages are real, from `select_setlist_1-2` (set lists) and
+    /// `open_on_device_2-12` (programs) -- the same command at two object classes.
+    #[test]
+    fn direction_is_not_inferable_from_command_parity() {
+        // Request: cmd 0x2f, args (0, 1) -- displayed set list 1:2.
+        let req = Message::decode(&hex("0000001a0000000c0000000a0000002f00000000000000017f71")).unwrap();
+        assert_eq!(req.command, 0x2f);
+        assert!(req.command & 1 == 1, "this request really is odd-numbered");
+        assert!(!req.is_response(), "an odd command must still decode as a request");
+        assert_eq!(req.status(), None);
+        // A request's payload must not have four bytes eaten as a status word.
+        assert_eq!(req.payload().len(), 8);
+
+        // Response: cmd 0x30 (even), status 0, then the echoed args.
+        let resp = Message::decode_response(
+            &hex("0000001e0000000c0000000a0000003000000000000000000000000112c4"),
+        )
+        .unwrap();
+        assert_eq!(resp.command, req.command + 1);
+        assert!(resp.command & 1 == 0, "this response really is even-numbered");
+        assert!(resp.is_response());
+        assert_eq!(resp.status(), Some(0), "status must be readable despite even command");
+        assert_eq!(resp.payload(), req.payload(), "args line up once status is stripped");
     }
 
     #[test]

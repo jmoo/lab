@@ -109,7 +109,7 @@ impl<T: Transport, C> Session<'_, T, C> {
         transport.write(&req.encode()).await?;
 
         let raw = transport.read(crate::transport::READ_BUFFER).await?;
-        let resp = Message::decode(&raw)?;
+        let resp = Message::decode_response(&raw)?;
 
         if resp.command != command + 1 {
             return Err(Error::UnexpectedResponse { expected: command + 1, got: resp.command });
@@ -118,35 +118,6 @@ impl<T: Transport, C> Session<'_, T, C> {
             Some(0) | None => Ok(resp),
             Some(code) => Err(Error::DeviceStatus(code)),
         }
-    }
-
-    /// Send a message the device does not answer.
-    ///
-    /// The UI progress strings (`"Uploading..."`, `"Downloading..."`) are
-    /// fire-and-forget: captures show them followed immediately by the next request,
-    /// with no reply in between. Routing them through `request` would block forever
-    /// waiting for a response that never comes.
-    pub(crate) async fn notify(
-        &mut self,
-        service: Service,
-        subsystem: u32,
-        command: u32,
-        args: &[u8],
-    ) -> Result<()> {
-        let msg = Message::new(service, subsystem, command, args.to_vec());
-        self.send_raw(&msg.encode()).await
-    }
-
-    /// Put pre-framed bytes on the wire and expect no reply.
-    ///
-    /// Needed where NSM's own framing does not round-trip through
-    /// [`Message::encode`] — see the progress strings in [`crate::op`].
-    pub(crate) async fn send_raw(&mut self, frame: &[u8]) -> Result<()> {
-        let transport = self
-            .transport
-            .as_mut()
-            .ok_or_else(|| Error::Transport("session has no transport".into()))?;
-        transport.write(frame).await
     }
 
     /// Run the closing exchanges. Always prefer this over dropping.
