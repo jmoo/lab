@@ -21,7 +21,7 @@ use std::marker::PhantomData;
 
 use crate::error::{Error, Result};
 use crate::transport::Transport;
-use crate::wire::{cmd, Message, ObjectClass, Service};
+use crate::wire::{cmd, ui, Message, ObjectClass, Service};
 
 /// Read-only capability. Cannot reach any operation that mutates the device.
 #[derive(Debug)]
@@ -57,7 +57,7 @@ impl<'t, T: Transport> Session<'t, T, ReadOnly> {
         // never established, and the Drop assertion fires on what is really just a
         // failed connection — the assertion is there to catch *forgotten* commits.
         let result = async {
-            s.request(Service::Ui, 1, 0x00, &[]).await?;
+            s.request(Service::Ui, ui::SUBSYSTEM, ui::HELLO, &[]).await?;
             s.request(Service::Program, 10, cmd::SESSION_OPEN, &class.to_raw().to_be_bytes())
                 .await?;
             Ok(())
@@ -120,10 +120,23 @@ impl<T: Transport, C> Session<'_, T, C> {
         }
     }
 
+    /// Send a fire-and-forget message without waiting for a reply.
+    ///
+    /// The UI progress strings ([`ui::label`], [`ui::percent`]) are sent this way: the
+    /// device never acknowledges them, so routing them through [`Self::request`] would
+    /// block forever on a response that never comes.
+    pub(crate) async fn notify(&mut self, msg: &Message) -> Result<()> {
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| Error::Transport("session has no transport".into()))?;
+        transport.write(&msg.encode()).await
+    }
+
     /// Run the closing exchanges. Always prefer this over dropping.
     pub async fn commit(mut self) -> Result<()> {
         self.request(Service::Program, 10, cmd::SESSION_CLOSE, &[]).await?;
-        self.request(Service::Ui, 1, 0x02, &[]).await?;
+        self.request(Service::Ui, ui::SUBSYSTEM, ui::GOODBYE, &[]).await?;
         self.closed = true;
         Ok(())
     }

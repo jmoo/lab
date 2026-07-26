@@ -1,16 +1,26 @@
 //! Typed operations.
 //!
-//! Batching is a property of the operation, not of a generic helper: most ops repeat
-//! their per-item unit N times, but `duplicate` is **phase-separated** — all N
-//! addressing exchanges first, then all N data-copy pairs. Encoding that per-op beats
-//! a generic loop that then needs an escape hatch.
+//! Each is a single-item primitive that runs inside a [`Session`]; a caller batches by
+//! opening one session and looping (which is exactly how NSM batches — the wrapper once,
+//! the per-item unit repeated).
+//!
+//! # What is reproduced, and what is not
+//!
+//! These emit the command bytes NSM sends to *effect* an operation, including the
+//! fire-and-forget progress strings that paint the instrument's own display
+//! ([`ui::label`]/[`ui::percent`]). They deliberately omit the reads NSM issues purely
+//! to repaint its **host-side browser** — the `INFO`/`DEPENDENCIES` refresh after a
+//! copy, the `STATUS` counter re-read that closes each transaction, and the whole
+//! bank-refresh transaction that follows a write. Those change nothing on the device;
+//! reproducing a specific GUI's bookkeeping is not the library's job. Everything sent
+//! here is verified byte-for-byte against the capture corpus.
 
+use crate::envelope;
 use crate::error::{Error, Result};
+use crate::session::ReadWrite;
 use crate::session::Session;
 use crate::transport::Transport;
-use crate::envelope;
-use crate::session::ReadWrite;
-use crate::wire::{cmd, Location, ObjectClass, ProgramInfo, Service, Status};
+use crate::wire::{cmd, ui, Dependency, Location, ObjectClass, ProgramInfo, Service, Status};
 
 /// Query the inventory for the class the session was opened with.
 ///
@@ -62,39 +72,16 @@ pub async fn info<T: Transport, C>(
 
 /// Read one program off the instrument, returning the bytes of a `.ne5p` file.
 ///
-/// **Read-only.** Follows the sequence NSM uses: `INFO` to learn the body length,
-/// a progress string, `BEGIN_READ`, `READ`, then `END_TRANSFER`. The body is wrapped
-/// in a `CBIN` header ([`envelope`]) so the result is a real file, and the device's
-/// own CRC-32 is checked against it when the device supplies one.
+/// **Read-only.** The body is wrapped in a `CBIN` header ([`envelope`]) so the result
+/// is a real file, and the device's own CRC-32 is checked against it when the device
+/// supplies one.
 pub async fn read_program<T: Transport, C>(
     session: &mut Session<'_, T, C>,
     at: Location,
 ) -> Result<Vec<u8>> {
-    let meta = info(session, at).await?;
+    let (meta, body) = transfer_out(session, at).await?;
 
-    let mut args = Vec::new();
-    at.write_to(&mut args);
-    session.request(Service::Program, 10, cmd::BEGIN_READ, &args).await?;
-
-    let mut req = args.clone();
-    req.extend_from_slice(&0u32.to_be_bytes()); // offset
-    req.extend_from_slice(&meta.body_len.to_be_bytes());
-    let resp = session.request(Service::Program, 10, cmd::READ, &req).await?;
-
-    // Payload is bank, slot, offset, length, then the body.
-    let p = resp.payload();
-    let body = p.get(16..).ok_or(Error::Truncated { got: p.len(), need: 17 })?;
-    if body.len() != meta.body_len as usize {
-        return Err(Error::Transport(format!(
-            "device announced a {}-byte body but sent {}",
-            meta.body_len,
-            body.len()
-        )));
-    }
-
-    session.request(Service::Program, 10, cmd::END_TRANSFER, &args).await?;
-
-    let file = envelope::wrap(&meta.format, at, body)?;
+    let file = envelope::wrap(&meta.format, at, &body)?;
     if let Some(expected) = meta.crc32 {
         let (_, _, wrapped) = envelope::unwrap(&file)?;
         let actual = crc32_of(wrapped);
@@ -116,20 +103,45 @@ pub async fn read_body<T: Transport, C>(
     session: &mut Session<'_, T, C>,
     at: Location,
 ) -> Result<Vec<u8>> {
+    Ok(transfer_out(session, at).await?.1)
+}
+
+/// The shared read sequence NSM uses, reproduced byte-for-byte: `INFO` to learn the
+/// body length, the `"Uploading..."` progress label the instrument paints, `BEGIN_READ`,
+/// `READ`, the 100% bar, then `END_TRANSFER`. Returns the metadata and the raw body.
+///
+/// ("Uploading" is NSM's own — and backwards — word for keyboard → host.)
+async fn transfer_out<T: Transport, C>(
+    session: &mut Session<'_, T, C>,
+    at: Location,
+) -> Result<(ProgramInfo, Vec<u8>)> {
     let meta = info(session, at).await?;
+
+    session.notify(&ui::label("Uploading...")).await?;
+
     let mut args = Vec::new();
     at.write_to(&mut args);
     session.request(Service::Program, 10, cmd::BEGIN_READ, &args).await?;
 
     let mut req = args.clone();
-    req.extend_from_slice(&0u32.to_be_bytes());
+    req.extend_from_slice(&0u32.to_be_bytes()); // offset
     req.extend_from_slice(&meta.body_len.to_be_bytes());
     let resp = session.request(Service::Program, 10, cmd::READ, &req).await?;
+
+    // Payload is bank, slot, offset, length, then the body.
     let p = resp.payload();
     let body = p.get(16..).ok_or(Error::Truncated { got: p.len(), need: 17 })?.to_vec();
+    if body.len() != meta.body_len as usize {
+        return Err(Error::Transport(format!(
+            "device announced a {}-byte body but sent {}",
+            meta.body_len,
+            body.len()
+        )));
+    }
 
+    session.notify(&ui::percent(100)).await?;
     session.request(Service::Program, 10, cmd::END_TRANSFER, &args).await?;
-    Ok(body)
+    Ok((meta, body))
 }
 
 /// Write a `.ne5p` file into a slot, **overwriting whatever is there**.
@@ -148,6 +160,10 @@ pub async fn write_program<T: Transport>(
 ) -> Result<()> {
     let (format, _, body) = envelope::unwrap(file)?;
 
+    // The "Downloading..." label the instrument paints — NSM's backwards word for
+    // host → keyboard. Fire-and-forget, exactly as on the wire.
+    session.notify(&ui::label("Downloading...")).await?;
+
     let mut begin = Vec::new();
     at.write_to(&mut begin);
     begin.extend_from_slice(&(body.len() as u32).to_be_bytes());
@@ -165,23 +181,109 @@ pub async fn write_program<T: Transport>(
     data.extend_from_slice(body);
     session.request(Service::Program, 10, cmd::WRITE_DATA, &data).await?;
 
+    session.notify(&ui::percent(100)).await?;
+
     let mut args = Vec::new();
     at.write_to(&mut args);
     session.request(Service::Program, 10, cmd::END_TRANSFER, &args).await?;
     Ok(())
 }
 
-// NSM also sends a UI progress string ("Uploading..." / "Downloading...") at the
-// start of each transfer. We deliberately do NOT.
-//
-// They are cosmetic — they drive the instrument's display — and they are
-// fire-and-forget, so the device never acknowledges them and cannot be waiting on
-// one. More to the point, the two captured examples do not agree on a single frame
-// layout (one is 38 bytes declaring 37, the other 39 declaring 39), so any encoder
-// written from them would be guesswork. Sending nothing is well-defined; sending a
-// malformed frame is not.
-//
-// If hardware turns out to want them, re-capture a clean example first.
+/// Load a stored object live on the instrument ("open on device" / double-click in
+/// NSM). The device switches to it immediately.
+///
+/// **Non-destructive** — nothing stored changes, so this needs no [`ReadWrite`] session.
+/// This is the one command with inverted parity (`0x2f` request, `0x30` response).
+pub async fn select<T: Transport, C>(
+    session: &mut Session<'_, T, C>,
+    at: Location,
+) -> Result<()> {
+    let mut args = Vec::new();
+    at.write_to(&mut args);
+    session.request(Service::Program, 10, cmd::SELECT, &args).await?;
+    Ok(())
+}
+
+/// List the piano/sample library objects an entity depends on.
+///
+/// **Read-only.** The returned [`Dependency`] ids match the ids the objects carry in
+/// their own files, which is the bridge between wire content and file bytes.
+pub async fn dependencies<T: Transport, C>(
+    session: &mut Session<'_, T, C>,
+    at: Location,
+) -> Result<Vec<Dependency>> {
+    let mut args = Vec::new();
+    at.write_to(&mut args);
+    let resp = session.request(Service::Program, 10, cmd::DEPENDENCIES, &args).await?;
+    Dependency::decode_all(&resp)
+}
+
+/// Move an object from one slot to another. The device relocates it internally — no
+/// body crosses the wire.
+///
+/// Requires a [`ReadWrite`] session. Class-generalised: works for whichever object
+/// class the session opened (programs, set lists).
+pub async fn move_object<T: Transport>(
+    session: &mut Session<'_, T, ReadWrite>,
+    from: Location,
+    to: Location,
+) -> Result<()> {
+    let mut args = Vec::new();
+    from.write_to(&mut args);
+    to.write_to(&mut args);
+    session.request(Service::Program, 10, cmd::MOVE, &args).await?;
+    Ok(())
+}
+
+/// Delete the object in a slot. Requires a [`ReadWrite`] session.
+///
+/// Sends the `"Deleting..."` progress label the instrument paints, then the delete —
+/// exactly the two OUT frames NSM sends (the `O36 O26 I30` shape).
+pub async fn delete<T: Transport>(
+    session: &mut Session<'_, T, ReadWrite>,
+    at: Location,
+) -> Result<()> {
+    session.notify(&ui::label("Deleting...")).await?;
+    let mut args = Vec::new();
+    at.write_to(&mut args);
+    session.request(Service::Program, 10, cmd::DELETE, &args).await?;
+    Ok(())
+}
+
+/// Rename the object in a slot. Requires a [`ReadWrite`] session.
+///
+/// The name is sent big-endian length-prefixed and unpadded — the same encoding
+/// strings use everywhere on the wire.
+pub async fn rename<T: Transport>(
+    session: &mut Session<'_, T, ReadWrite>,
+    at: Location,
+    name: &str,
+) -> Result<()> {
+    let mut args = Vec::new();
+    at.write_to(&mut args);
+    args.extend_from_slice(&(name.len() as u32).to_be_bytes());
+    args.extend_from_slice(name.as_bytes());
+    session.request(Service::Program, 10, cmd::RENAME, &args).await?;
+    Ok(())
+}
+
+/// Duplicate the object at `from` into `to`. Requires a [`ReadWrite`] session.
+///
+/// A deep copy the device performs internally: the arguments are just the two
+/// addresses, and no body crosses the wire. (NSM follows a copy with `INFO`/`DEPENDENCIES`
+/// reads to repaint its browser; those are UI bookkeeping and are not sent here — see
+/// the module-level note.)
+pub async fn duplicate<T: Transport>(
+    session: &mut Session<'_, T, ReadWrite>,
+    from: Location,
+    to: Location,
+) -> Result<()> {
+    let mut args = Vec::new();
+    from.write_to(&mut args);
+    to.write_to(&mut args);
+    session.request(Service::Program, 10, cmd::COPY, &args).await?;
+    Ok(())
+}
 
 fn crc32_of(data: &[u8]) -> u32 {
     let mut crc = !0u32;
@@ -192,37 +294,4 @@ fn crc32_of(data: &[u8]) -> u32 {
         }
     }
     !crc
-}
-
-// ---------------------------------------------------------------------------
-// Declared but not yet implemented. The exchange shapes are verified against the
-// corpus and the wire encoding is known (see `wire::cmd`), but these mutate the
-// device, so they land behind the ReadWrite capability once there is a backup story.
-// ---------------------------------------------------------------------------
-
-/// Move a program. Verified shape: `O34 I38`.
-#[derive(Debug)]
-pub struct Move {
-    pub from: Location,
-    pub to: Location,
-}
-
-/// Delete programs. Verified shape: `O36 O26 I30`, repeated per item.
-#[derive(Debug)]
-pub struct Delete {
-    pub items: Vec<Location>,
-}
-
-/// Rename a program. Verified shape: `O33 I30`; the request carries a length-prefixed
-/// name, so its size tracks the string.
-#[derive(Debug)]
-pub struct Rename {
-    pub at: Location,
-    pub name: String,
-}
-
-/// Duplicate programs. The one confirmed **phase-separated** operation.
-#[derive(Debug)]
-pub struct Duplicate {
-    pub pairs: Vec<(Location, Location)>,
 }
