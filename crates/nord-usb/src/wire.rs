@@ -74,12 +74,25 @@ pub mod cmd {
     pub const DELETE: u32 = 0x14;
     /// Read a program's data. Response body is a reframed entity.
     pub const READ: u32 = 0x12;
+    /// Copy/duplicate an object: `src_bank, src_slot, dst_bank, dst_slot`. The device
+    /// copies internally — no body crosses the wire.
+    pub const COPY: u32 = 0x16;
     /// Move a program between slots.
     pub const MOVE: u32 = 0x18;
     /// Read a program's metadata (name, format tag).
     pub const INFO: u32 = 0x1e;
     /// Rename a program; args carry a length-prefixed string.
     pub const RENAME: u32 = 0x1c;
+    /// Select an object live on the instrument ("open on device" / double-click).
+    /// Non-destructive: nothing stored changes, the device just loads it. This is the
+    /// one request with inverted parity — odd code, even response (`0x30`) — so its
+    /// direction cannot be inferred from the command number.
+    pub const SELECT: u32 = 0x2f;
+    /// Re-link an object's dependency table ("set slot table"). Rewrites which library
+    /// pianos/samples a program points at, or which programs a set list holds. Its
+    /// payload semantics (notably the per-entry flag byte) are not fully pinned down,
+    /// so no typed operation is built on it yet — the code is named for completeness.
+    pub const RELINK: u32 = 0x35;
 
     /// Begin writing an entity. Args: bank, slot, body length, format tag,
     /// timestamp, `0xFFFFFFFF`, 1, and a trailing flag byte.
@@ -92,6 +105,46 @@ pub mod cmd {
     pub const WRITE_DATA: u32 = 0x10;
     /// List an entity's piano/sample dependencies.
     pub const DEPENDENCIES: u32 = 0x28;
+}
+
+/// The UI/session service (service 6, subsystem 1): the transaction's outer handshake
+/// and the progress strings NSM paints on the **instrument's own display** during a
+/// transfer.
+///
+/// The progress messages ([`label`], [`percent`]) are **fire-and-forget** — the device
+/// never replies. They must be sent with [`crate::Session::notify`], never `request`,
+/// which would block forever waiting for a response that never comes. (An earlier
+/// version stopped sending them on the belief they were malformed; that came from a bad
+/// hand transcription and was wrong — every example on the wire is well-formed.)
+pub mod ui {
+    use super::{Message, Service};
+
+    /// Subsystem paired with [`Service::Ui`].
+    pub const SUBSYSTEM: u32 = 1;
+    /// Open the UI side of a transaction (the `O18 I22` that starts every operation).
+    pub const HELLO: u32 = 0x00;
+    /// Close the UI side of a transaction.
+    pub const GOODBYE: u32 = 0x02;
+    /// A text progress label, e.g. `"Downloading..."`.
+    pub const LABEL: u32 = 0x06;
+    /// A progress percentage, 0..=100.
+    pub const PERCENT: u32 = 0x07;
+
+    /// A progress label. Layout is six zero bytes, a one-byte length, then unpadded
+    /// ASCII — read straight off the wire and byte-for-byte reproducible.
+    pub fn label(text: &str) -> Message {
+        let mut args = vec![0u8; 6];
+        args.push(text.len() as u8);
+        args.extend_from_slice(text.as_bytes());
+        Message::new(Service::Ui, SUBSYSTEM, LABEL, args)
+    }
+
+    /// A progress percentage. Layout is a constant `u16` 1 then the value as a `u16`.
+    pub fn percent(pct: u16) -> Message {
+        let mut args = 1u16.to_be_bytes().to_vec();
+        args.extend_from_slice(&pct.to_be_bytes());
+        Message::new(Service::Ui, SUBSYSTEM, PERCENT, args)
+    }
 }
 
 /// What [`cmd::INFO`] reports about one slot.
@@ -143,6 +196,70 @@ impl ProgramInfo {
             crc32,
             name,
         })
+    }
+}
+
+/// One entry from a [`cmd::DEPENDENCIES`] response: a piano or sample that a program
+/// (or a program that a set list) references.
+///
+/// The library `id` is the same id the object carries in its own file — a
+/// `PianoPanel`'s piano id, a sample's sample id — so this is the bridge between the
+/// content on the wire and the bytes on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dependency {
+    /// Leading byte, per-id consistent but not yet understood — ruled out as
+    /// "present", reference count, class and category. Preserved verbatim.
+    pub flag: u8,
+    /// What kind of object this dependency is (piano, sample, program).
+    pub class: ObjectClass,
+    /// Content id, matching the id in the object's own file header.
+    pub id: u32,
+    /// Human-readable name — which the `.ne5p`/`.ne5t` files do not themselves store.
+    pub name: String,
+    /// Slot address, for slot-addressed dependencies (programs). Library content
+    /// (pianos, samples) is addressed by `id` and reports no location.
+    pub location: Option<Location>,
+}
+
+impl Dependency {
+    /// Decode a whole [`cmd::DEPENDENCIES`] response into the list it carries.
+    ///
+    /// Layout after the leading `bank, slot, count`, each entry is
+    /// `[u8 flag][u32 reserved][u32 class][u32 id][u32 name_len][name][u32 has_location][u32 bank][u32 slot]`
+    /// with no alignment padding, so an entry is `29 + name_len` bytes.
+    pub fn decode_all(msg: &Message) -> Result<Vec<Self>> {
+        let p = msg.payload();
+        if p.len() < 12 {
+            return Err(Error::Truncated { got: p.len(), need: 12 });
+        }
+        let word = |i: usize| u32::from_be_bytes(p[i..i + 4].try_into().unwrap());
+        let count = word(8) as usize;
+
+        let mut out = Vec::with_capacity(count);
+        let mut i = 12;
+        for _ in 0..count {
+            // flag(1) + reserved(4) + class(4) + id(4) + name_len(4) = 17 bytes.
+            if i + 17 > p.len() {
+                return Err(Error::Truncated { got: p.len(), need: i + 17 });
+            }
+            let flag = p[i];
+            let class = ObjectClass::from_raw(word(i + 5));
+            let id = word(i + 9);
+            let name_len = word(i + 13) as usize;
+            let name_start = i + 17;
+            let name_end = name_start + name_len;
+            // name + has_location(4) + bank(4) + slot(4).
+            if name_end + 12 > p.len() {
+                return Err(Error::Truncated { got: p.len(), need: name_end + 12 });
+            }
+            let name = String::from_utf8_lossy(&p[name_start..name_end]).into_owned();
+            let has_location = word(name_end) != 0;
+            let location = has_location
+                .then(|| Location { bank: word(name_end + 4), slot: word(name_end + 8) });
+            out.push(Self { flag, class, id, name, location });
+            i = name_end + 12;
+        }
+        Ok(out)
     }
 }
 
@@ -501,5 +618,42 @@ mod tests {
         ] {
             assert!(Message::decode(&hex(raw)).is_ok(), "{raw}");
         }
+    }
+
+    /// The progress strings encode byte-for-byte to what NSM put on the wire — the
+    /// "Deleting..." label from `delete_prog_bank7_loc50` and the 100% bar from the
+    /// program read. Reproducing these exactly is the whole point of un-retracting them.
+    #[test]
+    fn ui_label_and_percent_match_the_wire() {
+        assert_eq!(
+            super::ui::label("Deleting...").encode(),
+            hex("000000240000000600000001000000060000000000000b44656c6574696e672e2e2e7394"),
+        );
+        assert_eq!(
+            super::ui::percent(100).encode(),
+            hex("0000001600000006000000010000000700010064927b"),
+        );
+    }
+
+    /// Decode the dependency list a real duplicate read back: a piano and a sample,
+    /// each with the content id that also appears in the file header.
+    #[test]
+    fn decodes_real_dependencies() {
+        let resp = Message::decode_response(&hex(
+            "000000820000000c0000000a0000002900000000000000060000000200000002000000000000000001d303b5f20000001a526f79616c204772616e64203344205961533620584c20352e3400000000ffffffffffffffff010000000000000003f2f5cadc0000000c6166726963615f73706c697400000000ffffffffffffffffc791",
+        ))
+        .unwrap();
+        let deps = Dependency::decode_all(&resp).unwrap();
+        assert_eq!(deps.len(), 2);
+
+        assert_eq!(deps[0].class, ObjectClass::Piano);
+        assert_eq!(deps[0].id, 0xd303_b5f2);
+        assert_eq!(deps[0].name, "Royal Grand 3D YaS6 XL 5.4");
+        assert_eq!(deps[0].location, None);
+
+        assert_eq!(deps[1].class, ObjectClass::Sample);
+        assert_eq!(deps[1].id, 0xf2f5_cadc);
+        assert_eq!(deps[1].name, "africa_split");
+        assert_eq!(deps[1].location, None);
     }
 }
