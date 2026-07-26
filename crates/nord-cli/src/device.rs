@@ -1,9 +1,10 @@
 //! `nord device` — talk to an attached instrument over USB.
 //!
-//! Only read-only operations live here for now. `status` sends one request per object
-//! class and reads counters back; nothing on the instrument changes, which makes it
-//! the safe way to prove the transport, framing and session layers work end to end
-//! against real hardware.
+//! Read-only queries (`status`, `read`, `deps`) and the non-destructive `select` need
+//! no confirmation; the mutating actions (`write`, `move`, `delete`, `rename`,
+//! `duplicate`) each describe what they will touch and then refuse to proceed without
+//! `--yes`. `status` is the gentlest end-to-end check: it sends one query per object
+//! class and reads counters back, changing nothing on the instrument.
 
 use std::path::PathBuf;
 
@@ -190,5 +191,149 @@ pub fn write(path: PathBuf, at: Location, confirmed: bool) -> Result<(), String>
     .map_err(|e| e.to_string())?;
 
     eprintln!("wrote {} -> bank {} slot {}", path.display(), at.bank + 1, at.slot + 1);
+    Ok(())
+}
+
+/// One-indexed `bank N slot M`, matching the instrument's own labels.
+fn shown(at: Location) -> String {
+    format!("bank {} slot {}", at.bank + 1, at.slot + 1)
+}
+
+/// Read one slot's name/format in a throwaway read-only session — used to show what a
+/// mutation is about to affect before it happens.
+fn peek(t: &mut nord_usb::transport::UsbTransport, class: ObjectClass, at: Location) -> Result<String, String> {
+    nord_usb::block_on(async {
+        let mut s = Session::open(t, class).await?;
+        let info = usb_op::info(&mut s, at).await?;
+        s.commit().await?;
+        Ok::<_, nord_usb::Error>(info.name)
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// Refuse a destructive op unless `--yes` was given, after describing what it touches.
+fn require_yes(confirmed: bool) -> Result<(), String> {
+    if confirmed {
+        Ok(())
+    } else {
+        Err("refusing to modify the device without --yes (back up first: `nord device read`)".into())
+    }
+}
+
+/// Move an object from one slot to another. Destructive; requires `--yes`.
+pub fn move_object(from: Location, to: Location, class: u32, confirmed: bool) -> Result<(), String> {
+    let class = ObjectClass::from_raw(class);
+    let mut t = open_usb()?;
+    let name = peek(&mut t, class, from)?;
+    eprintln!("moving {:?} from {} to {}", name, shown(from), shown(to));
+    require_yes(confirmed)?;
+    nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, class).await?.allow_destructive_writes();
+        let r = usb_op::move_object(&mut s, from, to).await;
+        r.and(s.commit().await)
+    })
+    .map_err(|e| e.to_string())?;
+    eprintln!("moved {} -> {}", shown(from), shown(to));
+    Ok(())
+}
+
+/// Delete one or more slots. Destructive; requires `--yes`. All items run in one
+/// session, exactly as NSM batches a multi-delete.
+pub fn delete(slots: &[Location], class: u32, confirmed: bool) -> Result<(), String> {
+    let class = ObjectClass::from_raw(class);
+    let mut t = open_usb()?;
+    for &at in slots {
+        let name = peek(&mut t, class, at)?;
+        eprintln!("deleting {:?} at {}", name, shown(at));
+    }
+    require_yes(confirmed)?;
+    nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, class).await?.allow_destructive_writes();
+        let mut r = Ok(());
+        for &at in slots {
+            r = usb_op::delete(&mut s, at).await;
+            if r.is_err() {
+                break;
+            }
+        }
+        r.and(s.commit().await)
+    })
+    .map_err(|e| e.to_string())?;
+    eprintln!("deleted {} item(s)", slots.len());
+    Ok(())
+}
+
+/// Rename the object in a slot. Destructive; requires `--yes`.
+pub fn rename(at: Location, name: String, class: u32, confirmed: bool) -> Result<(), String> {
+    let class = ObjectClass::from_raw(class);
+    let mut t = open_usb()?;
+    let old = peek(&mut t, class, at)?;
+    eprintln!("renaming {} from {:?} to {:?}", shown(at), old, name);
+    require_yes(confirmed)?;
+    nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, class).await?.allow_destructive_writes();
+        let r = usb_op::rename(&mut s, at, &name).await;
+        r.and(s.commit().await)
+    })
+    .map_err(|e| e.to_string())?;
+    eprintln!("renamed {} -> {:?}", shown(at), name);
+    Ok(())
+}
+
+/// Duplicate an object into another slot (a device-internal deep copy). Destructive;
+/// requires `--yes`.
+pub fn duplicate(from: Location, to: Location, class: u32, confirmed: bool) -> Result<(), String> {
+    let class = ObjectClass::from_raw(class);
+    let mut t = open_usb()?;
+    let name = peek(&mut t, class, from)?;
+    eprintln!("duplicating {:?} from {} to {}", name, shown(from), shown(to));
+    require_yes(confirmed)?;
+    nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, class).await?.allow_destructive_writes();
+        let r = usb_op::duplicate(&mut s, from, to).await;
+        r.and(s.commit().await)
+    })
+    .map_err(|e| e.to_string())?;
+    eprintln!("duplicated {} -> {}", shown(from), shown(to));
+    Ok(())
+}
+
+/// Load an object live on the instrument (double-click in NSM). Non-destructive, so no
+/// confirmation is needed.
+pub fn select(at: Location, class: u32) -> Result<(), String> {
+    let class = ObjectClass::from_raw(class);
+    let mut t = open_usb()?;
+    nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, class).await?;
+        let r = usb_op::select(&mut s, at).await;
+        let closed = s.commit().await;
+        r.and(closed)
+    })
+    .map_err(|e| e.to_string())?;
+    eprintln!("selected {} on the instrument", shown(at));
+    Ok(())
+}
+
+/// List the piano/sample library objects an entity depends on. Read-only.
+pub fn deps(at: Location, class: u32) -> Result<(), String> {
+    let class = ObjectClass::from_raw(class);
+    let mut t = open_usb()?;
+    let deps = nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, class).await?;
+        let deps = usb_op::dependencies(&mut s, at).await?;
+        s.commit().await?;
+        Ok::<_, nord_usb::Error>(deps)
+    })
+    .map_err(|e| e.to_string())?;
+
+    if deps.is_empty() {
+        println!("{} has no dependencies", shown(at));
+        return Ok(());
+    }
+    println!("{:<8} {:<10} name", "class", "id");
+    for d in &deps {
+        let loc = d.location.map(shown).unwrap_or_default();
+        println!("{:<8} {:08x}   {} {}", d.class.label(), d.id, d.name, loc);
+    }
     Ok(())
 }

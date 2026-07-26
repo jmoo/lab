@@ -33,7 +33,8 @@ enum Command {
         raw: bool,
     },
 
-    /// Talk to an attached instrument over USB. Read-only for now.
+    /// Talk to an attached instrument over USB: inventory, read, write, and organise
+    /// slots. Mutating actions require --yes.
     Device {
         #[command(subcommand)]
         action: DeviceAction,
@@ -91,6 +92,76 @@ enum DeviceAction {
         #[arg(long)]
         yes: bool,
     },
+
+    /// Move an object between slots. OVERWRITES the destination. Requires --yes.
+    Move {
+        /// Source slot, e.g. 8-13.
+        #[arg(value_name = "FROM")]
+        from: String,
+        /// Destination slot, e.g. 7-16.
+        #[arg(value_name = "TO")]
+        to: String,
+        #[arg(long, default_value_t = 4)]
+        class: u32,
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Delete one or more slots from the instrument. Requires --yes.
+    Delete {
+        /// Slots to delete, e.g. 7-50 (repeatable).
+        #[arg(value_name = "BANK-SLOT", required = true)]
+        slots: Vec<String>,
+        #[arg(long, default_value_t = 4)]
+        class: u32,
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Rename the object in a slot. Requires --yes.
+    Rename {
+        /// Slot to rename, e.g. 6-13.
+        #[arg(value_name = "BANK-SLOT")]
+        at: String,
+        /// The new name.
+        name: String,
+        #[arg(long, default_value_t = 4)]
+        class: u32,
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Duplicate an object into another slot (device-internal deep copy). Requires --yes.
+    Duplicate {
+        /// Source slot, e.g. 7-2.
+        #[arg(value_name = "FROM")]
+        from: String,
+        /// Destination slot, e.g. 7-3.
+        #[arg(value_name = "TO")]
+        to: String,
+        #[arg(long, default_value_t = 4)]
+        class: u32,
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Load an object live on the instrument (double-click in NSM). Non-destructive.
+    Select {
+        /// Slot to load, e.g. 2-12.
+        #[arg(value_name = "BANK-SLOT")]
+        at: String,
+        #[arg(long, default_value_t = 4)]
+        class: u32,
+    },
+
+    /// List the piano/sample library objects an entity depends on. Read-only.
+    Deps {
+        /// Slot to inspect, e.g. 7-3.
+        #[arg(value_name = "BANK-SLOT")]
+        at: String,
+        #[arg(long, default_value_t = 4)]
+        class: u32,
+    },
 }
 
 fn main() -> ExitCode {
@@ -134,6 +205,26 @@ fn main() -> ExitCode {
                 }
                 DeviceAction::Write { file, at, yes } => {
                     device::parse_location(&at).and_then(|at| device::write(file, at, yes))
+                }
+                DeviceAction::Move { from, to, class, yes } => device::parse_location(&from)
+                    .and_then(|from| Ok((from, device::parse_location(&to)?)))
+                    .and_then(|(from, to)| device::move_object(from, to, class, yes)),
+                DeviceAction::Delete { slots, class, yes } => slots
+                    .iter()
+                    .map(|s| device::parse_location(s))
+                    .collect::<Result<Vec<_>, _>>()
+                    .and_then(|locs| device::delete(&locs, class, yes)),
+                DeviceAction::Rename { at, name, class, yes } => {
+                    device::parse_location(&at).and_then(|at| device::rename(at, name, class, yes))
+                }
+                DeviceAction::Duplicate { from, to, class, yes } => device::parse_location(&from)
+                    .and_then(|from| Ok((from, device::parse_location(&to)?)))
+                    .and_then(|(from, to)| device::duplicate(from, to, class, yes)),
+                DeviceAction::Select { at, class } => {
+                    device::parse_location(&at).and_then(|at| device::select(at, class))
+                }
+                DeviceAction::Deps { at, class } => {
+                    device::parse_location(&at).and_then(|at| device::deps(at, class))
                 }
             };
             match result {
