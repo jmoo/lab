@@ -9,7 +9,8 @@ use std::path::PathBuf;
 
 use nord_usb::op;
 use nord_usb::transport::Transport;
-use nord_usb::wire::Status;
+use nord_usb::wire::{Location, Status};
+use nord_usb::{op as usb_op, ObjectClass, Session};
 
 /// Where to get the exchange from.
 pub enum Source {
@@ -92,4 +93,91 @@ fn print_json(report: &[Status]) {
         );
     }
     println!("]");
+}
+
+/// Parse a slot as the instrument displays it: `8-14` is bank 8, slot 14.
+pub fn parse_location(s: &str) -> Result<Location, String> {
+    let (b, l) = s
+        .split_once('-')
+        .ok_or_else(|| format!("expected BANK-SLOT (e.g. 7-4), got {s:?}"))?;
+    let bank: u32 = b.trim().parse().map_err(|_| format!("bad bank {b:?}"))?;
+    let slot: u32 = l.trim().parse().map_err(|_| format!("bad slot {l:?}"))?;
+    if bank == 0 || slot == 0 {
+        return Err("banks and slots are numbered from 1, as shown on the instrument".into());
+    }
+    Ok(Location::from_user(bank, slot))
+}
+
+fn open_usb() -> Result<nord_usb::transport::UsbTransport, String> {
+    nord_usb::transport::UsbTransport::open_first().map_err(|e| e.to_string())
+}
+
+/// Read one program off the instrument into a `.ne5p` file. Read-only.
+pub fn read(at: Location, out: Option<PathBuf>) -> Result<(), String> {
+    let mut t = open_usb()?;
+    let (info, file) = nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, ObjectClass::Program).await?;
+        let info = usb_op::info(&mut s, at).await?;
+        let file = usb_op::read_program(&mut s, at).await?;
+        s.commit().await?;
+        Ok::<_, nord_usb::Error>((info, file))
+    })
+    .map_err(|e| e.to_string())?;
+
+    let path = out.unwrap_or_else(|| {
+        // Default to the slot name, which is what the corpus convention keys on.
+        let stem = if info.name.is_empty() { "program".into() } else { info.name.clone() };
+        PathBuf::from(format!("{stem}.ne5p"))
+    });
+    std::fs::write(&path, &file).map_err(|e| format!("{}: {e}", path.display()))?;
+    eprintln!("read {} ({} bytes) -> {}", info.name, file.len(), path.display());
+    Ok(())
+}
+
+/// Write a `.ne5p` into a slot, overwriting it.
+pub fn write(path: PathBuf, at: Location, confirmed: bool) -> Result<(), String> {
+    let file = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Fail before touching the device if the file is not what it claims to be.
+    nord_usb::envelope::unwrap(&file).map_err(|e| e.to_string())?;
+
+    let mut t = open_usb()?;
+
+    // Show what is about to be destroyed before destroying it. Reading the slot
+    // first costs one round trip and turns a silent overwrite into an informed one.
+    let existing = nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, ObjectClass::Program).await?;
+        let info = usb_op::info(&mut s, at).await?;
+        s.commit().await?;
+        Ok::<_, nord_usb::Error>(info)
+    })
+    .map_err(|e| e.to_string())?;
+
+    eprintln!(
+        "about to overwrite bank {} slot {} (currently {:?}) with {}",
+        existing.location.bank + 1,
+        existing.location.slot + 1,
+        existing.name,
+        path.display()
+    );
+    if !confirmed {
+        return Err("refusing to write without --yes (back up first: `nord device read`)".into());
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(0);
+
+    nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, ObjectClass::Program).await?.allow_destructive_writes();
+        let r = usb_op::write_program(&mut s, at, &file, timestamp).await;
+        // Close the transaction either way; leaving it half-open is worse than the
+        // original error.
+        let closed = s.commit().await;
+        r.and(closed)
+    })
+    .map_err(|e| e.to_string())?;
+
+    eprintln!("wrote {} -> bank {} slot {}", path.display(), at.bank + 1, at.slot + 1);
+    Ok(())
 }

@@ -18,6 +18,7 @@
 //! are no `Send` bounds, and why enumeration is deliberately backend-specific rather
 //! than part of the portable core.
 
+pub mod envelope;
 pub mod error;
 pub mod op;
 pub mod session;
@@ -26,6 +27,7 @@ pub mod wire;
 
 pub use error::{Error, Result};
 pub use session::{ReadOnly, ReadWrite, Session};
+pub use wire::ObjectClass as _ObjectClassReexportGuard;
 pub use transport::Transport;
 pub use wire::{Location, Message, ObjectClass, Service, Status};
 

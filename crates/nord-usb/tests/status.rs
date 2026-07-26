@@ -143,3 +143,63 @@ fn derives_slots_only_for_fixed_size_classes() {
     let empty = Status { class: ObjectClass::Unknown(6), count: 0, free: 363, used: 0 };
     assert_eq!(empty.slots(), None);
 }
+
+/// Read a program back from the exact traffic NSM produced, and check the result is
+/// a byte-perfect `.ne5p`.
+///
+/// This is the strongest test in the crate: every host message must match NSM's real
+/// bytes (the transport is exact-match), and the reconstructed file must equal the
+/// `.ne5p` NSM itself saved for that slot.
+#[test]
+fn read_program_reproduces_nsm_and_rebuilds_the_file() {
+    use nord_usb::envelope;
+    use Direction::{In, Out};
+
+    // bank 8 slot 14 -> 7, 13 on the wire.
+    let script = vec![
+        step(Out, "0000001200000006000000010000000006a1"),
+        step(In, "000000160000000600000001000000010000000044ec"),
+        step(Out, "000000160000000c0000000a0000000400000004a218"),
+        step(In, "0000001a0000000c0000000a00000005000000000000000467b0"),
+        // INFO
+        step(Out, "0000001a0000000c0000000a0000001e000000070000000dc608"),
+        step(In, "000000520000000c0000000a0000001f00000000000000070000000d000000796e65357000000004ffffffffffffffff00000010313030303030303030303030303030300000000000000000a5465db65db1"),
+        // NSM sends a cosmetic "Uploading..." progress string here; we omit it
+        // deliberately (see op.rs), so it is absent from this script too.
+        // BEGIN_READ
+        step(Out, "0000001a0000000c0000000a0000000c000000070000000d5391"),
+        step(In, "0000001e0000000c0000000a0000000d00000000000000070000000dc4d4"),
+        // READ
+        step(Out, "000000220000000c0000000a00000012000000070000000d0000000000000079d476"),
+        step(In, "0000009f0000000c0000000a0000001300000000000000070000000d0000000000000079000401df06781fc60000000000000000000000000000000000000100000000000000000000400000000000000002200000000000022000400000008888000008008888000008000000000080000000000080000000000000000000800000000800800000000800020010060401020408140010000000000000d24c"),
+        // END_TRANSFER
+        step(Out, "0000001a0000000c0000000a0000000e000000070000000d95f6"),
+        step(In, "0000001e0000000c0000000a0000000f00000000000000070000000d4e12"),
+        // close
+        step(Out, "000000120000000c0000000a000000066500"),
+        step(In, "000000160000000c0000000a00000007000000000c4e"),
+        step(Out, "0000001200000006000000010000000226e3"),
+        step(In, "0000001600000006000000010000000300000000006f"),
+    ];
+
+    let at = nord_usb::Location::from_user(8, 14);
+    let mut t = ReplayTransport::new(script);
+    let file = block_on(async {
+        let mut s = Session::open(&mut t, ObjectClass::Program).await.unwrap();
+        let f = match op::read_program(&mut s, at).await { Ok(f) => f, Err(e) => { s.abort(); panic!("read_program failed: {e}") } };
+        s.commit().await.unwrap();
+        f
+    });
+
+    // The real 165-byte .ne5p NSM saved for this slot.
+    let expected = hex("4342494e010000006e65357007000d00ffffffff04000000b65d46a500000000000000000000000000000000000401df06781fc60000000000000000000000000000000000000100000000000000000000400000000000000002200000000000022000400000008888000008008888000008000000000080000000000080000000000000000000800000000800800000000800020010060401020408140010000000000000");
+    assert_eq!(file, expected, "reconstructed .ne5p differs from the file NSM saved");
+
+    // And it survives a trip back out to the wire body.
+    let (format, loc, body) = envelope::unwrap(&file).unwrap();
+    assert_eq!(format, "ne5p");
+    assert_eq!(loc, at);
+    assert_eq!(body.len(), 121);
+
+    assert!(t.is_exhausted(), "did not consume the whole exchange");
+}

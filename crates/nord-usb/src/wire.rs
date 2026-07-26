@@ -80,6 +80,70 @@ pub mod cmd {
     pub const INFO: u32 = 0x1e;
     /// Rename a program; args carry a length-prefixed string.
     pub const RENAME: u32 = 0x1c;
+
+    /// Begin writing an entity. Args: bank, slot, body length, format tag,
+    /// timestamp, `0xFFFFFFFF`, 1, and a trailing flag byte.
+    pub const BEGIN_WRITE: u32 = 0x0a;
+    /// Begin reading an entity. Args: bank, slot.
+    pub const BEGIN_READ: u32 = 0x0c;
+    /// Finish a transfer, either direction. Args: bank, slot.
+    pub const END_TRANSFER: u32 = 0x0e;
+    /// Push entity bytes. Args: bank, slot, offset, length, then the body.
+    pub const WRITE_DATA: u32 = 0x10;
+    /// List an entity's piano/sample dependencies.
+    pub const DEPENDENCIES: u32 = 0x28;
+}
+
+/// What [`cmd::INFO`] reports about one slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramInfo {
+    pub location: Location,
+    /// Length of the entity body on the wire — 121 for an Electro 5 program.
+    pub body_len: u32,
+    /// Four-character CBIN format tag, e.g. `ne5p`.
+    pub format: String,
+    /// CRC-32 of the body, as the device reports it. Lets a read be verified
+    /// against the device's own checksum rather than trusting the transfer.
+    pub crc32: Option<u32>,
+    /// Slot name as shown on the instrument.
+    pub name: String,
+}
+
+impl ProgramInfo {
+    pub fn decode(msg: &Message) -> Result<Self> {
+        let p = msg.payload();
+        if p.len() < 20 {
+            return Err(Error::Truncated { got: p.len(), need: 20 });
+        }
+        let word = |i: usize| u32::from_be_bytes(p[i..i + 4].try_into().unwrap());
+        let format = String::from_utf8_lossy(&p[12..16]).into_owned();
+
+        // The name is a big-endian length-prefixed ASCII string. Its offset shifts
+        // with the reply variant, so scan for a plausible length word rather than
+        // hard-coding a position we have only seen one example of.
+        let mut name = String::new();
+        let mut crc32 = None;
+        let mut i = 16;
+        while i + 4 <= p.len() {
+            let n = word(i) as usize;
+            if n > 0 && n <= 32 && i + 4 + n <= p.len() && p[i + 4..i + 4 + n].is_ascii() {
+                name = String::from_utf8_lossy(&p[i + 4..i + 4 + n]).trim_end().to_owned();
+                break;
+            }
+            i += 4;
+        }
+        if p.len() >= 4 {
+            crc32 = Some(u32::from_be_bytes(p[p.len() - 4..].try_into().unwrap()));
+        }
+
+        Ok(Self {
+            location: Location { bank: word(0), slot: word(4) },
+            body_len: word(8),
+            format,
+            crc32,
+            name,
+        })
+    }
 }
 
 /// CRC-16/CCITT-FALSE — poly `0x1021`, init `0xFFFF`, no reflection, no xorout.

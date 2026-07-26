@@ -276,7 +276,7 @@
             }
             cat poc.txt
 
-            for want in pianos samples programs 'set lists' 375 52875; do
+            for want in pianos samples programs 'set lists' '380 / 400 slots' '141 blocks each'; do
               grep -q "$want" poc.txt || {
                 echo "POC output missing '$want'"; cat poc.txt; exit 1;
               }

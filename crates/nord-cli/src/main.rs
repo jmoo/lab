@@ -56,6 +56,32 @@ enum DeviceAction {
         #[arg(long)]
         json: bool,
     },
+
+    /// Read a program off the instrument into a .ne5p file. Read-only.
+    Read {
+        /// Slot as shown on the instrument, e.g. 7-4 for bank 7 slot 4.
+        #[arg(value_name = "BANK-SLOT")]
+        at: String,
+
+        /// Output file. Defaults to the slot's name.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Write a .ne5p into a slot, OVERWRITING it. Requires --yes.
+    Write {
+        /// The file to send.
+        file: PathBuf,
+
+        /// Destination slot, e.g. 7-4.
+        #[arg(value_name = "BANK-SLOT")]
+        at: String,
+
+        /// Confirm the overwrite. Without this the command stops after reporting
+        /// what currently occupies the slot.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -86,12 +112,22 @@ fn main() -> ExitCode {
         }
 
         Command::Device { action } => {
-            let DeviceAction::Status { replay, json } = action;
-            let source = match replay {
-                Some(path) => device::Source::Replay(path),
-                None => device::Source::Usb,
+            let result = match action {
+                DeviceAction::Status { replay, json } => {
+                    let source = match replay {
+                        Some(path) => device::Source::Replay(path),
+                        None => device::Source::Usb,
+                    };
+                    device::run(source, json)
+                }
+                DeviceAction::Read { at, out } => {
+                    device::parse_location(&at).and_then(|at| device::read(at, out))
+                }
+                DeviceAction::Write { file, at, yes } => {
+                    device::parse_location(&at).and_then(|at| device::write(file, at, yes))
+                }
             };
-            match device::run(source, json) {
+            match result {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("error: {e}");
