@@ -112,22 +112,33 @@ fn open_usb() -> Result<nord_usb::transport::UsbTransport, String> {
     nord_usb::transport::UsbTransport::open_first().map_err(|e| e.to_string())
 }
 
-/// Read one program off the instrument into a `.ne5p` file. Read-only.
-pub fn read(at: Location, out: Option<PathBuf>) -> Result<(), String> {
+/// Read one entity off the instrument. Read-only.
+///
+/// `class` selects the object type (4 programs, 5 set lists, …). `raw` writes the wire
+/// body verbatim instead of wrapping it in a CBIN header — essential for formats whose
+/// header layout is not yet known, where wrapping would fabricate a wrong file.
+pub fn read(at: Location, out: Option<PathBuf>, class: u32, raw: bool) -> Result<(), String> {
+    let class = ObjectClass::from_raw(class);
     let mut t = open_usb()?;
     let (info, file) = nord_usb::block_on(async {
-        let mut s = Session::open(&mut t, ObjectClass::Program).await?;
+        let mut s = Session::open(&mut t, class).await?;
         let info = usb_op::info(&mut s, at).await?;
-        let file = usb_op::read_program(&mut s, at).await?;
+        let file = if raw {
+            usb_op::read_body(&mut s, at).await?
+        } else {
+            usb_op::read_program(&mut s, at).await?
+        };
         s.commit().await?;
         Ok::<_, nord_usb::Error>((info, file))
     })
     .map_err(|e| e.to_string())?;
+    eprintln!("  class={:?} format={:?} body_len={}", class, info.format, info.body_len);
 
     let path = out.unwrap_or_else(|| {
         // Default to the slot name, which is what the corpus convention keys on.
-        let stem = if info.name.is_empty() { "program".into() } else { info.name.clone() };
-        PathBuf::from(format!("{stem}.ne5p"))
+        let stem = if info.name.is_empty() { "entity".into() } else { info.name.clone() };
+        let ext = if raw { "body".to_string() } else { info.format.clone() };
+        PathBuf::from(format!("{stem}.{ext}"))
     });
     std::fs::write(&path, &file).map_err(|e| format!("{}: {e}", path.display()))?;
     eprintln!("read {} ({} bytes) -> {}", info.name, file.len(), path.display());

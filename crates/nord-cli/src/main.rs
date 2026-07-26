@@ -66,6 +66,15 @@ enum DeviceAction {
         /// Output file. Defaults to the slot's name.
         #[arg(short, long)]
         out: Option<PathBuf>,
+
+        /// Object class: 4 programs (default), 5 set lists, 1 pianos, 3 samples.
+        #[arg(long, default_value_t = 4)]
+        class: u32,
+
+        /// Save the wire body verbatim instead of wrapping it in a CBIN header.
+        /// Use for formats whose header layout is not yet known.
+        #[arg(long)]
+        raw: bool,
     },
 
     /// Write a .ne5p into a slot, OVERWRITING it. Requires --yes.
@@ -120,8 +129,8 @@ fn main() -> ExitCode {
                     };
                     device::run(source, json)
                 }
-                DeviceAction::Read { at, out } => {
-                    device::parse_location(&at).and_then(|at| device::read(at, out))
+                DeviceAction::Read { at, out, class, raw } => {
+                    device::parse_location(&at).and_then(|at| device::read(at, out, class, raw))
                 }
                 DeviceAction::Write { file, at, yes } => {
                     device::parse_location(&at).and_then(|at| device::write(file, at, yes))

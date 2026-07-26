@@ -107,6 +107,31 @@ pub async fn read_program<T: Transport, C>(
     Ok(file)
 }
 
+/// Read an entity's body off the instrument **without** wrapping it in a CBIN header.
+///
+/// For formats whose header layout is not yet known — notably CBIN **type-0**, the
+/// legacy no-CRC variant — wrapping would fabricate a header rather than reproduce one.
+/// This returns exactly the bytes the device sent, which is the safe thing to archive.
+pub async fn read_body<T: Transport, C>(
+    session: &mut Session<'_, T, C>,
+    at: Location,
+) -> Result<Vec<u8>> {
+    let meta = info(session, at).await?;
+    let mut args = Vec::new();
+    at.write_to(&mut args);
+    session.request(Service::Program, 10, cmd::BEGIN_READ, &args).await?;
+
+    let mut req = args.clone();
+    req.extend_from_slice(&0u32.to_be_bytes());
+    req.extend_from_slice(&meta.body_len.to_be_bytes());
+    let resp = session.request(Service::Program, 10, cmd::READ, &req).await?;
+    let p = resp.payload();
+    let body = p.get(16..).ok_or(Error::Truncated { got: p.len(), need: 17 })?.to_vec();
+
+    session.request(Service::Program, 10, cmd::END_TRANSFER, &args).await?;
+    Ok(body)
+}
+
 /// Write a `.ne5p` file into a slot, **overwriting whatever is there**.
 ///
 /// Requires a [`ReadWrite`] session, which callers must obtain deliberately.
