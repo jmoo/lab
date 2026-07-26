@@ -117,7 +117,7 @@ async fn transfer_out<T: Transport, C>(
 ) -> Result<(ProgramInfo, Vec<u8>)> {
     let meta = info(session, at).await?;
 
-    session.notify(&ui::label("Uploading...")).await?;
+    session.notify(&ui::label("Uploading...")?).await?;
 
     let mut args = Vec::new();
     at.write_to(&mut args);
@@ -130,7 +130,7 @@ async fn transfer_out<T: Transport, C>(
 
     // Payload is bank, slot, offset, length, then the body.
     let p = resp.payload();
-    let body = p.get(16..).ok_or(Error::Truncated { got: p.len(), need: 17 })?.to_vec();
+    let body = p.get(16..).ok_or(Error::Truncated { got: p.len(), need: 16 })?.to_vec();
     if body.len() != meta.body_len as usize {
         return Err(Error::Transport(format!(
             "device announced a {}-byte body but sent {}",
@@ -162,7 +162,7 @@ pub async fn write_program<T: Transport>(
 
     // The "Downloading..." label the instrument paints — NSM's backwards word for
     // host → keyboard. Fire-and-forget, exactly as on the wire.
-    session.notify(&ui::label("Downloading...")).await?;
+    session.notify(&ui::label("Downloading...")?).await?;
 
     let mut begin = Vec::new();
     at.write_to(&mut begin);
@@ -243,7 +243,7 @@ pub async fn delete<T: Transport>(
     session: &mut Session<'_, T, ReadWrite>,
     at: Location,
 ) -> Result<()> {
-    session.notify(&ui::label("Deleting...")).await?;
+    session.notify(&ui::label("Deleting...")?).await?;
     let mut args = Vec::new();
     at.write_to(&mut args);
     session.request(Service::Program, 10, cmd::DELETE, &args).await?;

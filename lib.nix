@@ -19,7 +19,13 @@ let
     readFile
     tail
     ;
-  inherit (final) mkOption mkOptionDefault types;
+  inherit (final)
+    concatStringsSep
+    mkOption
+    mkOptionDefault
+    optionals
+    types
+    ;
 in
 {
   lab = {
@@ -109,8 +115,19 @@ in
     # via `cargo -p`. Installs that crate's binaries; for a lib crate it just runs
     # its tests. `version` comes from the workspace's `[workspace.package]` (member
     # crates set `version.workspace = true`, which isn't a string).
+    # Test-only Cargo features are declared by the crate itself, under
+    # `[package.metadata.nix] testFeatures = [ … ]`, so adding a crate still needs no
+    # wiring here. This matters more than it looks: `nord-usb`'s golden replay tests are
+    # `#![cfg(feature = "replay")]` and `replay` is not a default feature, so without
+    # this the packaged build compiles them out and reports a green check having run
+    # none of them.
     mkRustCrate =
-      pkgs: workspace: name:
+      pkgs: workspace: member: name:
+      let
+        testFeatures =
+          (fromTOML (readFile (workspace + "/${member}/Cargo.toml"))).package.metadata.nix.testFeatures
+            or [ ];
+      in
       pkgs.rustPlatform.buildRustPackage {
         cargoBuildFlags = [
           "-p"
@@ -120,6 +137,10 @@ in
         cargoTestFlags = [
           "-p"
           name
+        ]
+        ++ optionals (testFeatures != [ ]) [
+          "--features"
+          (concatStringsSep "," testFeatures)
         ];
         pname = name;
         src = workspace;
@@ -144,7 +165,7 @@ in
           in
           {
             inherit name;
-            value = final.lab.mkRustCrate pkgs workspace name;
+            value = final.lab.mkRustCrate pkgs workspace member name;
           }
         ) members
       );

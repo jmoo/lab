@@ -125,6 +125,10 @@ impl<T: Transport, C> Session<'_, T, C> {
     /// The UI progress strings ([`ui::label`], [`ui::percent`]) are sent this way: the
     /// device never acknowledges them, so routing them through [`Self::request`] would
     /// block forever on a response that never comes.
+    ///
+    /// Like [`Self::request`] this does not test `closed`, and does not need to:
+    /// [`Self::commit`] and [`Self::abort`] both consume `self`, so a closed session
+    /// cannot be reached again. The flag exists only for the `Drop` assertion.
     pub(crate) async fn notify(&mut self, msg: &Message) -> Result<()> {
         let transport = self
             .transport

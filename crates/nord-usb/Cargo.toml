@@ -8,6 +8,13 @@ version.workspace = true
 [lib]
 name = "nord_usb"
 
+# Features the Nix build must enable when running tests. The golden replay tests in
+# `tests/ops.rs` and `tests/status.rs` are `#![cfg(feature = "replay")]`, and `replay`
+# is deliberately not a default feature — without this they compile to nothing and the
+# build reports a pass having verified none of the wire encoding.
+[package.metadata.nix]
+testFeatures = ["replay"]
+
 [features]
 default = ["nusb"]
 # Desktop backend: macOS (IOKit), Linux (usbfs), Windows (WinUSB). Pure Rust, so

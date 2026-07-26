@@ -211,6 +211,20 @@ fn peek(t: &mut nord_usb::transport::UsbTransport, class: ObjectClass, at: Locat
     .map_err(|e| e.to_string())
 }
 
+/// Describe what currently occupies a *destination* slot, for the pre-flight line.
+///
+/// `move` and `duplicate` overwrite their destination, so naming only the source hides
+/// the thing actually at risk. Unlike [`peek`] this never fails: an empty destination is
+/// the normal case and makes `INFO` error, and refusing to move into a free slot because
+/// it is free would be absurd. A real transport fault surfaces on the operation itself a
+/// moment later.
+fn peek_dest(t: &mut nord_usb::transport::UsbTransport, class: ObjectClass, at: Location) -> String {
+    match peek(t, class, at) {
+        Ok(name) => format!("OVERWRITING {name:?}"),
+        Err(_) => "destination reads as empty".into(),
+    }
+}
+
 /// Refuse a destructive op unless `--yes` was given, after describing what it touches.
 fn require_yes(confirmed: bool) -> Result<(), String> {
     if confirmed {
@@ -225,7 +239,8 @@ pub fn move_object(from: Location, to: Location, class: u32, confirmed: bool) ->
     let class = ObjectClass::from_raw(class);
     let mut t = open_usb()?;
     let name = peek(&mut t, class, from)?;
-    eprintln!("moving {:?} from {} to {}", name, shown(from), shown(to));
+    let dest = peek_dest(&mut t, class, to);
+    eprintln!("moving {:?} from {} to {} — {}", name, shown(from), shown(to), dest);
     require_yes(confirmed)?;
     nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class).await?.allow_destructive_writes();
@@ -286,7 +301,8 @@ pub fn duplicate(from: Location, to: Location, class: u32, confirmed: bool) -> R
     let class = ObjectClass::from_raw(class);
     let mut t = open_usb()?;
     let name = peek(&mut t, class, from)?;
-    eprintln!("duplicating {:?} from {} to {}", name, shown(from), shown(to));
+    let dest = peek_dest(&mut t, class, to);
+    eprintln!("duplicating {:?} from {} to {} — {}", name, shown(from), shown(to), dest);
     require_yes(confirmed)?;
     nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class).await?.allow_destructive_writes();

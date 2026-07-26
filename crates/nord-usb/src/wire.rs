@@ -16,9 +16,14 @@
 //! Verified against **every** message in the specimen corpus: 4,589 messages,
 //! 100% CRC match and 100% length-field match.
 //!
-//! Requests carry an even `command`; the matching response is `command + 1` and
-//! inserts a `u32` status (0 = success) ahead of the echoed arguments. That inserted
-//! word is the reason responses run exactly 4 bytes longer than their requests.
+//! The response to a request is `command + 1` and inserts a `u32` status (0 = success)
+//! ahead of the echoed arguments. That inserted word is the reason responses run
+//! exactly 4 bytes longer than their requests.
+//!
+//! Requests are *usually* even, but that is a pattern and not a rule — [`cmd::SELECT`]
+//! is `0x2f`, an odd request whose response is `0x30`. **Direction is the only reliable
+//! discriminator**, which is why this module records it at decode time rather than
+//! deriving it (see [`Message::decode_response`]).
 
 use crate::error::{Error, Result};
 
@@ -61,8 +66,9 @@ impl Service {
 
 /// Command codes observed on [`Service::Program`] (subsystem 10).
 ///
-/// Requests are even and the response is always `+1`, so only the request code is
-/// named. Codes are what the device actually sent — not guesses.
+/// The response is always the request `+1`, so only the request code is named. Codes are
+/// what the device actually sent — not guesses. Most requests happen to be even;
+/// [`SELECT`] is the counter-example, so do not treat parity as meaning anything.
 pub mod cmd {
     /// Open the transaction (the `O22 I26` that starts every operation).
     pub const SESSION_OPEN: u32 = 0x04;
@@ -118,6 +124,7 @@ pub mod cmd {
 /// hand transcription and was wrong — every example on the wire is well-formed.)
 pub mod ui {
     use super::{Message, Service};
+    use crate::error::{Error, Result};
 
     /// Subsystem paired with [`Service::Ui`].
     pub const SUBSYSTEM: u32 = 1;
@@ -130,19 +137,39 @@ pub mod ui {
     /// A progress percentage, 0..=100.
     pub const PERCENT: u32 = 0x07;
 
+    /// The longest label the one-byte length field can describe.
+    pub const MAX_LABEL_LEN: usize = u8::MAX as usize;
+
     /// A progress label. Layout is six zero bytes, a one-byte length, then unpadded
     /// ASCII — read straight off the wire and byte-for-byte reproducible.
-    pub fn label(text: &str) -> Message {
+    ///
+    /// Fails for a label longer than [`MAX_LABEL_LEN`] **bytes** rather than truncating
+    /// the length into a `u8`: a 256-byte label would silently encode a length of `0`
+    /// and put a malformed frame on the wire. Malformed progress frames are exactly
+    /// what sent this crate down a wrong path once already, so they are refused rather
+    /// than emitted. Note the bound is on UTF-8 bytes, not characters.
+    pub fn label(text: &str) -> Result<Message> {
+        if text.len() > MAX_LABEL_LEN {
+            return Err(Error::InvalidArgument(format!(
+                "progress label is {} bytes; the length field holds at most {MAX_LABEL_LEN}",
+                text.len(),
+            )));
+        }
         let mut args = vec![0u8; 6];
         args.push(text.len() as u8);
         args.extend_from_slice(text.as_bytes());
-        Message::new(Service::Ui, SUBSYSTEM, LABEL, args)
+        Ok(Message::new(Service::Ui, SUBSYSTEM, LABEL, args))
     }
 
     /// A progress percentage. Layout is a constant `u16` 1 then the value as a `u16`.
+    ///
+    /// Clamped to 100. Unlike [`label`] an out-of-range value cannot produce a
+    /// malformed frame — every `u16` encodes fine — so this is a cosmetic nonsense
+    /// value on the instrument's display, not a protocol error, and clamping beats
+    /// making every call site handle a `Result`.
     pub fn percent(pct: u16) -> Message {
         let mut args = 1u16.to_be_bytes().to_vec();
-        args.extend_from_slice(&pct.to_be_bytes());
+        args.extend_from_slice(&pct.min(100).to_be_bytes());
         Message::new(Service::Ui, SUBSYSTEM, PERCENT, args)
     }
 }
@@ -228,6 +255,17 @@ impl Dependency {
     /// `[u8 flag][u32 reserved][u32 class][u32 id][u32 name_len][name][u32 has_location][u32 bank][u32 slot]`
     /// with no alignment padding, so an entry is `29 + name_len` bytes.
     pub fn decode_all(msg: &Message) -> Result<Vec<Self>> {
+        // [`Message::payload`] strips the leading status word only when the message is
+        // marked as a response. Decoding a DEPENDENCIES reply with `Message::decode`
+        // instead of `decode_response` would leave that word in place and shift every
+        // offset below by four — the same silent four-byte misalignment that inferring
+        // direction from command parity used to cause. Refuse rather than misparse.
+        if !msg.is_response() {
+            return Err(Error::InvalidArgument(
+                "dependency list must be decoded from a response (use Message::decode_response)"
+                    .into(),
+            ));
+        }
         let p = msg.payload();
         if p.len() < 12 {
             return Err(Error::Truncated { got: p.len(), need: 12 });
@@ -626,13 +664,40 @@ mod tests {
     #[test]
     fn ui_label_and_percent_match_the_wire() {
         assert_eq!(
-            super::ui::label("Deleting...").encode(),
+            super::ui::label("Deleting...").unwrap().encode(),
             hex("000000240000000600000001000000060000000000000b44656c6574696e672e2e2e7394"),
         );
         assert_eq!(
             super::ui::percent(100).encode(),
             hex("0000001600000006000000010000000700010064927b"),
         );
+    }
+
+    /// A label too long for the one-byte length field is refused, not truncated. The
+    /// failure it prevents is silent: `256 as u8` is 0, so the frame would claim an
+    /// empty string and carry 256 bytes of payload.
+    #[test]
+    fn over_long_labels_are_refused_not_truncated() {
+        assert!(super::ui::label(&"x".repeat(super::ui::MAX_LABEL_LEN)).is_ok());
+        assert!(super::ui::label(&"x".repeat(super::ui::MAX_LABEL_LEN + 1)).is_err());
+    }
+
+    /// Percent clamps rather than erroring — no `u16` can produce a malformed frame.
+    #[test]
+    fn percent_clamps_to_100() {
+        assert_eq!(super::ui::percent(101).encode(), super::ui::percent(100).encode());
+        assert_eq!(super::ui::percent(u16::MAX).encode(), super::ui::percent(100).encode());
+    }
+
+    /// Decoding a dependency list from a *request*-decoded message would shift every
+    /// offset by the four-byte status word. That must be an error, not a misparse.
+    #[test]
+    fn dependencies_require_a_response() {
+        let raw = hex(
+            "000000820000000c0000000a0000002900000000000000060000000200000002000000000000000001d303b5f20000001a526f79616c204772616e64203344205961533620584c20352e3400000000ffffffffffffffff010000000000000003f2f5cadc0000000c6166726963615f73706c697400000000ffffffffffffffffc791",
+        );
+        assert!(Dependency::decode_all(&Message::decode(&raw).unwrap()).is_err());
+        assert!(Dependency::decode_all(&Message::decode_response(&raw).unwrap()).is_ok());
     }
 
     /// Decode the dependency list a real duplicate read back: a piano and a sample,
