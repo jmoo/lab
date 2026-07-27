@@ -668,11 +668,18 @@ pub(crate) fn print_summary(entity: &Entity) {
                             let b = o.b3_bass_drawbars();
                             format!("{}{}.......", b[0], b[1])
                         } else if model == OrganModel::Farfisa {
-                            // Farfisa's drawbars are on/off tabs, not positions.
-                            o.farfisa_tabs(preset)
+                            // Farfisa's drawbars are on/off tabs on the panel, but the
+                            // file still stores nine positions and the low bits of each
+                            // vary independently of the on/off threshold. Show both, or
+                            // the display silently discards them.
+                            let tabs: String = o
+                                .farfisa_tabs(preset)
                                 .iter()
                                 .map(|on| if *on { '|' } else { '.' })
-                                .collect()
+                                .collect();
+                            let pos: String =
+                                o.drawbars(model, preset).iter().map(u8::to_string).collect();
+                            format!("{tabs} ({pos})")
                         } else {
                             o.drawbars(model, preset).iter().map(u8::to_string).collect()
                         };
