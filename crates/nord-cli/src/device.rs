@@ -100,6 +100,38 @@ fn print_json(report: &[Status]) {
     println!("]");
 }
 
+/// Combine an operation's result with its session close, keeping the operation's error
+/// when both fail — a close failing is usually a *consequence* of the op failing, and
+/// the original error is the informative one.
+///
+/// **Always call the close.** An abandoned session leaves the instrument mid-transaction,
+/// and a read that has already sent its `"Uploading..."` progress label leaves that label
+/// on the display with **no way out but a power cycle** — the closing exchanges are what
+/// clear it. Reading an empty slot hit exactly this: `INFO` returns status `0x1`, the
+/// `?` skipped the commit, and the instrument was stranded.
+fn finish<T>(
+    result: Result<T, nord_usb::Error>,
+    closed: Result<(), nord_usb::Error>,
+) -> Result<T, nord_usb::Error> {
+    match result {
+        Ok(v) => closed.map(|()| v),
+        Err(e) => Err(e),
+    }
+}
+
+/// Turn the device's bare status code into something actionable.
+///
+/// Status `0x1` from a slot-addressed read means the slot is empty — measured across
+/// five different vacant slots, while every occupied one answers normally.
+fn explain(e: nord_usb::Error, at: Location) -> String {
+    match e {
+        nord_usb::Error::DeviceStatus(1) => {
+            format!("{} is empty", shown(at))
+        }
+        other => other.to_string(),
+    }
+}
+
 /// Parse a slot the way the instrument displays it: `8:14` is bank 8, slot 14.
 ///
 /// `:` is the canonical separator — it is what the Electro 5's own display and Nord
@@ -132,14 +164,18 @@ pub fn read(at: Location, out: Option<PathBuf>, class: u32, raw: bool) -> Result
     let mut t = open_usb()?;
     let (info, file) = nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class).await?;
-        let info = usb_op::info(&mut s, at).await?;
-        let file = if raw {
-            usb_op::read_body(&mut s, at).await?
-        } else {
-            usb_op::read_program(&mut s, at).await?
-        };
-        s.commit().await?;
-        Ok::<_, nord_usb::Error>((info, file))
+        let r = async {
+            let info = usb_op::info(&mut s, at).await?;
+            let file = if raw {
+                usb_op::read_body(&mut s, at).await?
+            } else {
+                usb_op::read_program(&mut s, at).await?
+            };
+            Ok::<_, nord_usb::Error>((info, file))
+        }
+        .await;
+        let closed = s.commit().await;
+        finish(r, closed)
     })
     .map_err(|e| e.to_string())?;
     eprintln!("  class={:?} format={:?} body_len={}", class, info.format, info.body_len);
@@ -167,9 +203,9 @@ pub fn write(path: PathBuf, at: Location, confirmed: bool) -> Result<(), String>
     // first costs one round trip and turns a silent overwrite into an informed one.
     let existing = nord_usb::block_on(async {
         let mut s = Session::open(&mut t, ObjectClass::Program).await?;
-        let info = usb_op::info(&mut s, at).await?;
-        s.commit().await?;
-        Ok::<_, nord_usb::Error>(info)
+        let r = usb_op::info(&mut s, at).await;
+        let closed = s.commit().await;
+        finish(r, closed)
     })
     .map_err(|e| e.to_string())?;
 
@@ -213,9 +249,9 @@ fn shown(at: Location) -> String {
 fn peek(t: &mut nord_usb::transport::UsbTransport, class: ObjectClass, at: Location) -> Result<String, String> {
     nord_usb::block_on(async {
         let mut s = Session::open(t, class).await?;
-        let info = usb_op::info(&mut s, at).await?;
-        s.commit().await?;
-        Ok::<_, nord_usb::Error>(info.name)
+        let r = usb_op::info(&mut s, at).await;
+        let closed = s.commit().await;
+        finish(r, closed).map(|info| info.name)
     })
     .map_err(|e| e.to_string())
 }
@@ -345,9 +381,9 @@ pub fn deps(at: Location, class: u32) -> Result<(), String> {
     let mut t = open_usb()?;
     let deps = nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class).await?;
-        let deps = usb_op::dependencies(&mut s, at).await?;
-        s.commit().await?;
-        Ok::<_, nord_usb::Error>(deps)
+        let r = usb_op::dependencies(&mut s, at).await;
+        let closed = s.commit().await;
+        finish(r, closed)
     })
     .map_err(|e| e.to_string())?;
 
@@ -375,11 +411,11 @@ pub fn info(at: Location, class: u32) -> Result<(), String> {
     let mut t = open_usb()?;
     let info = nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class).await?;
-        let info = usb_op::info(&mut s, at).await?;
-        s.commit().await?;
-        Ok::<_, nord_usb::Error>(info)
+        let r = usb_op::info(&mut s, at).await;
+        let closed = s.commit().await;
+        finish(r, closed)
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| explain(e, at))?;
 
     println!("  location:  {}", shown(info.location));
     println!("  name:      {:?}", info.name);
@@ -404,12 +440,16 @@ pub fn program_get(at: Location, out: Option<PathBuf>) -> Result<(), String> {
     let mut t = open_usb()?;
     let (info, file) = nord_usb::block_on(async {
         let mut s = Session::open(&mut t, ObjectClass::Program).await?;
-        let info = usb_op::info(&mut s, at).await?;
-        let file = usb_op::read_program(&mut s, at).await?;
-        s.commit().await?;
-        Ok::<_, nord_usb::Error>((info, file))
+        let r = async {
+            let info = usb_op::info(&mut s, at).await?;
+            let file = usb_op::read_program(&mut s, at).await?;
+            Ok::<_, nord_usb::Error>((info, file))
+        }
+        .await;
+        let closed = s.commit().await;
+        finish(r, closed)
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| explain(e, at))?;
 
     if let Some(path) = out {
         std::fs::write(&path, &file).map_err(|e| format!("{}: {e}", path.display()))?;

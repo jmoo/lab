@@ -441,6 +441,16 @@ const FX2_TYPES: [&str; 6] = ["phaser 1", "phaser 2", "flanger", "chorus 1", "ch
 const FX3_TYPES: [&str; 6] = ["none", "small", "jc", "twin", "rotary", "comp"];
 const FX5_TYPES: [&str; 5] = ["room", "stage soft", "stage", "hall soft", "hall"];
 
+/// Render a stored `0..127` value as the `0..10` the panel shows.
+///
+/// Confirmed linear against hardware: reverb wet reads `43` in the file and the panel
+/// shows 3.4, and `43 / 127 * 10 = 3.39`. Only used for the fields the corpus README
+/// documents as `0..10` — fx2's rate is in Hz and delay tempo runs backwards in
+/// milliseconds, so those stay raw rather than being given false units.
+fn knob(v: u8) -> String {
+    format!("{} ({:.1})", v, f32::from(v) / 127.0 * 10.0)
+}
+
 fn fx_type(table: &[&str], v: u8) -> String {
     table.get(v as usize).map_or_else(|| format!("unknown ({v})"), |s| (*s).to_string())
 }
@@ -536,12 +546,12 @@ pub(crate) fn print_summary(entity: &Entity) {
             // so rescaling here would invent precision the file does not carry.
             let fx = p.fx_panel();
             let extra = p.extra();
-            println!("  fx:        values as stored, 0-127");
+            println!("  fx:        stored value, with the panel's 0-10 reading where it applies");
             match routed(fx.fx1) {
                 Some(part) => println!(
                     "    fx1   {part:<5}  {:<9}  rate {}  control {}",
                     fx_type(&FX1_TYPES, fx.fx1_type),
-                    fx.fx1_rate,
+                    knob(fx.fx1_rate),
                     yn(extra.fx1_control),
                 ),
                 None => println!("    fx1   off"),
@@ -559,7 +569,7 @@ pub(crate) fn print_summary(entity: &Entity) {
                 Some(part) => println!(
                     "    fx3   {part:<5}  {:<9}  compression {}",
                     fx_type(&FX3_TYPES, fx.fx3_type),
-                    fx.fx3_compression,
+                    knob(fx.fx3_compression),
                 ),
                 None => println!("    fx3   off"),
             }
@@ -568,7 +578,7 @@ pub(crate) fn print_summary(entity: &Entity) {
                     "    delay {part:<5}  feedback {}  tempo {}  wet {}  ping-pong {}",
                     fx.fx4_feedback,
                     fx.fx4_tempo,
-                    fx.fx4_moisture,
+                    knob(fx.fx4_moisture),
                     yn(fx.fx4_ping_pong),
                 ),
                 None => println!("    delay off"),
@@ -582,7 +592,7 @@ pub(crate) fn print_summary(entity: &Entity) {
                 println!(
                     "    reverb {:<9}  wet {}",
                     fx_type(&FX5_TYPES, fx.fx5_type),
-                    fx.fx5_moisture,
+                    knob(fx.fx5_moisture),
                 );
             } else {
                 println!("    reverb off");
