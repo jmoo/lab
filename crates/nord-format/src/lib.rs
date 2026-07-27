@@ -126,18 +126,49 @@ pub fn to_bytes(entity: &mut Entity) -> Result<Vec<u8>, Error> {
     use std::io::Cursor;
 
     let mut out = Cursor::new(Vec::new());
-    match entity {
-        Entity::Program(Program::Electro5(p)) => p.write_to(&mut out)?,
-        Entity::Song(Song::Electro5(s)) => s.write_to(&mut out)?,
-        Entity::Settings(Settings::Electro5(s)) => s.write_to(&mut out)?,
-        Entity::Piano(p) => p.write_to(&mut out)?,
-        Entity::Sample(s) => s.write_to(&mut out)?,
+
+    // Fixed-size formats declare their file length, so a writer that emits the wrong
+    // number of bytes can be caught here rather than producing a file that looks
+    // plausible until something tries to load it. Pianos and samples are content of
+    // arbitrary size and have no such length.
+    let expected = match entity {
+        Entity::Program(Program::Electro5(p)) => {
+            p.write_to(&mut out)?;
+            Some((electro5::program::FORMAT, electro5::program::FILE_LEN))
+        }
+        Entity::Song(Song::Electro5(s)) => {
+            s.write_to(&mut out)?;
+            Some((electro5::song::FORMAT, electro5::song::FILE_LEN))
+        }
+        Entity::Settings(Settings::Electro5(s)) => {
+            s.write_to(&mut out)?;
+            Some((electro5::settings::FORMAT, electro5::settings::FILE_LEN))
+        }
+        Entity::Piano(p) => {
+            p.write_to(&mut out)?;
+            None
+        }
+        Entity::Sample(s) => {
+            s.write_to(&mut out)?;
+            None
+        }
         #[cfg(feature = "bundle")]
         Entity::Bundle(_) => {
             return Err(Error::ParseError(ParseError::UnknownFormat(
                 "bundle (an archive, not a re-emittable entity)".to_string(),
             )))
         }
+    };
+
+    let bytes = out.into_inner();
+    if let Some((format, expected)) = expected {
+        if bytes.len() != expected {
+            return Err(Error::ParseError(ParseError::BadEncodedLength {
+                format,
+                got: bytes.len(),
+                expected,
+            }));
+        }
     }
-    Ok(out.into_inner())
+    Ok(bytes)
 }

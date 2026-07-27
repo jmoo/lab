@@ -9,6 +9,11 @@ use std::fmt::Debug;
 use std::io;
 
 pub const FORMAT: &str = "ne5p";
+/// Schema versions this build's field offsets have been validated against. Every one of
+/// the 624 corpus programs reports 4. See [`crate::error::ParseError::UnsupportedVersion`].
+pub const KNOWN_VERSIONS: &[u32] = &[4];
+/// Total file length: 44-byte CBIN header + 121-byte body.
+pub const FILE_LEN: usize = 165;
 pub const BANK_COUNT: u16 = 8;
 pub const SLOT_COUNT: u16 = 50;
 
@@ -743,6 +748,16 @@ impl Program {
             Ok(schema) => schema,
             Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
         };
+        if !KNOWN_VERSIONS.contains(&schema.version) {
+            return Err(io::Error::other(
+                crate::error::ParseError::UnsupportedVersion {
+                    format: FORMAT,
+                    version: schema.version,
+                    supported: KNOWN_VERSIONS,
+                }
+                .to_string(),
+            ));
+        }
 
         Ok(Program {
             location: schema.header.location,
@@ -867,6 +882,36 @@ impl common::program::Program for Program {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An unknown schema version is refused at read, not decoded on a guess.
+    ///
+    /// Field offsets are only validated for the versions in the corpus. A future
+    /// firmware bumping `ne5p` to 5 could move fields; decoding it with version-4
+    /// offsets would yield plausible but wrong values, and writing it back would then
+    /// persist them. Refusing is the only safe default.
+    #[test]
+    fn an_unknown_schema_version_is_refused() {
+        use std::io::Cursor;
+
+        let mut program = Program::new((0, 0).try_into().unwrap());
+        let mut bytes = Vec::new();
+        program.write_to(&mut Cursor::new(&mut bytes)).unwrap();
+        assert_eq!(bytes.len(), FILE_LEN);
+
+        // Sanity: as written, it reads back.
+        assert!(Program::read_from(&mut Cursor::new(&mut bytes.clone())).is_ok());
+
+        // The schema version lives at 0x14, little-endian.
+        assert_eq!(u32::from_le_bytes(bytes[0x14..0x18].try_into().unwrap()), 4);
+        bytes[0x14..0x18].copy_from_slice(&5u32.to_le_bytes());
+
+        let err = Program::read_from(&mut Cursor::new(&mut bytes))
+            .expect_err("version 5 must not decode");
+        assert!(
+            err.to_string().contains("not supported"),
+            "unhelpful error: {err}",
+        );
+    }
 
     /// Build an organ panel from `(absolute offset, byte)` pairs; everything else 0.
     fn panel(bytes: &[(usize, u8)]) -> OrganPanel {

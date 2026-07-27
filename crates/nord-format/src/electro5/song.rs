@@ -12,6 +12,11 @@ use crate::electro5::program;
 use crate::types::RangedU16Pair;
 
 pub const FORMAT: &str = "ne5t";
+/// Schema versions this build's field offsets have been validated against: 0 is the
+/// eight factory demo songs, 1 is everything user-written.
+pub const KNOWN_VERSIONS: &[u32] = &[0, 1];
+/// Total file length: 44-byte CBIN header + 18-byte body.
+pub const FILE_LEN: usize = 62;
 pub const PROGRAM_COUNT: usize = 4;
 pub const BANK_COUNT: u16 = 4;
 pub const SLOT_COUNT: u16 = 50;
@@ -93,6 +98,17 @@ impl Song {
             Ok(schema) => schema,
             Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
         };
+
+        if !KNOWN_VERSIONS.contains(&schema.version) {
+            return Err(io::Error::other(
+                crate::error::ParseError::UnsupportedVersion {
+                    format: FORMAT,
+                    version: schema.version,
+                    supported: KNOWN_VERSIONS,
+                }
+                .to_string(),
+            ));
+        }
 
         let mut song = Song::new(
             schema.header.location,
