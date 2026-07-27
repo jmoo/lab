@@ -1,4 +1,8 @@
-//! `nord device` — talk to an attached instrument over USB.
+//! `nord device` and `nord program` — talk to an attached instrument over USB.
+//!
+//! `nord program` is a program-scoped facade over the same operations: no `--class`,
+//! `BANK:SLOT` slots, and `get` defaults to a readable summary instead of a file. The
+//! generic `nord device` forms remain for the other object classes.
 //!
 //! Read-only queries (`status`, `read`, `deps`) and the non-destructive `select` need
 //! no confirmation; the mutating actions (`write`, `move`, `delete`, `rename`,
@@ -96,11 +100,16 @@ fn print_json(report: &[Status]) {
     println!("]");
 }
 
-/// Parse a slot as the instrument displays it: `8-14` is bank 8, slot 14.
+/// Parse a slot the way the instrument displays it: `8:14` is bank 8, slot 14.
+///
+/// `:` is the canonical separator — it is what the Electro 5's own display and Nord
+/// Sound Manager use. `-` is also accepted because the older `nord device` subcommands
+/// documented it, and silently rejecting a form this CLI itself once told people to use
+/// would be gratuitous.
 pub fn parse_location(s: &str) -> Result<Location, String> {
     let (b, l) = s
-        .split_once('-')
-        .ok_or_else(|| format!("expected BANK-SLOT (e.g. 7-4), got {s:?}"))?;
+        .split_once([':', '-'])
+        .ok_or_else(|| format!("expected BANK:SLOT (e.g. 7:4), got {s:?}"))?;
     let bank: u32 = b.trim().parse().map_err(|_| format!("bad bank {b:?}"))?;
     let slot: u32 = l.trim().parse().map_err(|_| format!("bad slot {l:?}"))?;
     if bank == 0 || slot == 0 {
@@ -384,4 +393,74 @@ pub fn info(at: Location, class: u32) -> Result<(), String> {
         None => println!("  crc32:     none (not checksummed for this class)"),
     }
     Ok(())
+}
+
+/// Read a program and either print a readable summary or save the `.ne5p`. Read-only.
+///
+/// Summary is the default because that is what you usually want when poking at an
+/// instrument: `nord program get 7:4` should tell you what is in 7:4, not leave a file
+/// in the working directory. `--out` is the deliberate act.
+pub fn program_get(at: Location, out: Option<PathBuf>) -> Result<(), String> {
+    let mut t = open_usb()?;
+    let (info, file) = nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, ObjectClass::Program).await?;
+        let info = usb_op::info(&mut s, at).await?;
+        let file = usb_op::read_program(&mut s, at).await?;
+        s.commit().await?;
+        Ok::<_, nord_usb::Error>((info, file))
+    })
+    .map_err(|e| e.to_string())?;
+
+    if let Some(path) = out {
+        std::fs::write(&path, &file).map_err(|e| format!("{}: {e}", path.display()))?;
+        eprintln!("read {:?} from {} -> {}", info.name, shown(at), path.display());
+        return Ok(());
+    }
+
+    // Parse the bytes we just built rather than reporting the wire fields directly:
+    // that exercises the same path `nord inspect` uses, so a decode regression shows up
+    // here too instead of only in file-land.
+    let entity = nord_format::from_stream(&mut std::io::Cursor::new(&file))
+        .map_err(|e| format!("{} decoded off the device but did not parse: {e}", shown(at)))?;
+
+    println!("{} — {:?}  ({}, version {})", shown(at), info.name, info.format, info.version);
+    crate::print_summary(&entity);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_location;
+
+    /// `:` is the canonical separator; `-` stays accepted for the older `nord device`
+    /// spellings. Both must land on the same zero-indexed wire location.
+    #[test]
+    fn both_slot_separators_parse_to_the_same_place() {
+        let colon = parse_location("7:4").unwrap();
+        let dash = parse_location("7-4").unwrap();
+        assert_eq!(colon, dash);
+        // The UI is one-indexed, the wire is zero-indexed.
+        assert_eq!((colon.bank, colon.slot), (6, 3));
+    }
+
+    #[test]
+    fn whitespace_around_the_numbers_is_tolerated() {
+        assert_eq!(parse_location(" 8 : 14 ").unwrap(), parse_location("8:14").unwrap());
+    }
+
+    /// Zero is the giveaway that someone passed a wire index instead of a panel label.
+    #[test]
+    fn zero_is_rejected_because_the_panel_counts_from_one() {
+        for bad in ["0:1", "1:0", "0:0"] {
+            let err = parse_location(bad).unwrap_err();
+            assert!(err.contains("numbered from 1"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn malformed_slots_say_what_was_expected() {
+        assert!(parse_location("74").unwrap_err().contains("BANK:SLOT"));
+        assert!(parse_location("7:x").unwrap_err().contains("bad slot"));
+        assert!(parse_location("x:4").unwrap_err().contains("bad bank"));
+    }
 }

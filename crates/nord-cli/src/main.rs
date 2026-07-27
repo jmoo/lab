@@ -12,6 +12,10 @@ use nord_format::{Entity, Program, Settings, Song};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+/// Object class for programs. `nord program` fixes it so the subcommands need no
+/// `--class`; `nord device` keeps the flag for the other classes.
+const PROGRAM_CLASS: u32 = 4;
+
 #[derive(Parser)]
 #[command(name = "nord", about = "Inspect Clavia / Nord keyboard files", version)]
 struct Cli {
@@ -45,11 +49,76 @@ enum Command {
         files: Vec<PathBuf>,
     },
 
+    /// Work with programs on an attached instrument. Slots are `BANK:SLOT`, as the
+    /// instrument displays them.
+    ///
+    /// The same operations `nord device` offers, scoped to programs so no `--class` is
+    /// needed, and with `get` defaulting to a readable summary rather than a file.
+    Program {
+        #[command(subcommand)]
+        action: ProgramAction,
+    },
+
     /// Talk to an attached instrument over USB: inventory, read, write, and organise
     /// slots. Mutating actions require --yes.
     Device {
         #[command(subcommand)]
         action: DeviceAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProgramAction {
+    /// Read a program off the instrument. Read-only.
+    ///
+    /// Prints a summary by default; with `--out` writes the `.ne5p` file instead.
+    Get {
+        /// Slot to read, e.g. 7:4.
+        #[arg(value_name = "BANK:SLOT")]
+        at: String,
+
+        /// Write the program to this file instead of printing a summary.
+        #[arg(short, long, value_name = "FILE")]
+        out: Option<PathBuf>,
+    },
+
+    /// Write a .ne5p into a slot, OVERWRITING it. Requires --yes.
+    Put {
+        /// The file to send.
+        file: PathBuf,
+
+        /// Destination slot, e.g. 7:4.
+        #[arg(value_name = "BANK:SLOT")]
+        at: String,
+
+        /// Confirm the overwrite. Without this the command stops after reporting what
+        /// currently occupies the slot.
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Move a program between slots. OVERWRITES the destination. Requires --yes.
+    Move {
+        /// Source slot, e.g. 8:13.
+        #[arg(value_name = "FROM")]
+        from: String,
+
+        /// Destination slot, e.g. 7:16.
+        #[arg(value_name = "TO")]
+        to: String,
+
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Delete one or more program slots. Requires --yes.
+    Delete {
+        /// Slots to delete, e.g. 7:50 (repeatable).
+        #[arg(value_name = "BANK:SLOT", required = true)]
+        slots: Vec<String>,
+
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -225,6 +294,32 @@ fn main() -> ExitCode {
             }
         },
 
+        Command::Program { action } => {
+            let result = match action {
+                ProgramAction::Get { at, out } => {
+                    device::parse_location(&at).and_then(|at| device::program_get(at, out))
+                }
+                ProgramAction::Put { file, at, yes } => {
+                    device::parse_location(&at).and_then(|at| device::write(file, at, yes))
+                }
+                ProgramAction::Move { from, to, yes } => device::parse_location(&from)
+                    .and_then(|from| Ok((from, device::parse_location(&to)?)))
+                    .and_then(|(from, to)| device::move_object(from, to, PROGRAM_CLASS, yes)),
+                ProgramAction::Delete { slots, yes } => slots
+                    .iter()
+                    .map(|s| device::parse_location(s))
+                    .collect::<Result<Vec<_>, _>>()
+                    .and_then(|locs| device::delete(&locs, PROGRAM_CLASS, yes)),
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+
         Command::Device { action } => {
             let result = match action {
                 DeviceAction::Status { replay, json } => {
@@ -345,7 +440,7 @@ fn dep_id(id: u32) -> String {
     }
 }
 
-fn print_summary(entity: &Entity) {
+pub(crate) fn print_summary(entity: &Entity) {
     match entity {
         Entity::Program(Program::Electro5(p)) => {
             let l = p.location();
