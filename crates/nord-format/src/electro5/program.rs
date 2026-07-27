@@ -580,9 +580,16 @@ pub struct EffectsPanel {
     #[bw(ignore)]
     pub fx4_ping_pong: bool,
 
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000110_00000000_00000000) >> ((8 * 2) + 1)) as u8)]
+    /// EQ engaged. **Which part it applies to is not in this word** — see
+    /// [`Extra::equalizer_part`].
+    ///
+    /// This was previously decoded as a two-bit `equalizer_part_select`, which could
+    /// only ever answer 0 or 2: diffing the four named `equalizer/{0,1,2,3}_…`
+    /// specimens shows they are byte-identical across `0x93..0x9a` apart from this
+    /// single bit, and the lower/upper/both choice lives at `0xa1`.
+    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000100_00000000_00000000) >> ((8 * 2) + 2)) != 0)]
     #[bw(ignore)]
-    pub equalizer_part_select: u8,
+    pub equalizer_on: bool,
 
     #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000001_11111100_00000000) >> ((8 * 1) + 2)) as u8)]
     #[bw(ignore)]
@@ -665,6 +672,16 @@ pub struct Extra {
     #[br(calc = ((settings & 0b00001000_00000000_00000000_00000000) >> ((8 * 3) + 3)) != 0)]
     #[bw(ignore)]
     pub fx2_deep: bool,
+
+    /// Which part the equalizer applies to: `0` lower, `1` upper, `2` lower+upper.
+    ///
+    /// Whether the EQ is engaged at all is a separate bit,
+    /// [`EffectsPanel::equalizer_on`] — so `0` here means *lower*, not *off*. Located
+    /// by diffing the `equalizer/{0,1,2,3}_…` specimens, which differ only at `0xa1`
+    /// (and in the enable bit and CRC).
+    #[br(calc = ((settings & 0b00000110_00000000_00000000_00000000) >> ((8 * 3) + 1)) as u8)]
+    #[bw(ignore)]
+    pub equalizer_part: u8,
 }
 
 #[binrw]
@@ -841,6 +858,19 @@ impl Program {
 
     pub fn organ(&self) -> &OrganPanel {
         &self.schema.organ_panel
+    }
+
+    /// Which organ the program has selected: `0` b3, `1` b3+bass, `2` pipe, `3` vox,
+    /// `4` farfisa. Ordering is from the named specimens in
+    /// `nord-corpus/ne5/programs/organ/` (the type-B convention).
+    ///
+    /// **b3+bass is a selection, not a fifth model.** It shares the B3's storage, but
+    /// its two presets are different instruments: preset 1 is the bass manual, where
+    /// only drawbars 1–2 do anything and they live outside the nine-nibble block (see
+    /// [`OrganPanel::b3_bass_drawbars`]); preset 2 is an ordinary B3. Reading preset 1's
+    /// nine nibbles in that mode shows stale values.
+    pub fn organ_type(&self) -> u8 {
+        self.schema.center_panel.organ_type
     }
 
     /// The piano panel, including [`PianoPanel::id`] — the program's **piano dependency

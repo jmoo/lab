@@ -597,55 +597,105 @@ pub(crate) fn print_summary(entity: &Entity) {
             } else {
                 println!("    reverb off");
             }
-            // ⚠️ `equalizer_part_select` is NOT rendered as a name. Its decode is a
-            // 2-bit window, but the four named specimens `{0,1,2,3}_...` collapse to
-            // stored {0, 2, 2, 2} — three distinct panel settings landing on one value,
-            // so the field is mis-decoded. nord-format's equalizer test binds it to
-            // `_part_select` and never asserts it, which is why it went unnoticed.
-            // Printing the raw value keeps this honest until the mask is fixed.
-            println!(
-                "    eq    part {} (raw, decode suspect)  bass {}  freq {}  gain {}  treble {}",
-                fx.equalizer_part_select,
-                fx.equalizer_bass,
-                fx.equalizer_freq,
-                fx.equalizer_freq_gain,
-                fx.equalizer_treble,
-            );
+            // The EQ enable and its routing live in different words: the enable is a
+            // bit at 0x98, the lower/upper/both choice is at 0xa1. `0` for the routing
+            // means *lower*, not off, so the enable has to be checked first.
+            if fx.equalizer_on {
+                // Every observed program uses 0, 1 or 2; name the raw value rather
+                // than guessing a label if the instrument ever produces another.
+                let part = match extra.equalizer_part {
+                    0 => "lower".to_string(),
+                    1 => "upper".to_string(),
+                    2 => "lower+upper".to_string(),
+                    n => format!("unknown ({n})"),
+                };
+                println!(
+                    "    eq    {part:<11}  bass {}  freq {}  gain {}  treble {}",
+                    fx.equalizer_bass,
+                    fx.equalizer_freq,
+                    fx.equalizer_freq_gain,
+                    fx.equalizer_treble,
+                );
+            } else {
+                println!("    eq    off");
+            }
             println!(
                 "    rotary speed {}  stop {}",
                 if fx.rotary_speed == 0 { "slow" } else { "fast" },
                 if fx.rotary_stop == 0 { "off" } else { "on" },
             );
 
-            // Organ state (selected preset per model), when the organ is in use.
+            // Organ. Both presets are shown for every model: the file keeps the full
+            // state of all four, and b3+bass cannot be checked at all without seeing
+            // preset 1 and preset 2 side by side.
             if p.lower_part() == Instrument::Organ || p.upper_part() == Instrument::Organ {
                 let o = p.organ();
-                println!("  organ:     drawbars / vibrato / percussion, selected preset per model");
+                let selected = p.organ_type();
+                let sel_name = match selected {
+                    0 => "b3",
+                    1 => "b3+bass",
+                    2 => "pipe",
+                    3 => "vox",
+                    4 => "farfisa",
+                    _ => "unknown",
+                };
+                // b3+bass shares the B3's storage, so it marks the B3 rows.
+                let sel_model = match selected {
+                    0 | 1 => Some(OrganModel::B3),
+                    2 => Some(OrganModel::Pipe),
+                    3 => Some(OrganModel::Vox),
+                    4 => Some(OrganModel::Farfisa),
+                    _ => None,
+                };
+                println!("  organ:     {sel_name} selected (*), drawbar positions 0-8");
                 for (model, label) in [
-                    (OrganModel::B3, "b3  "),
-                    (OrganModel::Vox, "vox "),
+                    (OrganModel::B3, "b3"),
+                    (OrganModel::Vox, "vox"),
                     (OrganModel::Farfisa, "farf"),
                     (OrganModel::Pipe, "pipe"),
                 ] {
-                    let preset = o.preset(model);
-                    let bars: String = o.drawbars(model, preset).iter().map(u8::to_string).collect();
-                    let vib = match o.vib_type(model) {
-                        Some(v) if o.vib_on(model, preset) => format!("  vib {v:?}"),
-                        Some(_) => "  vib off".to_string(),
-                        None => String::new(),
-                    };
-                    let perc = if matches!(model, OrganModel::B3) {
-                        if o.b3_perc_on(preset) {
-                            let third = if o.b3_perc_third() { " +3rd" } else { "" };
-                            format!("  perc {:?}{third}", o.b3_perc_speed())
+                    for preset in 1..=2u8 {
+                        let mark = if Some(model) == sel_model { "*" } else { " " };
+                        let live = if o.preset(model) == preset { "<" } else { " " };
+
+                        // In b3+bass, preset 1 is the bass manual: two drawbars, kept
+                        // outside the nine-nibble block. The nine nibbles are stale
+                        // there, so printing them would be actively misleading.
+                        let bars = if selected == 1 && model == OrganModel::B3 && preset == 1 {
+                            // Only two of the nine positions exist on the bass manual;
+                            // dots for the rest so it lines up with the other rows and
+                            // cannot be misread as a nine-drawbar registration.
+                            let b = o.b3_bass_drawbars();
+                            format!("{}{}.......", b[0], b[1])
+                        } else if model == OrganModel::Farfisa {
+                            // Farfisa's drawbars are on/off tabs, not positions.
+                            o.farfisa_tabs(preset)
+                                .iter()
+                                .map(|on| if *on { '|' } else { '.' })
+                                .collect()
                         } else {
-                            "  perc off".to_string()
-                        }
-                    } else {
-                        String::new()
-                    };
-                    println!("    {label} p{preset}  {bars}{vib}{perc}");
+                            o.drawbars(model, preset).iter().map(u8::to_string).collect()
+                        };
+
+                        let vib = match o.vib_type(model) {
+                            Some(v) if o.vib_on(model, preset) => format!("  vib {v:?}"),
+                            Some(_) => "  vib off".to_string(),
+                            None => String::new(),
+                        };
+                        let perc = if model == OrganModel::B3 {
+                            if o.b3_perc_on(preset) {
+                                let third = if o.b3_perc_third() { " +3rd" } else { "" };
+                                format!("  perc {:?}{third}", o.b3_perc_speed())
+                            } else {
+                                "  perc off".to_string()
+                            }
+                        } else {
+                            String::new()
+                        };
+                        println!("   {mark}{label:<5} p{preset}{live} {bars}{vib}{perc}");
+                    }
                 }
+                println!("   (* = selected model, < = its active preset)");
             }
         }
         Entity::Song(Song::Electro5(s)) => {
