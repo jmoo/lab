@@ -431,6 +431,39 @@ fn verify(files: &[PathBuf]) -> Result<(), String> {
     }
 }
 
+/// Effect type names indexed by the value **as stored**, which is rotated relative to
+/// the panel's own ordering (stored 0 is trem 1, not pan 1). The rotation is pinned by
+/// the named specimens in `nord-corpus/ne5/programs/fx/` and the mapping in
+/// nord-format's `tests/ne5.rs` — it is not inferred from the panel layout.
+const FX1_TYPES: [&str; 8] =
+    ["trem 1", "trem 2", "trem 1&2", "pan 1", "pan 2", "pan 1&2", "wah", "rm"];
+const FX2_TYPES: [&str; 6] = ["phaser 1", "phaser 2", "flanger", "chorus 1", "chorus 2", "vibe"];
+const FX3_TYPES: [&str; 6] = ["none", "small", "jc", "twin", "rotary", "comp"];
+const FX5_TYPES: [&str; 5] = ["room", "stage soft", "stage", "hall soft", "hall"];
+
+fn fx_type(table: &[&str], v: u8) -> String {
+    table.get(v as usize).map_or_else(|| format!("unknown ({v})"), |s| (*s).to_string())
+}
+
+/// Which part an effect is routed to.
+///
+/// The stored value is **one higher** than the panel position: the corpus specimens are
+/// named `fx1_1..` for lower and `fx1_2..` for upper, and nord-format's test asserts
+/// `fx1 == digit + 1`, so `1` is off, `2` lower, `3` upper. The comment in
+/// `program.rs` reads `0: off, 1: lower, 2: upper`, which describes the *panel*
+/// numbering rather than the byte — reading it as the stored value shifts every label
+/// by one and turns "upper" into "both".
+///
+/// `None` means not engaged; the settings are still in the file, they just do nothing.
+fn routed(sel: u8) -> Option<&'static str> {
+    match sel {
+        2 => Some("lower"),
+        3 => Some("upper"),
+        4 => Some("both"),
+        _ => None,
+    }
+}
+
 /// Format a library dependency id the way it is worth reading: hex, matching what
 /// `nord device deps` reports for the same program.
 fn dep_id(id: u32) -> String {
@@ -496,6 +529,82 @@ pub(crate) fn print_summary(entity: &Entity) {
                 "  depends:   piano {}  sample {}",
                 dep_id(piano.id),
                 dep_id(sample.id),
+            );
+
+            // Effects. Values are printed as stored (0..127); the panel shows most of
+            // them on a 0..10 scale, and the two do not map linearly for delay tempo,
+            // so rescaling here would invent precision the file does not carry.
+            let fx = p.fx_panel();
+            let extra = p.extra();
+            println!("  fx:        values as stored, 0-127");
+            match routed(fx.fx1) {
+                Some(part) => println!(
+                    "    fx1   {part:<5}  {:<9}  rate {}  control {}",
+                    fx_type(&FX1_TYPES, fx.fx1_type),
+                    fx.fx1_rate,
+                    yn(extra.fx1_control),
+                ),
+                None => println!("    fx1   off"),
+            }
+            match routed(fx.fx2) {
+                Some(part) => println!(
+                    "    fx2   {part:<5}  {:<9}  rate {}  deep {}",
+                    fx_type(&FX2_TYPES, fx.fx2_type),
+                    fx.fx2_rate,
+                    yn(extra.fx2_deep),
+                ),
+                None => println!("    fx2   off"),
+            }
+            match routed(fx.fx3) {
+                Some(part) => println!(
+                    "    fx3   {part:<5}  {:<9}  compression {}",
+                    fx_type(&FX3_TYPES, fx.fx3_type),
+                    fx.fx3_compression,
+                ),
+                None => println!("    fx3   off"),
+            }
+            match routed(fx.fx4) {
+                Some(part) => println!(
+                    "    delay {part:<5}  feedback {}  tempo {}  wet {}  ping-pong {}",
+                    fx.fx4_feedback,
+                    fx.fx4_tempo,
+                    fx.fx4_moisture,
+                    yn(fx.fx4_ping_pong),
+                ),
+                None => println!("    delay off"),
+            }
+            // ⚠️ The reverb enable bit reads `true` in every `fx5_1xx` specimen, and the
+            // corpus README's "0: on, 1: off" would make all of them captures of a
+            // *disabled* reverb whose type and wet level were then varied — which would
+            // be pointless. Rendered as on/off accordingly; worth one confirmation
+            // against the panel.
+            if fx.fx5 {
+                println!(
+                    "    reverb {:<9}  wet {}",
+                    fx_type(&FX5_TYPES, fx.fx5_type),
+                    fx.fx5_moisture,
+                );
+            } else {
+                println!("    reverb off");
+            }
+            // ⚠️ `equalizer_part_select` is NOT rendered as a name. Its decode is a
+            // 2-bit window, but the four named specimens `{0,1,2,3}_...` collapse to
+            // stored {0, 2, 2, 2} — three distinct panel settings landing on one value,
+            // so the field is mis-decoded. nord-format's equalizer test binds it to
+            // `_part_select` and never asserts it, which is why it went unnoticed.
+            // Printing the raw value keeps this honest until the mask is fixed.
+            println!(
+                "    eq    part {} (raw, decode suspect)  bass {}  freq {}  gain {}  treble {}",
+                fx.equalizer_part_select,
+                fx.equalizer_bass,
+                fx.equalizer_freq,
+                fx.equalizer_freq_gain,
+                fx.equalizer_treble,
+            );
+            println!(
+                "    rotary speed {}  stop {}",
+                if fx.rotary_speed == 0 { "slow" } else { "fast" },
+                if fx.rotary_stop == 0 { "off" } else { "on" },
             );
 
             // Organ state (selected preset per model), when the organ is in use.
