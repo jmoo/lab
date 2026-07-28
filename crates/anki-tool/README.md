@@ -2,6 +2,12 @@
 
 CLI for querying AnkiConnect, designed for AI agent consumption. All output is compact JSON to minimize token usage.
 
+> [!CAUTION]
+> ## 🚫 DO NOT USE THIS 🚫
+>
+> **Note from the human:** this crate is 100% LLM written with almost 0 review.
+> It is purely a tool for my own usage.
+
 ## Prerequisites
 
 - [Anki](https://apps.ankiweb.net/) running with [AnkiConnect](https://ankiweb.net/shared/info/2055492159) addon installed (listens on `localhost:8765`)
