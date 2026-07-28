@@ -1,5 +1,14 @@
 {
   inputs = {
+    # Rust toolchains with per-target std libraries. nixpkgs' rustc ships only the
+    # host target plus wasm32, which is not enough to cross-compile nord-usb to
+    # Windows/Linux. fenix exposes packages per-system, so this stays scoped to the
+    # Rust builds and never touches any host's overlay set.
+    fenix = {
+      inputs.nixpkgs.follows = "nixpkgs";
+      url = "github:nix-community/fenix";
+    };
+
     flake-parts.url = "github:hercules-ci/flake-parts";
 
     home-manager = {
@@ -59,6 +68,7 @@
                 anki-tool
                 nord-cli
                 nord-format
+                nord-usb
                 open-bamboo-networking
                 ;
             };
