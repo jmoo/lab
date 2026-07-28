@@ -15,11 +15,11 @@ Playground for personal projects and NixOS / nix-darwin config for my machines.
 
 | | Name | Description |
 |---|------|-------------|
-| 🎴 | anki-tool | CLI for querying AnkiConnect, designed for AI agent consumption |
-| 🎹 | nord-format | Clavia / Nord file parser/writer implementation in rust |
-| 🎛️ | nord-cli | Command-line tool for interacting with Clavia / Nord keyboards and files |
-| 🔌 | nord-usb | Clavia / Nord USB protocol implementation in rust |
-| 🧩 | vscode-nix-extensions | Generate VS Code extensions from Nix expressions |
+| 🎴 | [anki-tool](crates/anki-tool/README.md) | CLI for querying AnkiConnect, designed for AI agent consumption |
+| 🎹 | [nord-format](crates/nord-format/README.md) | Clavia / Nord file parser/writer implementation in rust |
+| 🎛️ | [nord-cli](crates/nord-cli/README.md) | Command-line tool for interacting with Clavia / Nord keyboards and files |
+| 🔌 | [nord-usb](crates/nord-usb/README.md) | Clavia / Nord USB protocol implementation in rust |
+| 🧩 | [vscode-nix-extensions](pkgs/vscode-nix-extensions/README.md) | Generate VS Code extensions from Nix expressions |
 
 
 
