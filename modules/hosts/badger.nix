@@ -40,7 +40,10 @@
             ];
           };
 
-          programs.claude-code.enable = true;
+          programs.claude-code = {
+            enable = true;
+            settings.model = "claude-opus-5";
+          };
         };
       system = "aarch64-linux";
     };

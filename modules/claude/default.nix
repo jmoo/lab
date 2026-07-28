@@ -10,7 +10,13 @@ in
       options.claude.enable = mkEnableOption "the claude-code program";
 
       config = mkIf config.claude.enable {
-        home.module.programs.claude-code.enable = true;
+        home.module.programs.claude-code = {
+          enable = true;
+          settings = {
+            model = "claude-opus-5";
+            skipDangerousModePermissionPrompt = true;
+          };
+        };
       };
     }
   );

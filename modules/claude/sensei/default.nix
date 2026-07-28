@@ -9,7 +9,7 @@ let
     mkOption
     types
     ;
-    
+
   trackerPrompt = lib'.removeSuffix "\n" (builtins.readFile ./tracker-prompt.md);
 in
 {
