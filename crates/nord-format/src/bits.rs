@@ -224,6 +224,114 @@ impl<T: Packed, const HI: u32, const LO: u32> Field<T, HI, LO> {
     }
 }
 
+/// The untyped half of a [`Field`]: a position and a width, with no opinion about what
+/// the bits mean. Exists so a value can be composed out of two ranges in two different
+/// words — see [`Straddle`].
+pub trait BitRange {
+    /// Width of the range in bits.
+    const WIDTH: u32;
+
+    /// The range's bits, shifted down to bit 0.
+    fn raw<W: Word>(word: W) -> u64;
+
+    /// Replace the range's bits, leaving the rest of the word alone.
+    fn put_raw<W: Word>(word: &mut W, bits: u64);
+}
+
+impl<T, const HI: u32, const LO: u32> BitRange for Field<T, HI, LO> {
+    const WIDTH: u32 = {
+        assert!(HI >= LO, "bit field's HI must not be below its LO");
+        HI - LO + 1
+    };
+
+    fn raw<W: Word>(word: W) -> u64 {
+        let () = WordFits::<W, HI>::OK;
+        (word.to_u64() >> LO) & mask(Self::WIDTH)
+    }
+
+    fn put_raw<W: Word>(word: &mut W, bits: u64) {
+        let () = WordFits::<W, HI>::OK;
+        let mask = mask(Self::WIDTH);
+        *word = W::from_u64((word.to_u64() & !(mask << LO)) | ((bits & mask) << LO));
+    }
+}
+
+/// A `width`-bit mask at bit 0.
+const fn mask(width: u32) -> u64 {
+    if width == 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
+    }
+}
+
+/// One value split across two backing words: `H` holds its high bits, `L` its low ones.
+///
+/// The Electro 5 program has exactly two of these — `equalizer_freq_gain` spans
+/// `settings`→`settings2` and `fx5_moisture` spans `settings2`→`settings3`, both inside
+/// `EffectsPanel`. RFC-0001 scored B+ as needing a "2-call compose" for them; composing
+/// the two ranges into one field type instead keeps them indistinguishable from any
+/// other field at the call site, and keeps the halves' widths in one place rather than
+/// spread across a hand-written `<<` and `+`.
+///
+/// The bit-order convention is the wire's: `value = (high << L::WIDTH) | low`.
+#[allow(clippy::type_complexity)]
+pub struct Straddle<T, H, L>(PhantomData<fn() -> (T, H, L)>);
+
+impl<T: Packed, H: BitRange, L: BitRange> Straddle<T, H, L> {
+    /// Combined width of both halves.
+    pub const WIDTH: u32 = H::WIDTH + L::WIDTH;
+
+    /// As [`Field::FITS`], over the combined width.
+    const FITS: () = assert!(
+        T::MAX_BITS <= H::WIDTH + L::WIDTH,
+        "this type can hold values wider than the field; use `checked_set`",
+    );
+
+    /// Decode the value out of the two words that hold it.
+    pub fn get<A: Word, B: Word>(high: A, low: B) -> Result<T, T::Error> {
+        T::from_bits((H::raw(high) << L::WIDTH) | L::raw(low))
+    }
+
+    /// Write the value across both words, disturbing nothing else in either.
+    pub fn set<A: Word, B: Word>(high: &mut A, low: &mut B, value: T) {
+        let () = Self::FITS;
+        Self::write(high, low, value.to_bits());
+    }
+
+    /// As [`Field::checked_set`], over the combined width.
+    pub fn checked_set<A: Word, B: Word>(
+        high: &mut A,
+        low: &mut B,
+        value: T,
+    ) -> Result<(), FieldOverflow> {
+        let bits = value.to_bits();
+        if bits > mask(Self::WIDTH) {
+            return Err(FieldOverflow {
+                value: bits,
+                width: Self::WIDTH,
+            });
+        }
+        Self::write(high, low, bits);
+        Ok(())
+    }
+
+    fn write<A: Word, B: Word>(high: &mut A, low: &mut B, bits: u64) {
+        H::put_raw(high, bits >> L::WIDTH);
+        L::put_raw(low, bits);
+    }
+}
+
+impl<T: Packed<Error = Infallible>, H: BitRange, L: BitRange> Straddle<T, H, L> {
+    /// Decode, for types where every bit pattern is a valid value.
+    pub fn read<A: Word, B: Word>(high: A, low: B) -> T {
+        match Self::get(high, low) {
+            Ok(value) => value,
+            Err(never) => match never {},
+        }
+    }
+}
+
 impl<T: Packed<Error = Infallible>, const HI: u32, const LO: u32> Field<T, HI, LO> {
     /// Decode the field, for types where every bit pattern is a valid value.
     pub fn read<W: Word>(word: W) -> T {
@@ -281,6 +389,41 @@ mod tests {
         assert_eq!(Nibble::WIDTH, 4);
         assert_eq!(Nibble::MASK, 0xf);
         assert_eq!(Field::<u64, 63, 0>::MASK, u64::MAX);
+    }
+
+    // A value split across a `u64`'s bottom three bits and a `u32`'s top four — the
+    // shape of `equalizer_freq_gain`.
+    type HighPart = Field<u64, 2, 0>;
+    type LowPart = Field<u32, 31, 28>;
+    type Spanning = Straddle<u8, HighPart, LowPart>;
+
+    #[test]
+    fn a_straddling_field_reassembles_both_halves() {
+        assert_eq!(Spanning::WIDTH, 7);
+        // high = 0b101, low = 0b1101  ->  0b101_1101
+        assert_eq!(Spanning::read(0b101_u64, 0xd000_0000_u32), 0b1011101);
+        assert_eq!(Spanning::read(0u64, 0u32), 0);
+    }
+
+    #[test]
+    fn a_straddling_write_lands_in_both_words_and_nowhere_else() {
+        let (mut high, mut low) = (0xffff_ffff_ffff_fff8_u64, 0x0fff_ffff_u32);
+        Spanning::checked_set(&mut high, &mut low, 0b1011101).unwrap();
+        assert_eq!(high, 0xffff_ffff_ffff_fffd);
+        assert_eq!(low, 0xdfff_ffff);
+        assert_eq!(Spanning::read(high, low), 0b1011101);
+    }
+
+    #[test]
+    fn a_straddling_value_too_wide_is_refused() {
+        let (mut high, mut low) = (0u64, 0u32);
+        assert_eq!(
+            Spanning::checked_set(&mut high, &mut low, 0x80)
+                .unwrap_err()
+                .width,
+            7,
+        );
+        assert_eq!((high, low), (0, 0));
     }
 
     #[test]

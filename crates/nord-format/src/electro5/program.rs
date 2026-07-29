@@ -1,4 +1,4 @@
-use crate::bits::{Field, FieldOverflow};
+use crate::bits::{Field, FieldOverflow, Straddle};
 use crate::common;
 use crate::common::{bank, PartMix};
 use crate::crc::{CrcReader, CrcWriter};
@@ -324,40 +324,81 @@ impl Debug for CenterPanel {
     }
 }
 
-// 0x3a..0x41
+// 0x3a..0x41 — the piano panel. B+ as above: one private word, one `Field` per value.
+//
+// Every field here is a raw integer or a flag, so the getters are infallible; only the
+// narrow slots need a checked setter. Bits 60..59 and 53..49 are named by nothing —
+// they are the gap bits RFC-0001 calls out, and under B+ they need no declaration at
+// all.
+
+/// 0x3a..0x41 — `settings`.
+type PianoCategory = Field<u8, 63, 61>;
+type PianoModel = Field<u8, 58, 54>;
+type ClavModel = Field<u8, 48, 47>;
+type PianoAcoustics = Field<u8, 46, 45>;
+type PianoTouch = Field<u8, 44, 43>;
+type PianoMono = Field<bool, 42, 42>;
+type PianoId = Field<u32, 41, 10>;
+
 #[binrw]
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct PianoPanel {
     // 0x3a..0x41               0x3a      0x3b     0x3c     0x3d     0x3e     0x3f     0x40    0x41
     #[brw(big)]
     settings: u64,
+}
 
-    // 5 == 0, 6 == 1, 1 == 2, 2 == 3, 3 == 4, 4 == 5
-    #[br(calc = ((settings & 0b11100000_00000000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 7) + 5)) as u8)]
-    #[bw(ignore)]
-    pub category: u8,
+impl PianoPanel {
+    /// 5 == 0, 6 == 1, 1 == 2, 2 == 3, 3 == 4, 4 == 5.
+    pub fn category(&self) -> u8 {
+        PianoCategory::read(self.settings)
+    }
+
+    pub fn set_category(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        PianoCategory::checked_set(&mut self.settings, value)
+    }
 
     /// Zero-based model slot *within* [`category`](Self::category) — the panel's
     /// Model dial. A slot coordinate, not an identity; see [`id`](Self::id).
-    #[br(calc = ((settings & 0b00000111_11000000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 6) + 6)) as u8)]
-    #[bw(ignore)]
-    pub piano_model: u8,
+    pub fn piano_model(&self) -> u8 {
+        PianoModel::read(self.settings)
+    }
 
-    #[br(calc = ((settings & 0b00000000_00000001_10000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 7)) as u8)]
-    #[bw(ignore)]
-    pub clav_model: u8,
+    pub fn set_piano_model(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        PianoModel::checked_set(&mut self.settings, value)
+    }
 
-    #[br(calc = ((settings & 0b00000000_00000000_01100000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 5)) as u8)]
-    #[bw(ignore)]
-    pub acoustics: u8,
+    pub fn clav_model(&self) -> u8 {
+        ClavModel::read(self.settings)
+    }
 
-    #[br(calc = ((settings & 0b00000000_00000000_00011000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 3)) as u8)]
-    #[bw(ignore)]
-    pub touch: u8,
+    pub fn set_clav_model(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        ClavModel::checked_set(&mut self.settings, value)
+    }
 
-    #[br(calc = ((settings & 0b00000000_00000000_00000100_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 2)) != 0)]
-    #[bw(ignore)]
-    pub mono: bool,
+    pub fn acoustics(&self) -> u8 {
+        PianoAcoustics::read(self.settings)
+    }
+
+    pub fn set_acoustics(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        PianoAcoustics::checked_set(&mut self.settings, value)
+    }
+
+    pub fn touch(&self) -> u8 {
+        PianoTouch::read(self.settings)
+    }
+
+    pub fn set_touch(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        PianoTouch::checked_set(&mut self.settings, value)
+    }
+
+    pub fn mono(&self) -> bool {
+        PianoMono::read(self.settings)
+    }
+
+    pub fn set_mono(&mut self, value: bool) {
+        PianoMono::set(&mut self.settings, value)
+    }
 
     /// The piano (`.npno`) this program depends on: a stable 32-bit id in bits
     /// 41..=10, independent of where the piano sits in the instrument's library.
@@ -366,50 +407,123 @@ pub struct PianoPanel {
     /// slot coordinates — is what resolves the song → program → piano chain, and
     /// what Nord Sound Manager checks to decide whether a Restore is missing a
     /// dependency.
-    #[br(calc = ((settings & 0b00000000_00000000_00000011_11111111_11111111_11111111_11111100_00000000) >> ((8 * 1) + 2)) as u32)]
-    #[bw(ignore)]
-    pub id: u32,
+    pub fn id(&self) -> u32 {
+        PianoId::read(self.settings)
+    }
+
+    /// Infallible, unlike its neighbours: the slot is a full 32 bits, so no `u32` can
+    /// overrun it and the fit is proven at compile time.
+    pub fn set_id(&mut self, value: u32) {
+        PianoId::set(&mut self.settings, value)
+    }
 }
 
-// 0x46..0x4d
+impl Debug for PianoPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PianoPanel")
+            .field("category", &self.category())
+            .field("piano_model", &self.piano_model())
+            .field("clav_model", &self.clav_model())
+            .field("acoustics", &self.acoustics())
+            .field("touch", &self.touch())
+            .field("mono", &self.mono())
+            .field("id", &self.id())
+            .finish()
+    }
+}
+
+// 0x46..0x4d — the sample panel.
+
+/// 0x46..0x4d — `settings`.
+type SampleAttack = Field<u8, 63, 57>;
+type SampleDecayRelease = Field<u8, 56, 50>;
+type SampleNumber = Field<u8, 49, 42>;
+type SampleId = Field<u32, 41, 10>;
+type SampleDynamics = Field<u8, 9, 8>;
+type SampleFilter = Field<bool, 7, 7>;
+
 #[binrw]
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct SamplePanel {
     // 0x46..0x4d               0x46      0x47     0x48     0x49     0x4a     0x4b     0x4c    0x4d
     #[brw(big)]
     settings: u64,
+}
 
-    #[br(calc = ((settings & 0b11111110_00000000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 7) + 1)) as u8)]
-    #[bw(ignore)]
-    pub attack: u8,
+impl SamplePanel {
+    pub fn attack(&self) -> u8 {
+        SampleAttack::read(self.settings)
+    }
 
-    #[br(calc = ((settings & 0b00000001_11111100_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 6) + 2)) as u8)]
-    #[bw(ignore)]
-    pub decay_release: u8,
+    pub fn set_attack(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        SampleAttack::checked_set(&mut self.settings, value)
+    }
+
+    pub fn decay_release(&self) -> u8 {
+        SampleDecayRelease::read(self.settings)
+    }
+
+    pub fn set_decay_release(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        SampleDecayRelease::checked_set(&mut self.settings, value)
+    }
 
     /// Zero-based slot of the sample in the instrument's Samp Lib, i.e. the
     /// number shown on the panel minus one. This is a *position*, not an
     /// identity: adding or deleting samples renumbers it, and the corpus has
     /// ids that appear under several numbers (and numbers reused by several
     /// ids). Use [`id`](Self::id) to resolve the dependency.
-    #[br(calc = ((settings & 0b00000000_00000011_11111100_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 2)) as u8)]
-    #[bw(ignore)]
-    pub number: u8,
+    ///
+    /// The slot is a full eight bits, so this setter is infallible.
+    pub fn number(&self) -> u8 {
+        SampleNumber::read(self.settings)
+    }
+
+    pub fn set_number(&mut self, value: u8) {
+        SampleNumber::set(&mut self.settings, value)
+    }
 
     /// The sample (`.nsmp`) this program depends on: a stable 32-bit id in bits
     /// 41..=10, laid out exactly as [`PianoPanel::id`]. `0` means "no sample
     /// referenced".
-    #[br(calc = ((settings & 0b00000000_00000000_00000011_11111111_11111111_11111111_11111100_00000000) >> ((8 * 1) + 2)) as u32)]
-    #[bw(ignore)]
-    pub id: u32,
+    ///
+    /// Same bit range, same type, same `Field` — the first shared component, reused
+    /// across two panels before a second device model exists to reuse it across.
+    pub fn id(&self) -> u32 {
+        SampleId::read(self.settings)
+    }
 
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000000_00000011_00000000) >> ((8 * 1) + 0)) as u8)]
-    #[bw(ignore)]
-    pub dynamics: u8,
+    pub fn set_id(&mut self, value: u32) {
+        SampleId::set(&mut self.settings, value)
+    }
 
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_10000000) >> ((8 * 0) + 7)) != 0)]
-    #[bw(ignore)]
-    pub filter: bool,
+    pub fn dynamics(&self) -> u8 {
+        SampleDynamics::read(self.settings)
+    }
+
+    pub fn set_dynamics(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        SampleDynamics::checked_set(&mut self.settings, value)
+    }
+
+    pub fn filter(&self) -> bool {
+        SampleFilter::read(self.settings)
+    }
+
+    pub fn set_filter(&mut self, value: bool) {
+        SampleFilter::set(&mut self.settings, value)
+    }
+}
+
+impl Debug for SamplePanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SamplePanel")
+            .field("attack", &self.attack())
+            .field("decay_release", &self.decay_release())
+            .field("number", &self.number())
+            .field("id", &self.id())
+            .field("dynamics", &self.dynamics())
+            .field("filter", &self.filter())
+            .finish()
+    }
 }
 
 // 0x4e..0x92 — the organ panel. The Electro 5 stores the full drawbar +
@@ -450,6 +564,33 @@ fn read_drawbars(raw: &[u8], at: usize) -> [u8; 9] {
     }
     bars
 }
+
+// The organ panel's flags, as positions within whichever byte holds them. Unlike the
+// other panels these aliases are not bound to one word — the same `VibOn` is applied to
+// four different bytes — so nothing stops the wrong alias being applied to the wrong
+// byte. That is the cost of `Field` over a byte array rather than a backing word, and
+// the reason RFC-0001 treats a full `OrganPanel` conversion as its own question.
+
+/// `0x53`/`0x65`/`0x75`/`0x85` bit 6 — preset 2 selected.
+type OrganPreset = Field<bool, 6, 6>;
+/// Nibble-packed drawbars, high nibble first.
+type DrawbarHigh = Field<u8, 7, 4>;
+type DrawbarLow = Field<u8, 3, 0>;
+/// `0x59`/`0x60`/`0x6b`/`0x71`/`0x7b`/`0x81` bit 3 — vibrato/chorus on.
+type VibOn = Field<bool, 3, 3>;
+/// `0x51`/`0x63`/`0x73` bits 7..5 — index into the model's vib/chorus table.
+type VibType = Field<u8, 7, 5>;
+/// `0x59`/`0x60` bit 2 — B3 percussion on.
+type PercOn = Field<bool, 2, 2>;
+/// `0x51` bit 4 — percussion third harmonic.
+type PercThird = Field<bool, 4, 4>;
+/// `0x51` bits 3..2 — percussion decay speed, encoded 2/1/3 for soft/fast/both.
+type PercSpeedField = Field<u8, 3, 2>;
+/// Within the 12-bit b3-bass field assembled from `0x59`'s low nibble and `0x5a`.
+type BassBar1 = Field<u8, 9, 6>;
+type BassBar2 = Field<u8, 5, 2>;
+/// `0x59`'s low nibble — the only part of that byte the b3-bass field owns.
+type BassHighNibble = Field<u8, 3, 0>;
 
 /// The Electro 5's four organ models. (B3-bass shares the B3 storage slots, so
 /// it isn't a separate model here.)
@@ -540,6 +681,16 @@ pub struct OrganPanel {
     // 0x8b 0b00001000 - unknown boolean (always true except for included preset 'Sunday')
     // 0x8c 0b00000000 - pad
     // 0x8d 0b11111111_11111111_11111111_11111111_11110000 - preset2 drawbars (pipe, normal)
+}
+
+/// `[u8; 69]` has no `Default` — the std impls stop at 32 — so this one is written out
+/// rather than derived like the other panels'.
+impl Default for OrganPanel {
+    fn default() -> Self {
+        OrganPanel {
+            raw: [0; ORGAN_LEN],
+        }
+    }
 }
 
 /// A vibrato (`V`) or chorus (`C`) organ modulation at one of three depths.
@@ -668,14 +819,8 @@ impl OrganPanel {
     /// `None` for Pipe. Each model exposes a different subset of the six modes,
     /// so the stored 3-bit value indexes into a per-model table.
     pub fn vib_type(&self, model: OrganModel) -> Option<VibChorus> {
-        use VibChorus::*;
-        let (byte, table): (usize, &[VibChorus]) = match model {
-            OrganModel::B3 => (org(0x51), &[V1, C1, V2, C2, V3, C3]),
-            OrganModel::Vox => (org(0x63), &[V1, V2, V3]),
-            OrganModel::Farfisa => (org(0x73), &[V1, V2, C2, C3]),
-            OrganModel::Pipe => return None,
-        };
-        table.get((self.raw[byte] >> 5) as usize).copied()
+        let (byte, table) = Self::vib_table(model)?;
+        table.get(VibType::read(self.raw[byte]) as usize).copied()
     }
 
     /// Whether B3 percussion is on for `preset` (B3 only).
@@ -699,68 +844,316 @@ impl OrganPanel {
             _ => PercSpeed::Both,
         }
     }
+
+    // ── writes ──────────────────────────────────────────────────────────────────
+    //
+    // The organ panel keeps its existing shape rather than converting to `Field`:
+    // RFC-0001 notes it is the best-tested and most-correct code in the file, and its
+    // 552 bits live in a `[u8; 69]`, which is not a backing *word*. Its problem was
+    // never silent write loss — it has no public decoded fields to assign to — but the
+    // absence of any way to write at all. `Field` still does the per-byte bit work, so
+    // the position of each flag is authored once here too.
+
+    /// Select `preset` (1 or 2) for `model`.
+    pub fn set_preset(&mut self, model: OrganModel, preset: u8) {
+        OrganPreset::set(&mut self.raw[Self::preset_byte(model)], preset == 2);
+    }
+
+    /// Store nine drawbar positions for `model`'s `preset`. Positions are physical,
+    /// `0..=8`; anything higher is refused rather than truncated into its neighbour,
+    /// since two bars share a byte.
+    pub fn set_drawbars(
+        &mut self,
+        model: OrganModel,
+        preset: u8,
+        bars: [u8; 9],
+    ) -> Result<(), FieldOverflow> {
+        if let Some(&bad) = bars.iter().find(|&&b| b > 8) {
+            return Err(FieldOverflow {
+                value: bad as u64,
+                width: 4,
+            });
+        }
+
+        let at = Self::drawbar_offset(model, preset);
+        for (n, bar) in bars.into_iter().enumerate() {
+            let byte = &mut self.raw[at + n / 2];
+            if n % 2 == 0 {
+                DrawbarHigh::checked_set(byte, bar)?;
+            } else {
+                DrawbarLow::checked_set(byte, bar)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Set the Farfisa tabs, which are on/off rather than continuous: on stores `8`,
+    /// off stores `0`. Any other stored value that happened to be there is lost — the
+    /// instrument only reads which side of the ≥5 threshold it falls on, but the byte
+    /// itself does change, so this is not a round-trip-safe way to touch a Farfisa
+    /// program you did not mean to rewrite.
+    pub fn set_farfisa_tabs(&mut self, preset: u8, tabs: [bool; 9]) {
+        let mut bars = [0u8; 9];
+        for (bar, on) in bars.iter_mut().zip(tabs) {
+            *bar = if on { 8 } else { 0 };
+        }
+        self.set_drawbars(OrganModel::Farfisa, preset, bars)
+            .expect("0 and 8 are both in range");
+    }
+
+    /// Turn vibrato/chorus on or off for `model`'s `preset`. No-op for Pipe, which has
+    /// none.
+    pub fn set_vib_on(&mut self, model: OrganModel, preset: u8, on: bool) {
+        if let Some(i) = Self::effect_byte(model, preset) {
+            VibOn::set(&mut self.raw[i], on);
+        }
+    }
+
+    /// Select the vibrato/chorus mode for `model` (shared across presets).
+    ///
+    /// Fails when the mode is not one the model offers — each exposes a different
+    /// subset of the six, and Pipe none at all. The stored value is the *index* into
+    /// that model's table, so this cannot be a plain bit write.
+    pub fn set_vib_type(&mut self, model: OrganModel, vib: VibChorus) -> Result<(), ParseError> {
+        let (byte, table) = match Self::vib_table(model) {
+            Some(pair) => pair,
+            None => {
+                return Err(ParseError::OutOfBounds(
+                    format!("{vib:?}"),
+                    format!("{model:?} has no vibrato/chorus"),
+                ))
+            }
+        };
+
+        match table.iter().position(|&v| v == vib) {
+            Some(index) => {
+                VibType::checked_set(&mut self.raw[byte], index as u8)
+                    .expect("no model's table has more than six entries");
+                Ok(())
+            }
+            None => Err(ParseError::OutOfBounds(
+                format!("{vib:?}"),
+                format!("{model:?} offers {table:?}"),
+            )),
+        }
+    }
+
+    /// Turn B3 percussion on or off for `preset`.
+    pub fn set_b3_perc_on(&mut self, preset: u8, on: bool) {
+        let at = org(if preset == 2 { 0x60 } else { 0x59 });
+        PercOn::set(&mut self.raw[at], on);
+    }
+
+    /// Percussion third harmonic (shared across presets).
+    pub fn set_b3_perc_third(&mut self, on: bool) {
+        PercThird::set(&mut self.raw[org(0x51)], on);
+    }
+
+    /// Percussion decay speed (shared across presets). Note the encoding is not
+    /// monotonic — see [`Self::b3_perc_speed`].
+    pub fn set_b3_perc_speed(&mut self, speed: PercSpeed) {
+        let bits = match speed {
+            PercSpeed::Off => 0,
+            PercSpeed::Soft => 2,
+            PercSpeed::Fast => 1,
+            PercSpeed::Both => 3,
+        };
+        PercSpeedField::checked_set(&mut self.raw[org(0x51)], bits)
+            .expect("all four speeds encode in two bits");
+    }
+
+    /// The two bass drawbars of B3-with-bass preset 1 — a 12-bit field spanning
+    /// `0x59`'s low nibble and `0x5a`, so a straddler inside a byte array rather than
+    /// across two words. Positions are `0..=8`; the field's low two bits are unused and
+    /// are left as they are found.
+    pub fn set_b3_bass_drawbars(&mut self, bars: [u8; 2]) -> Result<(), FieldOverflow> {
+        if let Some(&bad) = bars.iter().find(|&&b| b > 8) {
+            return Err(FieldOverflow {
+                value: bad as u64,
+                width: 4,
+            });
+        }
+
+        let mut field = ((self.raw[org(0x59)] as u16 & 0x0F) << 8) | self.raw[org(0x5a)] as u16;
+        BassBar1::checked_set(&mut field, bars[0])?;
+        BassBar2::checked_set(&mut field, bars[1])?;
+
+        // Only the low nibble of 0x59 belongs to the field; its high nibble is bar 9 of
+        // the main block and bits 3/2 are vibrato and percussion.
+        BassHighNibble::checked_set(&mut self.raw[org(0x59)], (field >> 8) as u8)
+            .expect("the field was assembled from a nibble, so bits 15..12 are clear");
+        self.raw[org(0x5a)] = field as u8;
+        Ok(())
+    }
+
+    /// The vib/chorus selection byte and the modes it indexes, or `None` for Pipe.
+    fn vib_table(model: OrganModel) -> Option<(usize, &'static [VibChorus])> {
+        use VibChorus::*;
+        match model {
+            OrganModel::B3 => Some((org(0x51), &[V1, C1, V2, C2, V3, C3])),
+            OrganModel::Vox => Some((org(0x63), &[V1, V2, V3])),
+            OrganModel::Farfisa => Some((org(0x73), &[V1, V2, C2, C3])),
+            OrganModel::Pipe => None,
+        }
+    }
 }
 
-// 0x93..0x9F
+// 0x93..0x9f — the effects panel, and the interesting one for B+: it holds both of the
+// format's cross-word fields.
+//
+// `equalizer_freq_gain` spans `settings`→`settings2` and `fx5_moisture` spans
+// `settings2`→`settings3`. RFC-0001 scored B+ as needing a "2-call compose" for these,
+// which was the honest reading of the option as written — but a `Straddle` of two
+// ranges composes them into one field type, so at the call site they are ordinary
+// fields with an ordinary getter and setter. That removes the straddler column as a
+// reason to prefer a continuous-cursor option.
+
+/// 0x93..0x9a — `settings`.
+type Fx1 = Field<u8, 63, 62>;
+type Fx1Type = Field<u8, 61, 58>;
+type Fx1Rate = Field<u8, 57, 51>;
+type Fx2 = Field<u8, 50, 49>;
+type Fx2Type = Field<u8, 48, 45>;
+type Fx2Rate = Field<u8, 44, 38>;
+type Fx4 = Field<u8, 37, 36>;
+type Fx4Feedback = Field<u8, 35, 34>;
+type Fx4Tempo = Field<u8, 33, 27>;
+type Fx4Moisture = Field<u8, 26, 20>;
+type Fx4PingPong = Field<bool, 19, 19>;
+type EqualizerOn = Field<bool, 18, 18>;
+type EqualizerFreq = Field<u8, 16, 10>;
+type EqualizerTreble = Field<u8, 9, 3>;
+
+/// 0x9b..0x9e — `settings2`.
+type EqualizerBass = Field<u8, 27, 21>;
+type Fx3 = Field<u8, 20, 19>;
+type Fx3Type = Field<u8, 18, 16>;
+type Fx3Compression = Field<u8, 15, 9>;
+type Fx5 = Field<bool, 8, 8>;
+type Fx5Type = Field<u8, 7, 5>;
+
+/// 0x9f — `settings3`.
+type RotaryStop = Field<u8, 5, 5>;
+type RotarySpeed = Field<u8, 4, 4>;
+
+/// The two cross-word fields, each named once as a pair of ranges rather than as a
+/// hand-written shift-and-add on the read side and nothing at all on the write side.
+type EqualizerFreqGain = Straddle<u8, Field<u8, 2, 0>, Field<u8, 31, 28>>;
+type Fx5Moisture = Straddle<u8, Field<u8, 4, 0>, Field<u8, 7, 6>>;
+
 #[binrw]
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct EffectsPanel {
     // 0x93..0x9a               0x93      0x94     0x95     0x96     0x97     0x98     0x99    0x9a
     #[brw(big)]
     settings: u64,
 
-    // fx1 (0: off, 1: lower, 2: upper)
-    #[br(calc = ((settings & 0b11000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 7) + 6)) as u8)]
-    #[bw(ignore)]
-    pub fx1: u8,
+    // 0x9b..0x9e
+    #[brw(big)]
+    settings2: u32,
 
-    // fx1 type (1: pan1, pan2, pan1&2, 2: wah, rm, trem1, trem2, trem1&2)
-    #[br(calc = ((settings & 0b00111100_00000000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 7) + 2)) as u8)]
-    #[bw(ignore)]
-    pub fx1_type: u8,
+    // 0x9f
+    #[brw(big)]
+    settings3: u8,
+}
 
-    // fx1 rate 0..127 (0..10)
-    #[br(calc = ((settings & 0b00000011_11111000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 6) + 3)) as u8)]
-    #[bw(ignore)]
-    pub fx1_rate: u8,
+impl EffectsPanel {
+    /// 0: off, 1: lower, 2: upper.
+    pub fn fx1(&self) -> u8 {
+        Fx1::read(self.settings)
+    }
 
-    // fx2 (0: off, 1: lower, 2: upper
-    #[br(calc = ((settings & 0b00000000_00000110_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 6) + 1)) as u8)]
-    #[bw(ignore)]
-    pub fx2: u8,
+    pub fn set_fx1(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx1::checked_set(&mut self.settings, value)
+    }
 
-    // fx2 type (flang, choir1, choir2, vibe, phas1, phas2)
-    #[br(calc = ((settings & 0b00000000_00000001_11100000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 5)) as u8)]
-    #[bw(ignore)]
-    pub fx2_type: u8,
+    /// 1: pan1, pan2, pan1&2; 2: wah, rm, trem1, trem2, trem1&2.
+    pub fn fx1_type(&self) -> u8 {
+        Fx1Type::read(self.settings)
+    }
 
-    // fx2 rate 0..127 (0..10)
-    #[br(calc = ((settings & 0b00000000_00000000_00011111_11000000_00000000_00000000_00000000_00000000) >> ((8 * 4) + 6)) as u8)]
-    #[bw(ignore)]
-    pub fx2_rate: u8,
+    pub fn set_fx1_type(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx1Type::checked_set(&mut self.settings, value)
+    }
 
-    // fx4 (0: off, 1: lower, 2: upper)
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00110000_00000000_00000000_00000000_00000000) >> ((8 * 4) + 4)) as u8)]
-    #[bw(ignore)]
-    pub fx4: u8,
+    /// 0..127, shown as 0..10.
+    pub fn fx1_rate(&self) -> u8 {
+        Fx1Rate::read(self.settings)
+    }
 
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00001100_00000000_00000000_00000000_00000000) >> ((8 * 4) + 2)) as u8)]
-    #[bw(ignore)]
-    pub fx4_feedback: u8,
+    pub fn set_fx1_rate(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx1Rate::checked_set(&mut self.settings, value)
+    }
 
-    // fx4 rate 0..127 (750ms..20ms)
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000011_11111000_00000000_00000000_00000000) >> ((8 * 3) + 3)) as u8)]
-    #[bw(ignore)]
-    pub fx4_tempo: u8,
+    /// 0: off, 1: lower, 2: upper.
+    pub fn fx2(&self) -> u8 {
+        Fx2::read(self.settings)
+    }
 
-    // fx4 wet/dry 0..127 (0..10)
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000111_11110000_00000000_00000000) >> ((8 * 2) + 4)) as u8)]
-    #[bw(ignore)]
-    pub fx4_moisture: u8,
+    pub fn set_fx2(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx2::checked_set(&mut self.settings, value)
+    }
 
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00001000_00000000_00000000) >> ((8 * 2) + 3)) != 0)]
-    #[bw(ignore)]
-    pub fx4_ping_pong: bool,
+    /// flang, choir1, choir2, vibe, phas1, phas2.
+    pub fn fx2_type(&self) -> u8 {
+        Fx2Type::read(self.settings)
+    }
+
+    pub fn set_fx2_type(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx2Type::checked_set(&mut self.settings, value)
+    }
+
+    /// 0..127, shown as 0..10.
+    pub fn fx2_rate(&self) -> u8 {
+        Fx2Rate::read(self.settings)
+    }
+
+    pub fn set_fx2_rate(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx2Rate::checked_set(&mut self.settings, value)
+    }
+
+    /// 0: off, 1: lower, 2: upper.
+    pub fn fx4(&self) -> u8 {
+        Fx4::read(self.settings)
+    }
+
+    pub fn set_fx4(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx4::checked_set(&mut self.settings, value)
+    }
+
+    pub fn fx4_feedback(&self) -> u8 {
+        Fx4Feedback::read(self.settings)
+    }
+
+    pub fn set_fx4_feedback(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx4Feedback::checked_set(&mut self.settings, value)
+    }
+
+    /// 0..127, 750ms..20ms.
+    pub fn fx4_tempo(&self) -> u8 {
+        Fx4Tempo::read(self.settings)
+    }
+
+    pub fn set_fx4_tempo(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx4Tempo::checked_set(&mut self.settings, value)
+    }
+
+    /// Delay wet/dry, 0..127, shown as 0..10.
+    pub fn fx4_moisture(&self) -> u8 {
+        Fx4Moisture::read(self.settings)
+    }
+
+    pub fn set_fx4_moisture(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx4Moisture::checked_set(&mut self.settings, value)
+    }
+
+    pub fn fx4_ping_pong(&self) -> bool {
+        Fx4PingPong::read(self.settings)
+    }
+
+    pub fn set_fx4_ping_pong(&mut self, value: bool) {
+        Fx4PingPong::set(&mut self.settings, value)
+    }
 
     /// EQ engaged. **Which part it applies to is not in this word** — see
     /// [`Extra::equalizer_part`].
@@ -769,91 +1162,184 @@ pub struct EffectsPanel {
     /// only ever answer 0 or 2: diffing the four named `equalizer/{0,1,2,3}_…`
     /// specimens shows they are byte-identical across `0x93..0x9a` apart from this
     /// single bit, and the lower/upper/both choice lives at `0xa1`.
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000100_00000000_00000000) >> ((8 * 2) + 2)) != 0)]
-    #[bw(ignore)]
-    pub equalizer_on: bool,
+    pub fn equalizer_on(&self) -> bool {
+        EqualizerOn::read(self.settings)
+    }
 
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000001_11111100_00000000) >> ((8 * 1) + 2)) as u8)]
-    #[bw(ignore)]
-    pub equalizer_freq: u8,
+    pub fn set_equalizer_on(&mut self, value: bool) {
+        EqualizerOn::set(&mut self.settings, value)
+    }
 
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000000_00000011_11111000) >> ((8 * 0) + 3)) as u8)]
-    #[bw(ignore)]
-    pub equalizer_treble: u8,
+    pub fn equalizer_freq(&self) -> u8 {
+        EqualizerFreq::read(self.settings)
+    }
 
-    // 0x9b..0x9e
-    #[brw(big)]
-    settings2: u32,
+    pub fn set_equalizer_freq(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        EqualizerFreq::checked_set(&mut self.settings, value)
+    }
 
-    //                           0x9a                                     0x9b      0x9c     0x9d      0x9e
-    #[br(calc = (((settings & 0b00000111) << 4) as u8) + (((settings2 & 0b11110000_00000000_00000000_00000000) >> ((8 * 3) + 4)) as u8))]
-    #[bw(ignore)]
-    pub equalizer_freq_gain: u8,
+    pub fn equalizer_treble(&self) -> u8 {
+        EqualizerTreble::read(self.settings)
+    }
 
-    //                           0x9b      0x9c      0x9d     0x9e
-    #[br(calc = ((settings2 & 0b00001111_11100000_00000000_00000000) >> ((8 * 2) + 5)) as u8)]
-    #[bw(ignore)]
-    pub equalizer_bass: u8,
+    pub fn set_equalizer_treble(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        EqualizerTreble::checked_set(&mut self.settings, value)
+    }
 
-    // fx3 (0: off, 1: lower, 2: upper)
-    #[br(calc = ((settings2 & 0b00000000_00011000_00000000_00000000) >> ((8 * 2) + 3)) as u8)]
-    #[bw(ignore)]
-    pub fx3: u8,
+    /// The first of the format's two cross-word fields: three bits at the bottom of
+    /// `settings` (0x9a) and four at the top of `settings2` (0x9b). Reading and writing
+    /// it is a single call, exactly like any other field.
+    pub fn equalizer_freq_gain(&self) -> u8 {
+        EqualizerFreqGain::read(self.settings, self.settings2)
+    }
 
-    // fx3 type (none, twin, rotary, comp, small, jc)
-    #[br(calc = ((settings2 & 0b00000000_00000111_00000000_00000000) >> ((8 * 2) + 0)) as u8)]
-    #[bw(ignore)]
-    pub fx3_type: u8,
+    pub fn set_equalizer_freq_gain(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        EqualizerFreqGain::checked_set(&mut self.settings, &mut self.settings2, value)
+    }
 
-    // fx3 rate 0..127 (0..10)
-    #[br(calc = ((settings2 & 0b00000000_00000000_11111110_00000000) >> ((8 * 1) + 1)) as u8)]
-    #[bw(ignore)]
-    pub fx3_compression: u8,
+    pub fn equalizer_bass(&self) -> u8 {
+        EqualizerBass::read(self.settings2)
+    }
 
-    #[br(calc = ((settings2 & 0b00000000_00000000_00000001_00000000) >> ((8 * 1) + 0)) != 0)]
-    #[bw(ignore)]
-    pub fx5: bool,
+    pub fn set_equalizer_bass(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        EqualizerBass::checked_set(&mut self.settings2, value)
+    }
 
-    #[br(calc = ((settings2 & 0b00000000_00000000_00000000_11100000) >> ((8 * 0) + 5)) as u8)]
-    #[bw(ignore)]
-    pub fx5_type: u8,
+    /// 0: off, 1: lower, 2: upper.
+    pub fn fx3(&self) -> u8 {
+        Fx3::read(self.settings2)
+    }
 
-    // 0x9f
-    #[brw(big)]
-    settings3: u8,
+    pub fn set_fx3(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx3::checked_set(&mut self.settings2, value)
+    }
 
-    // 0x9b..0x9f                  0x9b      0x9c      0x9d     0x9e                                   0x9f
-    #[br(calc = ((((settings2 & 0b00000000_00000000_00000000_00011111)) << 2) as u8) + ((settings3 & 0b11000000) >> 6))]
-    #[bw(ignore)]
-    pub fx5_moisture: u8,
+    /// none, twin, rotary, comp, small, jc.
+    pub fn fx3_type(&self) -> u8 {
+        Fx3Type::read(self.settings2)
+    }
 
-    // 0 = off, 1 = on
-    #[br(calc = ((settings3 & 0b00100000) >> ((8 * 0) + 5)) as u8)]
-    #[bw(ignore)]
-    pub rotary_stop: u8,
+    pub fn set_fx3_type(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx3Type::checked_set(&mut self.settings2, value)
+    }
 
-    // 0 = slow, 1 = fast
-    #[br(calc = ((settings3 & 0b00010000) >> ((8 * 0) + 4)) as u8)]
-    #[bw(ignore)]
-    pub rotary_speed: u8,
+    /// 0..127, shown as 0..10.
+    pub fn fx3_compression(&self) -> u8 {
+        Fx3Compression::read(self.settings2)
+    }
+
+    pub fn set_fx3_compression(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx3Compression::checked_set(&mut self.settings2, value)
+    }
+
+    pub fn fx5(&self) -> bool {
+        Fx5::read(self.settings2)
+    }
+
+    pub fn set_fx5(&mut self, value: bool) {
+        Fx5::set(&mut self.settings2, value)
+    }
+
+    pub fn fx5_type(&self) -> u8 {
+        Fx5Type::read(self.settings2)
+    }
+
+    pub fn set_fx5_type(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx5Type::checked_set(&mut self.settings2, value)
+    }
+
+    /// The second cross-word field: five bits at the bottom of `settings2` (0x9e) and
+    /// two at the top of `settings3` (0x9f).
+    pub fn fx5_moisture(&self) -> u8 {
+        Fx5Moisture::read(self.settings2, self.settings3)
+    }
+
+    pub fn set_fx5_moisture(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Fx5Moisture::checked_set(&mut self.settings2, &mut self.settings3, value)
+    }
+
+    /// 0 = off, 1 = on.
+    pub fn rotary_stop(&self) -> u8 {
+        RotaryStop::read(self.settings3)
+    }
+
+    pub fn set_rotary_stop(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        RotaryStop::checked_set(&mut self.settings3, value)
+    }
+
+    /// 0 = slow, 1 = fast.
+    pub fn rotary_speed(&self) -> u8 {
+        RotarySpeed::read(self.settings3)
+    }
+
+    pub fn set_rotary_speed(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        RotarySpeed::checked_set(&mut self.settings3, value)
+    }
+}
+
+impl Debug for EffectsPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EffectsPanel")
+            .field("fx1", &self.fx1())
+            .field("fx1_type", &self.fx1_type())
+            .field("fx1_rate", &self.fx1_rate())
+            .field("fx2", &self.fx2())
+            .field("fx2_type", &self.fx2_type())
+            .field("fx2_rate", &self.fx2_rate())
+            .field("fx3", &self.fx3())
+            .field("fx3_type", &self.fx3_type())
+            .field("fx3_compression", &self.fx3_compression())
+            .field("fx4", &self.fx4())
+            .field("fx4_feedback", &self.fx4_feedback())
+            .field("fx4_tempo", &self.fx4_tempo())
+            .field("fx4_moisture", &self.fx4_moisture())
+            .field("fx4_ping_pong", &self.fx4_ping_pong())
+            .field("fx5", &self.fx5())
+            .field("fx5_type", &self.fx5_type())
+            .field("fx5_moisture", &self.fx5_moisture())
+            .field("equalizer_on", &self.equalizer_on())
+            .field("equalizer_freq", &self.equalizer_freq())
+            .field("equalizer_freq_gain", &self.equalizer_freq_gain())
+            .field("equalizer_bass", &self.equalizer_bass())
+            .field("equalizer_treble", &self.equalizer_treble())
+            .field("rotary_stop", &self.rotary_stop())
+            .field("rotary_speed", &self.rotary_speed())
+            .finish()
+    }
 }
 
 // 0xa1..0xa4
+
+/// 0xa1..0xa4 — `settings`.
+type Fx1Control = Field<bool, 28, 28>;
+type Fx2Deep = Field<bool, 27, 27>;
+type EqualizerPart = Field<u8, 26, 25>;
+
 #[binrw]
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Extra {
     #[brw(big)]
     settings: u32,
+}
 
-    // fx1 control pedal (0: off, 1: on)
-    #[br(calc = ((settings & 0b00010000_00000000_00000000_00000000) >> ((8 * 3) + 4)) != 0)]
-    #[bw(ignore)]
-    pub fx1_control: bool,
+impl Extra {
+    /// fx1 control pedal.
+    pub fn fx1_control(&self) -> bool {
+        Fx1Control::read(self.settings)
+    }
 
-    // fx1 deep (0: off, 1: on)
-    #[br(calc = ((settings & 0b00001000_00000000_00000000_00000000) >> ((8 * 3) + 3)) != 0)]
-    #[bw(ignore)]
-    pub fx2_deep: bool,
+    pub fn set_fx1_control(&mut self, value: bool) {
+        Fx1Control::set(&mut self.settings, value)
+    }
+
+    /// fx2 deep.
+    pub fn fx2_deep(&self) -> bool {
+        Fx2Deep::read(self.settings)
+    }
+
+    pub fn set_fx2_deep(&mut self, value: bool) {
+        Fx2Deep::set(&mut self.settings, value)
+    }
 
     /// Which part the equalizer applies to: `0` lower, `1` upper, `2` lower+upper.
     ///
@@ -861,9 +1347,23 @@ pub struct Extra {
     /// [`EffectsPanel::equalizer_on`] — so `0` here means *lower*, not *off*. Located
     /// by diffing the `equalizer/{0,1,2,3}_…` specimens, which differ only at `0xa1`
     /// (and in the enable bit and CRC).
-    #[br(calc = ((settings & 0b00000110_00000000_00000000_00000000) >> ((8 * 3) + 1)) as u8)]
-    #[bw(ignore)]
-    pub equalizer_part: u8,
+    pub fn equalizer_part(&self) -> u8 {
+        EqualizerPart::read(self.settings)
+    }
+
+    pub fn set_equalizer_part(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        EqualizerPart::checked_set(&mut self.settings, value)
+    }
+}
+
+impl Debug for Extra {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Extra")
+            .field("fx1_control", &self.fx1_control())
+            .field("fx2_deep", &self.fx2_deep())
+            .field("equalizer_part", &self.equalizer_part())
+            .finish()
+    }
 }
 
 #[binrw]
@@ -937,9 +1437,7 @@ impl Program {
                 center_panel: CenterPanel::default(),
                 piano_panel: PianoPanel::default(),
                 sample_panel: SamplePanel::default(),
-                organ_panel: OrganPanel {
-                    raw: [0; ORGAN_LEN],
-                },
+                organ_panel: OrganPanel::default(),
                 effects_panel: EffectsPanel::default(),
                 extra: Extra::default(),
             },
@@ -1509,6 +2007,381 @@ mod tests {
         assert_eq!(panel.right_octave_shift().unwrap(), 0);
         assert_eq!(panel.transpose().unwrap(), 0);
         assert_eq!(panel.left_part().unwrap(), Instrument::Organ);
+    }
+
+    // ── the other panels ────────────────────────────────────────────────────────
+    //
+    // Same acceptance test, one panel at a time. `PianoPanel`, `SamplePanel` and
+    // `Extra` had *no* writable field before the conversion — every one of their
+    // backing words was stored verbatim with every decoded field `#[bw(ignore)]`.
+
+    /// Assert that each mutation moves exactly one entry of `snapshot`.
+    #[allow(clippy::type_complexity)]
+    fn each_setter_moves_only_its_own_field<P>(
+        fresh: fn() -> P,
+        snapshot: fn(&P) -> Vec<(&'static str, String)>,
+        mutations: Vec<(&'static str, fn(&mut P))>,
+    ) {
+        for (name, mutate) in mutations {
+            let before = fresh();
+            let mut after = fresh();
+            mutate(&mut after);
+
+            for ((field, was), (_, now)) in snapshot(&before).into_iter().zip(snapshot(&after)) {
+                if field == name {
+                    assert_ne!(was, now, "set_{name} did not change {field}");
+                } else {
+                    assert_eq!(was, now, "set_{name} disturbed {field}");
+                }
+            }
+        }
+    }
+
+    fn piano_snapshot(p: &PianoPanel) -> Vec<(&'static str, String)> {
+        vec![
+            ("category", format!("{}", p.category())),
+            ("piano_model", format!("{}", p.piano_model())),
+            ("clav_model", format!("{}", p.clav_model())),
+            ("acoustics", format!("{}", p.acoustics())),
+            ("touch", format!("{}", p.touch())),
+            ("mono", format!("{}", p.mono())),
+            ("id", format!("{}", p.id())),
+        ]
+    }
+
+    #[test]
+    fn every_piano_panel_setter_moves_only_its_own_field() {
+        each_setter_moves_only_its_own_field(
+            || {
+                let mut p = PianoPanel::default();
+                p.set_category(5).unwrap();
+                p.set_piano_model(17).unwrap();
+                p.set_clav_model(2).unwrap();
+                p.set_acoustics(1).unwrap();
+                p.set_touch(2).unwrap();
+                p.set_mono(true);
+                p.set_id(0x6dd3_4782);
+                p
+            },
+            piano_snapshot,
+            vec![
+                ("category", |p| p.set_category(2).unwrap()),
+                ("piano_model", |p| p.set_piano_model(4).unwrap()),
+                ("clav_model", |p| p.set_clav_model(1).unwrap()),
+                ("acoustics", |p| p.set_acoustics(3).unwrap()),
+                ("touch", |p| p.set_touch(0).unwrap()),
+                ("mono", |p| p.set_mono(false)),
+                ("id", |p| p.set_id(0xffff_ffff)),
+            ],
+        );
+    }
+
+    /// The gap bits `PianoPanel` is the RFC's example of: 60..59 between `category` and
+    /// `piano_model`, and 53..49 above `clav_model`. B+ needs no declaration for them,
+    /// and no setter may disturb them.
+    #[test]
+    fn the_piano_panels_unnamed_bits_survive_every_setter() {
+        const GAPS: u64 = (0b11 << 59) | (0b11111 << 49) | 0b11_1111_1111;
+
+        let mutations: Vec<fn(&mut PianoPanel)> = vec![
+            |p| p.set_category(7).unwrap(),
+            |p| p.set_piano_model(31).unwrap(),
+            |p| p.set_clav_model(3).unwrap(),
+            |p| p.set_acoustics(3).unwrap(),
+            |p| p.set_touch(3).unwrap(),
+            |p| p.set_mono(true),
+            |p| p.set_id(0xffff_ffff),
+        ];
+
+        for mutate in mutations {
+            let mut panel = PianoPanel { settings: u64::MAX };
+            mutate(&mut panel);
+            assert_eq!(panel.settings & GAPS, GAPS, "a setter cleared a gap bit");
+
+            let mut panel = PianoPanel { settings: 0 };
+            mutate(&mut panel);
+            assert_eq!(panel.settings & GAPS, 0, "a setter set a gap bit");
+        }
+    }
+
+    fn sample_snapshot(p: &SamplePanel) -> Vec<(&'static str, String)> {
+        vec![
+            ("attack", format!("{}", p.attack())),
+            ("decay_release", format!("{}", p.decay_release())),
+            ("number", format!("{}", p.number())),
+            ("id", format!("{}", p.id())),
+            ("dynamics", format!("{}", p.dynamics())),
+            ("filter", format!("{}", p.filter())),
+        ]
+    }
+
+    #[test]
+    fn every_sample_panel_setter_moves_only_its_own_field() {
+        each_setter_moves_only_its_own_field(
+            || {
+                let mut p = SamplePanel::default();
+                p.set_attack(96).unwrap();
+                p.set_decay_release(64).unwrap();
+                p.set_number(158);
+                p.set_id(0x89be_e289);
+                p.set_dynamics(2).unwrap();
+                p.set_filter(true);
+                p
+            },
+            sample_snapshot,
+            vec![
+                ("attack", |p| p.set_attack(0).unwrap()),
+                ("decay_release", |p| p.set_decay_release(127).unwrap()),
+                ("number", |p| p.set_number(0)),
+                ("id", |p| p.set_id(0)),
+                ("dynamics", |p| p.set_dynamics(1).unwrap()),
+                ("filter", |p| p.set_filter(false)),
+            ],
+        );
+    }
+
+    fn effects_snapshot(p: &EffectsPanel) -> Vec<(&'static str, String)> {
+        vec![
+            ("fx1", format!("{}", p.fx1())),
+            ("fx1_type", format!("{}", p.fx1_type())),
+            ("fx1_rate", format!("{}", p.fx1_rate())),
+            ("fx2", format!("{}", p.fx2())),
+            ("fx2_type", format!("{}", p.fx2_type())),
+            ("fx2_rate", format!("{}", p.fx2_rate())),
+            ("fx3", format!("{}", p.fx3())),
+            ("fx3_type", format!("{}", p.fx3_type())),
+            ("fx3_compression", format!("{}", p.fx3_compression())),
+            ("fx4", format!("{}", p.fx4())),
+            ("fx4_feedback", format!("{}", p.fx4_feedback())),
+            ("fx4_tempo", format!("{}", p.fx4_tempo())),
+            ("fx4_moisture", format!("{}", p.fx4_moisture())),
+            ("fx4_ping_pong", format!("{}", p.fx4_ping_pong())),
+            ("fx5", format!("{}", p.fx5())),
+            ("fx5_type", format!("{}", p.fx5_type())),
+            ("fx5_moisture", format!("{}", p.fx5_moisture())),
+            ("equalizer_on", format!("{}", p.equalizer_on())),
+            ("equalizer_freq", format!("{}", p.equalizer_freq())),
+            (
+                "equalizer_freq_gain",
+                format!("{}", p.equalizer_freq_gain()),
+            ),
+            ("equalizer_bass", format!("{}", p.equalizer_bass())),
+            ("equalizer_treble", format!("{}", p.equalizer_treble())),
+            ("rotary_stop", format!("{}", p.rotary_stop())),
+            ("rotary_speed", format!("{}", p.rotary_speed())),
+        ]
+    }
+
+    fn busy_effects() -> EffectsPanel {
+        let mut p = EffectsPanel::default();
+        p.set_fx1(3).unwrap();
+        p.set_fx1_type(9).unwrap();
+        p.set_fx1_rate(101).unwrap();
+        p.set_fx2(2).unwrap();
+        p.set_fx2_type(5).unwrap();
+        p.set_fx2_rate(37).unwrap();
+        p.set_fx3(3).unwrap();
+        p.set_fx3_type(6).unwrap();
+        p.set_fx3_compression(120).unwrap();
+        p.set_fx4(2).unwrap();
+        p.set_fx4_feedback(3).unwrap();
+        p.set_fx4_tempo(64).unwrap();
+        p.set_fx4_moisture(90).unwrap();
+        p.set_fx4_ping_pong(true);
+        p.set_fx5(true);
+        p.set_fx5_type(5).unwrap();
+        p.set_fx5_moisture(0x55).unwrap();
+        p.set_equalizer_on(true);
+        p.set_equalizer_freq(70).unwrap();
+        p.set_equalizer_freq_gain(0x2a).unwrap();
+        p.set_equalizer_bass(33).unwrap();
+        p.set_equalizer_treble(99).unwrap();
+        p.set_rotary_stop(1).unwrap();
+        p.set_rotary_speed(1).unwrap();
+        p
+    }
+
+    /// The panel that holds both cross-word fields. `equalizer_freq_gain` and
+    /// `fx5_moisture` are the ones worth watching: each writes into two backing words,
+    /// so a wrong half would show up as a neighbour moving.
+    #[test]
+    fn every_effects_panel_setter_moves_only_its_own_field() {
+        each_setter_moves_only_its_own_field(
+            busy_effects,
+            effects_snapshot,
+            vec![
+                ("fx1", |p| p.set_fx1(0).unwrap()),
+                ("fx1_type", |p| p.set_fx1_type(2).unwrap()),
+                ("fx1_rate", |p| p.set_fx1_rate(0).unwrap()),
+                ("fx2", |p| p.set_fx2(1).unwrap()),
+                ("fx2_type", |p| p.set_fx2_type(0).unwrap()),
+                ("fx2_rate", |p| p.set_fx2_rate(127).unwrap()),
+                ("fx3", |p| p.set_fx3(1).unwrap()),
+                ("fx3_type", |p| p.set_fx3_type(0).unwrap()),
+                ("fx3_compression", |p| p.set_fx3_compression(0).unwrap()),
+                ("fx4", |p| p.set_fx4(0).unwrap()),
+                ("fx4_feedback", |p| p.set_fx4_feedback(0).unwrap()),
+                ("fx4_tempo", |p| p.set_fx4_tempo(127).unwrap()),
+                ("fx4_moisture", |p| p.set_fx4_moisture(0).unwrap()),
+                ("fx4_ping_pong", |p| p.set_fx4_ping_pong(false)),
+                ("fx5", |p| p.set_fx5(false)),
+                ("fx5_type", |p| p.set_fx5_type(0).unwrap()),
+                ("fx5_moisture", |p| p.set_fx5_moisture(0x2a).unwrap()),
+                ("equalizer_on", |p| p.set_equalizer_on(false)),
+                ("equalizer_freq", |p| p.set_equalizer_freq(0).unwrap()),
+                ("equalizer_freq_gain", |p| {
+                    p.set_equalizer_freq_gain(0x55).unwrap()
+                }),
+                ("equalizer_bass", |p| p.set_equalizer_bass(127).unwrap()),
+                ("equalizer_treble", |p| p.set_equalizer_treble(0).unwrap()),
+                ("rotary_stop", |p| p.set_rotary_stop(0).unwrap()),
+                ("rotary_speed", |p| p.set_rotary_speed(0).unwrap()),
+            ],
+        );
+    }
+
+    /// A cross-word write must land in both words and disturb neither neighbour. The
+    /// halves are unequal — three bits high and four low for the EQ gain, five and two
+    /// for the delay mix — so getting the split backwards is a live failure mode.
+    #[test]
+    fn a_cross_word_field_writes_both_halves() {
+        let mut p = busy_effects();
+
+        // 0b1010101: high 0b101 into settings 2..0, low 0b0101 into settings2 31..28.
+        p.set_equalizer_freq_gain(0b1010101).unwrap();
+        assert_eq!(p.settings & 0b111, 0b101);
+        assert_eq!(p.settings2 >> 28, 0b0101);
+        assert_eq!(p.equalizer_freq_gain(), 0b1010101);
+
+        // 0b1010101: high 0b10101 into settings2 4..0, low 0b01 into settings3 7..6.
+        p.set_fx5_moisture(0b1010101).unwrap();
+        assert_eq!(p.settings2 & 0b11111, 0b10101);
+        assert_eq!(p.settings3 >> 6, 0b01);
+        assert_eq!(p.fx5_moisture(), 0b1010101);
+
+        // Both are seven bits wide, spread over two words; 0x80 fits in neither.
+        assert_eq!(p.set_equalizer_freq_gain(0x80).unwrap_err().width, 7);
+        assert_eq!(p.set_fx5_moisture(0x80).unwrap_err().width, 7);
+    }
+
+    fn extra_snapshot(p: &Extra) -> Vec<(&'static str, String)> {
+        vec![
+            ("fx1_control", format!("{}", p.fx1_control())),
+            ("fx2_deep", format!("{}", p.fx2_deep())),
+            ("equalizer_part", format!("{}", p.equalizer_part())),
+        ]
+    }
+
+    #[test]
+    fn every_extra_setter_moves_only_its_own_field() {
+        each_setter_moves_only_its_own_field(
+            || {
+                let mut p = Extra::default();
+                p.set_fx1_control(true);
+                p.set_fx2_deep(true);
+                p.set_equalizer_part(2).unwrap();
+                p
+            },
+            extra_snapshot,
+            vec![
+                ("fx1_control", |p| p.set_fx1_control(false)),
+                ("fx2_deep", |p| p.set_fx2_deep(false)),
+                ("equalizer_part", |p| p.set_equalizer_part(1).unwrap()),
+            ],
+        );
+    }
+
+    /// The organ panel had no write path at all. These check the round trip through its
+    /// existing byte-array shape, including the two places the format overloads a byte.
+    #[test]
+    fn organ_writes_round_trip_through_their_accessors() {
+        use OrganModel::*;
+
+        let mut organ = OrganPanel::default();
+
+        for model in [B3, Vox, Farfisa, Pipe] {
+            for preset in [1u8, 2] {
+                organ.set_preset(model, preset);
+                assert_eq!(organ.preset(model), preset);
+
+                let bars = [8, 7, 6, 5, 4, 3, 2, 1, 0];
+                organ.set_drawbars(model, preset, bars).unwrap();
+                assert_eq!(organ.drawbars(model, preset), bars);
+
+                organ.set_vib_on(model, preset, true);
+                assert_eq!(organ.vib_on(model, preset), model != Pipe);
+            }
+        }
+
+        // Presets do not alias: writing one must not move the other.
+        organ.set_drawbars(Vox, 1, [1; 9]).unwrap();
+        organ.set_drawbars(Vox, 2, [2; 9]).unwrap();
+        assert_eq!(organ.drawbars(Vox, 1), [1; 9]);
+        assert_eq!(organ.drawbars(Vox, 2), [2; 9]);
+
+        // A drawbar is a physical position 0..=8; two share a byte, so an over-wide
+        // value has to be refused rather than spill into its neighbour.
+        assert!(organ
+            .set_drawbars(B3, 1, [9, 0, 0, 0, 0, 0, 0, 0, 0])
+            .is_err());
+        assert_eq!(
+            organ.drawbars(Vox, 1),
+            [1; 9],
+            "a refused write still wrote"
+        );
+
+        // Farfisa tabs are the >= 5 display transform, written back as 8 / 0.
+        let tabs = [true, false, true, false, true, false, true, false, true];
+        organ.set_farfisa_tabs(2, tabs);
+        assert_eq!(organ.farfisa_tabs(2), tabs);
+    }
+
+    /// `0x51` carries the vib mode, the percussion third and the percussion speed, and
+    /// `0x59` carries vibrato-on, percussion-on and the b3-bass drawbars. Neither may
+    /// leak into the other — the same overlap the read-side tests above guard.
+    #[test]
+    fn organ_writes_do_not_leak_across_the_bytes_they_share() {
+        use OrganModel::*;
+
+        let mut organ = OrganPanel::default();
+        organ.set_vib_type(B3, VibChorus::C3).unwrap();
+        organ.set_b3_perc_third(true);
+        organ.set_b3_perc_speed(PercSpeed::Soft);
+        organ.set_b3_perc_on(1, true);
+        organ.set_vib_on(B3, 1, true);
+        organ.set_b3_bass_drawbars([8, 7]).unwrap();
+
+        assert_eq!(organ.vib_type(B3), Some(VibChorus::C3));
+        assert!(organ.b3_perc_third());
+        assert_eq!(organ.b3_perc_speed(), PercSpeed::Soft);
+        assert!(organ.b3_perc_on(1));
+        assert!(organ.vib_on(B3, 1));
+        assert_eq!(organ.b3_bass_drawbars(), [8, 7]);
+
+        // Rewriting the bass bars must not disturb the flags sharing 0x59, and bar 9 of
+        // the main block lives in that byte's high nibble.
+        organ
+            .set_drawbars(B3, 1, [0, 0, 0, 0, 0, 0, 0, 0, 6])
+            .unwrap();
+        organ.set_b3_bass_drawbars([3, 4]).unwrap();
+        assert_eq!(organ.b3_bass_drawbars(), [3, 4]);
+        assert!(organ.b3_perc_on(1), "the bass write cleared percussion-on");
+        assert!(organ.vib_on(B3, 1), "the bass write cleared vibrato-on");
+        assert_eq!(organ.drawbars(B3, 1)[8], 6, "the bass write moved bar 9");
+    }
+
+    /// A model only offers a subset of the six vib/chorus modes, and Pipe offers none.
+    /// The stored value is an index into that subset, so a mode the model does not have
+    /// cannot be encoded at all — an error, not a silent nearest match.
+    #[test]
+    fn an_unavailable_vibrato_mode_is_refused() {
+        use OrganModel::*;
+
+        let mut organ = OrganPanel::default();
+        assert!(organ.set_vib_type(Vox, VibChorus::V3).is_ok());
+        assert!(organ.set_vib_type(Vox, VibChorus::C1).is_err());
+        assert!(organ.set_vib_type(Farfisa, VibChorus::C2).is_ok());
+        assert!(organ.set_vib_type(Pipe, VibChorus::V1).is_err());
     }
 
     /// A file whose bits do not decode is still refused at read, not at access — the

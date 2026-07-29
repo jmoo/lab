@@ -485,25 +485,25 @@ fn test_ne5_program_read_write_fx() {
                     match fx {
                         1 => {
                             assert_eq!(
-                                program.schema.effects_panel.fx1,
+                                program.schema.effects_panel.fx1(),
                                 part_select + 1,
                                 "fx1 part select mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.extra.fx1_control,
+                                program.schema.extra.fx1_control(),
                                 switch_enabled != 0,
                                 "fx1 control mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx1_rate,
+                                program.schema.effects_panel.fx1_rate(),
                                 ((fx_value / 10_f32) * 127_f32).floor() as u8,
                                 "fx1 rate mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx1_type,
+                                program.schema.effects_panel.fx1_type(),
                                 match fx_type {
                                     0 => 3, // pan 1
                                     1 => 4, // pan 2
@@ -521,25 +521,25 @@ fn test_ne5_program_read_write_fx() {
                         }
                         2 => {
                             assert_eq!(
-                                program.schema.effects_panel.fx2,
+                                program.schema.effects_panel.fx2(),
                                 part_select + 1,
                                 "fx2 part select mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.extra.fx2_deep,
+                                program.schema.extra.fx2_deep(),
                                 switch_enabled != 0,
                                 "fx2 deep mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx2_rate,
+                                program.schema.effects_panel.fx2_rate(),
                                 fx_value.floor() as u8,
                                 "fx2 rate mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx2_type,
+                                program.schema.effects_panel.fx2_type(),
                                 match fx_type {
                                     0 => 2, // flang
                                     1 => 3, // choir1
@@ -555,24 +555,25 @@ fn test_ne5_program_read_write_fx() {
                         }
                         3 => {
                             assert_eq!(
-                                program.schema.effects_panel.fx3,
+                                program.schema.effects_panel.fx3(),
                                 part_select + 1,
                                 "fx3 part select mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx3_compression as f32, fx_value,
+                                program.schema.effects_panel.fx3_compression() as f32,
+                                fx_value,
                                 "fx3 compression mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx3_compression > 0,
+                                program.schema.effects_panel.fx3_compression() > 0,
                                 switch_enabled != 0,
                                 "fx3 drive on mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx3_type,
+                                program.schema.effects_panel.fx3_type(),
                                 match fx_type {
                                     0 => 0, // none
                                     1 => 3, // twin
@@ -588,49 +589,51 @@ fn test_ne5_program_read_write_fx() {
                         }
                         4 => {
                             assert_eq!(
-                                program.schema.effects_panel.fx4,
+                                program.schema.effects_panel.fx4(),
                                 part_select + 1,
                                 "fx4 part select mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx4_ping_pong,
+                                program.schema.effects_panel.fx4_ping_pong(),
                                 switch_enabled != 0,
                                 "fx4 ping pong mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx4_moisture as f32,
+                                program.schema.effects_panel.fx4_moisture() as f32,
                                 ((fx_value / 10_f32) * 127_f32).floor(),
                                 "fx4 moisture mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx4_tempo as f32,
+                                program.schema.effects_panel.fx4_tempo() as f32,
                                 fx_value2.unwrap().floor(),
                                 "fx4 tempo mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx4_feedback, fx_type,
+                                program.schema.effects_panel.fx4_feedback(),
+                                fx_type,
                                 "fx4 type mismatch in file {}",
                                 path
                             );
                         }
                         5 => {
                             assert_eq!(
-                                program.schema.effects_panel.fx5,
+                                program.schema.effects_panel.fx5(),
                                 part_select == 1,
                                 "fx5 part select mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx5_moisture as f32, fx_value,
+                                program.schema.effects_panel.fx5_moisture() as f32,
+                                fx_value,
                                 "fx5 moisture mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx5_type,
+                                program.schema.effects_panel.fx5_type(),
                                 match fx_type {
                                     0 => 2, // stage
                                     1 => 3, // hall-soft
@@ -1193,10 +1196,10 @@ fn test_ne5_program_piano_id() {
 
         let piano = &read_program_checked(&path).schema.piano_panel;
 
-        assert_eq!(piano.category, category, "category in {name}");
-        assert_eq!(piano.acoustics, acoustics, "acoustics in {name}");
-        assert_eq!(piano.mono, mono, "mono in {name}");
-        assert_eq!(piano.touch, touch, "touch in {name}");
+        assert_eq!(piano.category(), category, "category in {name}");
+        assert_eq!(piano.acoustics(), acoustics, "acoustics in {name}");
+        assert_eq!(piano.mono(), mono, "mono in {name}");
+        assert_eq!(piano.touch(), touch, "touch in {name}");
 
         // Clav's model field is a variant code (`0A`, `0d`) rather than a slot
         // number — those two specimens differ only in `clav_model` and both sit
@@ -1204,10 +1207,10 @@ fn test_ne5_program_piano_id() {
         if category != category_of(3) {
             // The panel shows a 1-based model number; the field stores the slot.
             let model = panel_number(&matches[6]) - 1;
-            assert_eq!(piano.piano_model, model, "piano_model in {name}");
+            assert_eq!(piano.piano_model(), model, "piano_model in {name}");
         }
 
-        let slot = (piano.category, piano.piano_model);
+        let slot = (piano.category(), piano.piano_model());
         let (id, piano_name) = golden
             .get(&slot)
             .unwrap_or_else(|| panic!("no golden id for slot {slot:?}, from {name}"));
@@ -1215,7 +1218,8 @@ fn test_ne5_program_piano_id() {
         // The value, not just its stability: this is the number the instrument
         // puts on the wire for "{piano_name}".
         assert_eq!(
-            piano.id, *id,
+            piano.id(),
+            *id,
             "piano id in {name} should reference {piano_name}",
         );
 
@@ -1264,11 +1268,12 @@ fn test_ne5_program_sample_id() {
 
         let sample = &read_program_checked(&path).schema.sample_panel;
 
-        assert_eq!(sample.dynamics, dynamics, "dynamics in {name}");
-        assert_eq!(sample.filter, filter, "filter in {name}");
-        assert_eq!(sample.number, number, "sample number in {name}");
+        assert_eq!(sample.dynamics(), dynamics, "dynamics in {name}");
+        assert_eq!(sample.filter(), filter, "filter in {name}");
+        assert_eq!(sample.number(), number, "sample number in {name}");
         assert_eq!(
-            sample.decay_release, decay_release,
+            sample.decay_release(),
+            decay_release,
             "decay_release in {name}",
         );
 
@@ -1278,7 +1283,7 @@ fn test_ne5_program_sample_id() {
         let id = golden
             .get(&number)
             .unwrap_or_else(|| panic!("no golden id for sample number {number}, from {name}"));
-        assert_eq!(sample.id, *id, "sample id in {name}");
+        assert_eq!(sample.id(), *id, "sample id in {name}");
 
         covered.insert(number);
         checks += 1;
@@ -1336,26 +1341,26 @@ fn test_ne5_backup_dependency_ids() {
         let schema = read_program_checked(&path).schema;
         let (piano, sample) = (&schema.piano_panel, &schema.sample_panel);
 
-        if piano.id != 0 {
-            let slot = (piano.category, piano.piano_model);
+        if piano.id() != 0 {
+            let slot = (piano.category(), piano.piano_model());
 
             // (category, model) and id are two names for the same piano, so the
             // map between them is a bijection across all 624 programs.
             assert_eq!(
-                *slot_of.entry(piano.id).or_insert(slot),
+                *slot_of.entry(piano.id()).or_insert(slot),
                 slot,
                 "piano id {:#010x} spans more than one (category, model) slot, at {name}",
-                piano.id,
+                piano.id(),
             );
             assert_eq!(
-                *id_of.entry(slot).or_insert(piano.id),
-                piano.id,
+                *id_of.entry(slot).or_insert(piano.id()),
+                piano.id(),
                 "slot {slot:?} names more than one piano id, at {name}",
             );
         }
 
-        if sample.id != 0 {
-            sample_ids.insert(sample.id);
+        if sample.id() != 0 {
+            sample_ids.insert(sample.id());
         }
 
         programs += 1;
@@ -1403,21 +1408,123 @@ fn test_ne5_backup_dependency_ids() {
     );
 }
 
-/// Every centre-panel setter writes exactly where its getter reads — checked against
-/// every specimen in the corpus.
+/// Read every field of every panel and write the same value straight back. The file
+/// must come out byte-identical.
 ///
-/// Reading a field and writing the same value straight back must be a no-op on the
-/// backing word. That is a much stronger statement than the byte-exact round-trip
-/// above, which the old code passed while decoding wrong values: the word was kept
-/// verbatim and the decoded fields were `#[bw(ignore)]`, so a mask could disagree with
-/// its shift and nothing noticed. Here the write path actually goes through the field
-/// definitions, so a `Field<T, HI, LO>` whose range is wrong changes bytes and this
-/// fails.
+/// This is the strong check the byte-exact round-trip never was. The old code kept each
+/// backing word verbatim and marked the decoded fields `#[bw(ignore)]`, so a mask could
+/// disagree with its shift and every round-trip test still passed — both shipped
+/// field-offset bugs did exactly that. Here the write path runs through the same
+/// `Field<T, HI, LO>` definitions the read path uses, so a wrong range moves bytes and
+/// this fails.
 ///
-/// It also pins the bits *no* field names — `settings3` 7..0 and `settings2` bit 5 —
-/// which is the property that lets a panel migrate to B+ one field at a time.
+/// It also pins every bit that *no* field names — `PianoPanel` 60..59 and 53..49,
+/// `CenterPanel`'s `settings3` 7..0, and the rest — which is the property that lets a
+/// panel migrate one field at a time.
+fn rewrite_every_field(program: &mut electro5::Program) {
+    {
+        let p = program.center();
+        p.set_left_part(p.left_part().unwrap());
+        p.set_right_part(p.right_part().unwrap());
+        p.set_left_octave_shift(p.left_octave_shift().unwrap());
+        p.set_right_octave_shift(p.right_octave_shift().unwrap());
+        p.set_left_sustain(p.left_sustain());
+        p.set_right_sustain(p.right_sustain());
+        p.set_left_control(p.left_control());
+        p.set_right_control(p.right_control());
+        p.set_split(p.split());
+        p.set_split_point(p.split_point().unwrap());
+        p.set_transpose_enabled(p.transpose_enabled());
+        p.set_transpose(p.transpose().unwrap());
+        p.set_part_mix(p.part_mix().unwrap());
+        p.set_gain(p.gain()).unwrap();
+        p.set_organ_type(p.organ_type()).unwrap();
+        p.set_lower_enabled(p.lower_enabled());
+        p.set_upper_enabled(p.upper_enabled());
+        p.set_drawbar_live(p.drawbar_live());
+    }
+    {
+        let p = &mut program.schema.piano_panel;
+        p.set_category(p.category()).unwrap();
+        p.set_piano_model(p.piano_model()).unwrap();
+        p.set_clav_model(p.clav_model()).unwrap();
+        p.set_acoustics(p.acoustics()).unwrap();
+        p.set_touch(p.touch()).unwrap();
+        p.set_mono(p.mono());
+        p.set_id(p.id());
+    }
+    {
+        let p = &mut program.schema.sample_panel;
+        p.set_attack(p.attack()).unwrap();
+        p.set_decay_release(p.decay_release()).unwrap();
+        p.set_number(p.number());
+        p.set_id(p.id());
+        p.set_dynamics(p.dynamics()).unwrap();
+        p.set_filter(p.filter());
+    }
+    {
+        let p = &mut program.schema.effects_panel;
+        p.set_fx1(p.fx1()).unwrap();
+        p.set_fx1_type(p.fx1_type()).unwrap();
+        p.set_fx1_rate(p.fx1_rate()).unwrap();
+        p.set_fx2(p.fx2()).unwrap();
+        p.set_fx2_type(p.fx2_type()).unwrap();
+        p.set_fx2_rate(p.fx2_rate()).unwrap();
+        p.set_fx3(p.fx3()).unwrap();
+        p.set_fx3_type(p.fx3_type()).unwrap();
+        p.set_fx3_compression(p.fx3_compression()).unwrap();
+        p.set_fx4(p.fx4()).unwrap();
+        p.set_fx4_feedback(p.fx4_feedback()).unwrap();
+        p.set_fx4_tempo(p.fx4_tempo()).unwrap();
+        p.set_fx4_moisture(p.fx4_moisture()).unwrap();
+        p.set_fx4_ping_pong(p.fx4_ping_pong());
+        p.set_fx5(p.fx5());
+        p.set_fx5_type(p.fx5_type()).unwrap();
+        p.set_equalizer_on(p.equalizer_on());
+        p.set_equalizer_freq(p.equalizer_freq()).unwrap();
+        p.set_equalizer_bass(p.equalizer_bass()).unwrap();
+        p.set_equalizer_treble(p.equalizer_treble()).unwrap();
+        // The two cross-word fields.
+        p.set_equalizer_freq_gain(p.equalizer_freq_gain()).unwrap();
+        p.set_fx5_moisture(p.fx5_moisture()).unwrap();
+        p.set_rotary_stop(p.rotary_stop()).unwrap();
+        p.set_rotary_speed(p.rotary_speed()).unwrap();
+    }
+    {
+        let p = &mut program.schema.extra;
+        p.set_fx1_control(p.fx1_control());
+        p.set_fx2_deep(p.fx2_deep());
+        p.set_equalizer_part(p.equalizer_part()).unwrap();
+    }
+    {
+        // The organ panel keeps its byte-array shape, so its writes are exercised
+        // rather than derived from a word. Drawbars are skipped for the b3 preset the
+        // b3-bass mode overloads: in that mode bars 1-2 of preset 1 hold stale
+        // leftovers that `drawbars` reports and `set_drawbars` would normalise, which
+        // is a real (documented) asymmetry, not a bug in the field positions.
+        use electro5::OrganModel::*;
+        let p = &mut program.schema.organ_panel;
+        for model in [B3, Vox, Farfisa, Pipe] {
+            for preset in [1u8, 2] {
+                let preset_was = p.preset(model);
+                p.set_preset(model, preset_was);
+                p.set_vib_on(model, preset, p.vib_on(model, preset));
+                if let Some(vib) = p.vib_type(model) {
+                    p.set_vib_type(model, vib).unwrap();
+                }
+            }
+        }
+        for preset in [1u8, 2] {
+            p.set_b3_perc_on(preset, p.b3_perc_on(preset));
+        }
+        p.set_b3_perc_third(p.b3_perc_third());
+        p.set_b3_perc_speed(p.b3_perc_speed());
+        p.set_b3_bass_drawbars(p.b3_bass_drawbars()).unwrap();
+    }
+}
+
 #[test]
-fn test_ne5_center_panel_setters_write_where_the_getters_read() {
+fn test_ne5_every_panel_setter_writes_where_its_getter_reads() {
     let paths = ne5p_files(&corpus_dir().join("programs"));
     assert!(
         !paths.is_empty(),
@@ -1429,27 +1536,7 @@ fn test_ne5_center_panel_setters_write_where_the_getters_read() {
         let original = read(path).unwrap();
         let mut program = read_program_checked(path);
 
-        {
-            let p = program.center();
-            p.set_left_part(p.left_part().unwrap());
-            p.set_right_part(p.right_part().unwrap());
-            p.set_left_octave_shift(p.left_octave_shift().unwrap());
-            p.set_right_octave_shift(p.right_octave_shift().unwrap());
-            p.set_left_sustain(p.left_sustain());
-            p.set_right_sustain(p.right_sustain());
-            p.set_left_control(p.left_control());
-            p.set_right_control(p.right_control());
-            p.set_split(p.split());
-            p.set_split_point(p.split_point().unwrap());
-            p.set_transpose_enabled(p.transpose_enabled());
-            p.set_transpose(p.transpose().unwrap());
-            p.set_part_mix(p.part_mix().unwrap());
-            p.set_gain(p.gain()).unwrap();
-            p.set_organ_type(p.organ_type()).unwrap();
-            p.set_lower_enabled(p.lower_enabled());
-            p.set_upper_enabled(p.upper_enabled());
-            p.set_drawbar_live(p.drawbar_live());
-        }
+        rewrite_every_field(&mut program);
 
         let mut rewritten: Vec<u8> = Vec::new();
         program.write_to(&mut Cursor::new(&mut rewritten)).unwrap();
@@ -1457,21 +1544,120 @@ fn test_ne5_center_panel_setters_write_where_the_getters_read() {
         assert_eq!(
             original.as_slice(),
             rewritten.as_slice(),
-            "rewriting the centre panel with its own values changed {name}",
+            "rewriting every field with its own value changed {name}",
         );
     }
 }
 
-/// The RFC-0001 acceptance test against real specimens: change one field on a corpus
-/// program, write it, read it back, and see the change — plus see that nothing outside
-/// the centre panel's own bytes moved.
-///
-/// Before the B+ conversion the `settings3` fields (transpose, part mix, gain, organ
-/// selection, the three enables) could not be changed at all: they were decoded from a
-/// word that was written back verbatim, so the mutation vanished and the file came out
-/// byte-identical.
+/// Drawbars specifically: reading nine nibbles and writing them back is a no-op, for
+/// every model and preset. Separated from the sweep above because the b3-bass overload
+/// means preset 1 of B3 can hold values `set_drawbars` will not accept.
 #[test]
-fn test_ne5_a_center_panel_mutation_reaches_the_bytes() {
+fn test_ne5_organ_drawbars_survive_a_rewrite() {
+    use electro5::OrganModel::*;
+
+    for path in ne5p_files(&corpus_dir().join("programs")) {
+        let name = path.display().to_string();
+        let original = read(&path).unwrap();
+        let mut program = read_program_checked(&path);
+
+        let organ = &mut program.schema.organ_panel;
+        for model in [B3, Vox, Farfisa, Pipe] {
+            for preset in [1u8, 2] {
+                let bars = organ.drawbars(model, preset);
+                // Stale nibbles above 8 only occur where b3-bass overloads the slot.
+                if bars.iter().any(|&b| b > 8) {
+                    continue;
+                }
+                organ.set_drawbars(model, preset, bars).unwrap();
+            }
+        }
+
+        let mut rewritten: Vec<u8> = Vec::new();
+        program.write_to(&mut Cursor::new(&mut rewritten)).unwrap();
+        assert_eq!(
+            original.as_slice(),
+            rewritten.as_slice(),
+            "rewriting the drawbars changed {name}",
+        );
+    }
+}
+
+/// The RFC-0001 acceptance test against real specimens, one field per panel: change it,
+/// write, read it back, see the change — and see that nothing outside that panel's own
+/// bytes moved.
+///
+/// Every one of these was silently discarded before the conversion. `PianoPanel`,
+/// `SamplePanel` and `Extra` had no writable field at all, and in `EffectsPanel` the
+/// only ones that landed were those that happened to sit in a word with a `bw(calc)`.
+#[test]
+fn test_ne5_a_mutation_in_every_panel_reaches_the_bytes() {
+    // (name, panel byte span, mutate, read back and assert)
+    type Case = (
+        &'static str,
+        std::ops::RangeInclusive<usize>,
+        fn(&mut electro5::Program),
+        fn(&electro5::Program),
+    );
+
+    let cases: Vec<Case> = vec![
+        (
+            "center_panel.gain",
+            0x2e..=0x34,
+            |p| p.center().set_gain(96).unwrap(),
+            |p| assert_eq!(p.gain(), 96),
+        ),
+        (
+            "piano_panel.touch",
+            0x3a..=0x41,
+            |p| p.schema.piano_panel.set_touch(3).unwrap(),
+            |p| assert_eq!(p.piano().touch(), 3),
+        ),
+        (
+            "sample_panel.number",
+            0x46..=0x4d,
+            |p| p.schema.sample_panel.set_number(211),
+            |p| assert_eq!(p.sample().number(), 211),
+        ),
+        (
+            "organ_panel.b3_perc_third",
+            0x4e..=0x92,
+            |p| p.schema.organ_panel.set_b3_perc_third(true),
+            |p| assert!(p.organ().b3_perc_third()),
+        ),
+        (
+            "effects_panel.fx3_compression",
+            0x93..=0x9f,
+            |p| p.schema.effects_panel.set_fx3_compression(101).unwrap(),
+            |p| assert_eq!(p.fx_panel().fx3_compression(), 101),
+        ),
+        (
+            // A cross-word field: three bits in 0x9a, four in 0x9b.
+            "effects_panel.equalizer_freq_gain",
+            0x93..=0x9f,
+            |p| {
+                p.schema
+                    .effects_panel
+                    .set_equalizer_freq_gain(0x55)
+                    .unwrap()
+            },
+            |p| assert_eq!(p.fx_panel().equalizer_freq_gain(), 0x55),
+        ),
+        (
+            // The other one: five bits in 0x9e, two in 0x9f.
+            "effects_panel.fx5_moisture",
+            0x93..=0x9f,
+            |p| p.schema.effects_panel.set_fx5_moisture(0x2a).unwrap(),
+            |p| assert_eq!(p.fx_panel().fx5_moisture(), 0x2a),
+        ),
+        (
+            "extra.equalizer_part",
+            0xa1..=0xa4,
+            |p| p.schema.extra.set_equalizer_part(2).unwrap(),
+            |p| assert_eq!(p.extra().equalizer_part(), 2),
+        ),
+    ];
+
     let paths = ne5p_files(&corpus_dir().join("programs"));
     assert!(
         !paths.is_empty(),
@@ -1481,54 +1667,29 @@ fn test_ne5_a_center_panel_mutation_reaches_the_bytes() {
     for path in &paths {
         let name = path.display().to_string();
         let original = read(path).unwrap();
-        let mut program = read_program_checked(path);
 
-        // Pick values that differ from whatever the specimen holds, one per backing
-        // word, so all three are exercised on every file.
-        let gain = if program.center().gain() == 0 { 96 } else { 0 };
-        let sustain = !program.center().left_sustain();
-        let split = !program.center().split();
+        for (field, span, mutate, check) in &cases {
+            let mut program = read_program_checked(path);
+            mutate(&mut program);
 
-        program.center().set_gain(gain).unwrap();
-        program.center().set_left_sustain(sustain);
-        program.center().set_split(split);
+            let mut mutated: Vec<u8> = Vec::new();
+            program.write_to(&mut Cursor::new(&mut mutated)).unwrap();
 
-        let mut mutated: Vec<u8> = Vec::new();
-        program.write_to(&mut Cursor::new(&mut mutated)).unwrap();
-        assert_ne!(
-            original, mutated,
-            "the mutation never reached the bytes: {name}"
-        );
+            // Only the panel's own bytes and the body CRC (0x18..=0x1b) may move.
+            for (at, (before, after)) in original.iter().zip(&mutated).enumerate() {
+                let allowed = span.contains(&at) || (0x18..=0x1b).contains(&at);
+                assert!(
+                    allowed || before == after,
+                    "setting {field} changed byte {at:#04x} of {name}",
+                );
+            }
 
-        // Only the centre panel (0x2e..=0x34) and the body CRC (0x18..=0x1b) may move.
-        for (at, (before, after)) in original.iter().zip(&mutated).enumerate() {
-            let allowed = (0x2e..=0x34).contains(&at) || (0x18..=0x1b).contains(&at);
-            assert!(
-                allowed || before == after,
-                "mutating the centre panel changed byte {at:#04x} of {name}",
-            );
+            let Entity::Program(nord_format::Program::Electro5(reread)) =
+                nord_format::from_stream(&mut Cursor::new(&mut mutated)).unwrap()
+            else {
+                panic!("expected an electro5 program in {name}")
+            };
+            check(&reread);
         }
-
-        let Entity::Program(nord_format::Program::Electro5(reread)) =
-            nord_format::from_stream(&mut Cursor::new(&mut mutated)).unwrap()
-        else {
-            panic!("expected an electro5 program in {name}")
-        };
-
-        assert_eq!(
-            reread.gain(),
-            gain,
-            "gain did not survive the write: {name}"
-        );
-        assert_eq!(
-            reread.lower_sustain(),
-            sustain,
-            "sustain did not survive the write: {name}",
-        );
-        assert_eq!(
-            reread.split(),
-            split,
-            "split did not survive the write: {name}"
-        );
     }
 }

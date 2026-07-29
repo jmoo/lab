@@ -520,25 +520,25 @@ pub(crate) fn print_summary(entity: &Entity) {
             let (piano, sample) = (p.piano(), p.sample());
             println!(
                 "  piano:     category {}  model {}  clav {}  acoustics {}  touch {}  mono {}",
-                piano.category,
-                piano.piano_model,
-                piano.clav_model,
-                piano.acoustics,
-                piano.touch,
-                yn(piano.mono),
+                piano.category(),
+                piano.piano_model(),
+                piano.clav_model(),
+                piano.acoustics(),
+                piano.touch(),
+                yn(piano.mono()),
             );
             println!(
                 "  sample:    number {}  attack {}  decay/rel {}  dynamics {}  filter {}",
-                sample.number, sample.attack, sample.decay_release, sample.dynamics,
-                yn(sample.filter),
+                sample.number(), sample.attack(), sample.decay_release(), sample.dynamics(),
+                yn(sample.filter()),
             );
             // The two library references. `nord device deps` reports these same ids
             // for this program with the piano's and sample's *names* attached — the
             // file itself stores only the id, so that is the only way to resolve them.
             println!(
                 "  depends:   piano {}  sample {}",
-                dep_id(piano.id),
-                dep_id(sample.id),
+                dep_id(piano.id()),
+                dep_id(sample.id()),
             );
 
             // Effects. Values are printed as stored (0..127); the panel shows most of
@@ -547,39 +547,39 @@ pub(crate) fn print_summary(entity: &Entity) {
             let fx = p.fx_panel();
             let extra = p.extra();
             println!("  fx:        stored value, with the panel's 0-10 reading where it applies");
-            match routed(fx.fx1) {
+            match routed(fx.fx1()) {
                 Some(part) => println!(
                     "    fx1   {part:<5}  {:<9}  rate {}  control {}",
-                    fx_type(&FX1_TYPES, fx.fx1_type),
-                    knob(fx.fx1_rate),
-                    yn(extra.fx1_control),
+                    fx_type(&FX1_TYPES, fx.fx1_type()),
+                    knob(fx.fx1_rate()),
+                    yn(extra.fx1_control()),
                 ),
                 None => println!("    fx1   off"),
             }
-            match routed(fx.fx2) {
+            match routed(fx.fx2()) {
                 Some(part) => println!(
                     "    fx2   {part:<5}  {:<9}  rate {}  deep {}",
-                    fx_type(&FX2_TYPES, fx.fx2_type),
-                    fx.fx2_rate,
-                    yn(extra.fx2_deep),
+                    fx_type(&FX2_TYPES, fx.fx2_type()),
+                    fx.fx2_rate(),
+                    yn(extra.fx2_deep()),
                 ),
                 None => println!("    fx2   off"),
             }
-            match routed(fx.fx3) {
+            match routed(fx.fx3()) {
                 Some(part) => println!(
                     "    fx3   {part:<5}  {:<9}  compression {}",
-                    fx_type(&FX3_TYPES, fx.fx3_type),
-                    knob(fx.fx3_compression),
+                    fx_type(&FX3_TYPES, fx.fx3_type()),
+                    knob(fx.fx3_compression()),
                 ),
                 None => println!("    fx3   off"),
             }
-            match routed(fx.fx4) {
+            match routed(fx.fx4()) {
                 Some(part) => println!(
                     "    delay {part:<5}  feedback {}  tempo {}  wet {}  ping-pong {}",
-                    fx.fx4_feedback,
-                    fx.fx4_tempo,
-                    knob(fx.fx4_moisture),
-                    yn(fx.fx4_ping_pong),
+                    fx.fx4_feedback(),
+                    fx.fx4_tempo(),
+                    knob(fx.fx4_moisture()),
+                    yn(fx.fx4_ping_pong()),
                 ),
                 None => println!("    delay off"),
             }
@@ -588,11 +588,11 @@ pub(crate) fn print_summary(entity: &Entity) {
             // *disabled* reverb whose type and wet level were then varied — which would
             // be pointless. Rendered as on/off accordingly; worth one confirmation
             // against the panel.
-            if fx.fx5 {
+            if fx.fx5() {
                 println!(
                     "    reverb {:<9}  wet {}",
-                    fx_type(&FX5_TYPES, fx.fx5_type),
-                    knob(fx.fx5_moisture),
+                    fx_type(&FX5_TYPES, fx.fx5_type()),
+                    knob(fx.fx5_moisture()),
                 );
             } else {
                 println!("    reverb off");
@@ -600,10 +600,10 @@ pub(crate) fn print_summary(entity: &Entity) {
             // The EQ enable and its routing live in different words: the enable is a
             // bit at 0x98, the lower/upper/both choice is at 0xa1. `0` for the routing
             // means *lower*, not off, so the enable has to be checked first.
-            if fx.equalizer_on {
+            if fx.equalizer_on() {
                 // Every observed program uses 0, 1 or 2; name the raw value rather
                 // than guessing a label if the instrument ever produces another.
-                let part = match extra.equalizer_part {
+                let part = match extra.equalizer_part() {
                     0 => "lower".to_string(),
                     1 => "upper".to_string(),
                     2 => "lower+upper".to_string(),
@@ -611,18 +611,18 @@ pub(crate) fn print_summary(entity: &Entity) {
                 };
                 println!(
                     "    eq    {part:<11}  bass {}  freq {}  gain {}  treble {}",
-                    fx.equalizer_bass,
-                    fx.equalizer_freq,
-                    fx.equalizer_freq_gain,
-                    fx.equalizer_treble,
+                    fx.equalizer_bass(),
+                    fx.equalizer_freq(),
+                    fx.equalizer_freq_gain(),
+                    fx.equalizer_treble(),
                 );
             } else {
                 println!("    eq    off");
             }
             println!(
                 "    rotary speed {}  stop {}",
-                if fx.rotary_speed == 0 { "slow" } else { "fast" },
-                if fx.rotary_stop == 0 { "off" } else { "on" },
+                if fx.rotary_speed() == 0 { "slow" } else { "fast" },
+                if fx.rotary_stop() == 0 { "off" } else { "on" },
             );
 
             // Organ. Both presets are shown for every model: the file keeps the full
