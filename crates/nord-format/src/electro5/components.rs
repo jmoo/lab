@@ -20,10 +20,10 @@
 //!
 //! The tempting alternative is to refuse a value we cannot name, on the same reasoning as
 //! [`crate::error::ParseError::UnsupportedVersion`]: better to fail than to decode a guess
-//! and write it back. That reasoning does not carry over, and the corpus says so
-//! plainly — **604 of 617 programs** hold an effect routing of `0`, a value with no
-//! recovered meaning. A decoder that refused the unrecognised would reject 98% of the
-//! only evidence we have.
+//! and write it back. That reasoning does not carry over, and the corpus puts a number on
+//! it — **66 of 617 programs** hold an effect routing of `1`, a value with no recovered
+//! meaning and one the panel cannot produce. A decoder that refused the unrecognised would
+//! reject one program in nine.
 //!
 //! The difference is what refusal protects against. An unknown *schema version* means
 //! every field offset is suspect, so nothing can be trusted. An unknown *value in a known
@@ -36,7 +36,8 @@
 //! corpus sweep can *report* unrecognised values instead of hiding them. That turns a
 //! reverse-engineering gap into a work item. Silently coercing it to the nearest known
 //! label is the one option that is actually unsafe, and it is what the pre-component code
-//! did: an effect routing of `0` and one of `1` both printed `off`.
+//! did: an effect routing of `0` and one of `1` both printed `off`, which is how `1` went
+//! unnoticed until the components separated them.
 
 use std::fmt::{self, Debug, Display, Formatter};
 
@@ -120,35 +121,55 @@ impl PartialEq<u8> for Level {
 
 /// Which part an effect is routed to.
 ///
-/// Stored **one higher than the panel position**: the `programs/fx` specimens are named
-/// `fx1_1xx` for lower and `fx1_2xx` for upper, and they decode to 2 and 3.
+/// Stored values were established two ways: the `programs/fx` specimens are named
+/// `fx1_1xx` for lower and `fx1_2xx` for upper and decode to 2 and 3, and **`0` was
+/// measured against the instrument on 2026-07-29** — program 1-3 had fx2 on lower, the
+/// panel selector was turned to off and the program stored, and exactly one body byte
+/// moved: `0x94`, the fx2 field, 2 → 0.
 ///
-/// [`Unset`](Self::Unset) is the fourth two-bit state, and it is the common one — 604 of
-/// 617 corpus programs carry it on at least one effect. Its meaning has not been
-/// recovered; no specimen was ever captured with the panel's *off* position, so whether
-/// `0` and `1` differ audibly is an open question. It is named rather than folded into
-/// `Off` so that the two stay distinguishable, because the pre-component code printed
-/// both as `off` and lost the distinction.
+/// | stored | state |
+/// |---|---|
+/// | 0 | off |
+/// | 1 | [`Unknown`](Self::Unknown) — see below |
+/// | 2 | lower |
+/// | 3 | upper |
 ///
-/// Total: two bits, four states, no `Unknown` needed.
+/// That measurement retired an earlier "stored is one higher than the panel position"
+/// reading, under which `0` would have been unreachable and `1` would have been off. It
+/// is the other way round.
+///
+/// [`Unknown`](Self::Unknown) is stored `1`, and it is a different kind of unknown from
+/// the one the sparse enumerations carry. Those mean *no specimen has ever produced
+/// this*; this one is **present in 89 selectors across 66 of the 617 corpus programs**
+/// and still unexplained. It is not reachable from the fx selector — the panel offers
+/// off/lower/upper and nothing else, confirmed at the instrument.
+///
+/// A plausible mechanism: [`EqualizerPart`] keeps its on/off in a *separate* bit, so all
+/// four of its values are spent on lower/upper/both, while this field spends one on off
+/// and sits two above it — leaving no room for a "both" that would need `4`. Whatever
+/// `1` is, it is likely a default written by something other than the panel. Worth a
+/// capture campaign, not a guess.
+///
+/// Total: two bits, four states, so decoding cannot fail.
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Routing {
-    /// Stored `0`. Meaning not recovered; see the type docs.
+    /// Stored `0`. What the panel's *off* position writes.
     #[default]
-    Unset,
-    /// Stored `1` — the panel's *off*.
-    Off,
+    Off = 0,
+    /// Stored `1`. Occurs in real programs but has no recovered meaning, and cannot be
+    /// produced from the fx selector. See the type docs.
+    Unknown = 1,
     /// Stored `2`.
-    Lower,
+    Lower = 2,
     /// Stored `3`.
-    Upper,
+    Upper = 3,
 }
 
 impl Routing {
-    /// The routing selected by the panel's own numbering — `0` off, `1` lower, `2`
-    /// upper — which is what the `programs/fx` specimen filenames record. The stored
-    /// value is one higher; keeping that relationship here means a caller never has to
-    /// remember which numbering it is holding.
+    /// The routing selected by the panel's own numbering — `0` off, `1` lower, `2` upper
+    /// — which is what the `programs/fx` specimen filenames record. Note the stored
+    /// encoding is *not* this numbering shifted: off is `0` in both, but lower and upper
+    /// are `2` and `3`.
     pub fn from_panel(position: u8) -> Option<Routing> {
         match position {
             0 => Some(Routing::Off),
@@ -163,8 +184,15 @@ impl Routing {
         match self {
             Routing::Lower => Some("lower"),
             Routing::Upper => Some("upper"),
-            Routing::Unset | Routing::Off => None,
+            Routing::Off | Routing::Unknown => None,
         }
+    }
+
+    /// Whether this is the value with no recovered meaning. Unlike the sparse
+    /// enumerations, this one *is* expected in the corpus, so it is reported rather than
+    /// asserted against.
+    pub fn is_unknown(&self) -> bool {
+        matches!(self, Routing::Unknown)
     }
 }
 
@@ -174,8 +202,8 @@ impl Packed for Routing {
 
     fn from_bits(bits: u64) -> Result<Self, Self::Error> {
         Ok(match bits & 0b11 {
-            0 => Routing::Unset,
-            1 => Routing::Off,
+            0 => Routing::Off,
+            1 => Routing::Unknown,
             2 => Routing::Lower,
             _ => Routing::Upper,
         })
@@ -187,10 +215,15 @@ impl Packed for Routing {
 }
 
 impl Display for Routing {
+    /// Renders the unexplained state as such rather than as `off`. Collapsing the two is
+    /// exactly the silent coercion this module exists to avoid — the pre-component code
+    /// printed both `0` and `1` as `off`, which is how `1` stayed invisible for so long.
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self.part() {
-            Some(part) => f.write_str(part),
-            None => f.write_str("off"),
+        match self {
+            Routing::Off => f.write_str("off"),
+            Routing::Unknown => f.write_str("unknown (1)"),
+            Routing::Lower => f.write_str("lower"),
+            Routing::Upper => f.write_str("upper"),
         }
     }
 }
@@ -428,12 +461,12 @@ mod tests {
         }
     }
 
-    /// `Routing` is total over its two bits, so every state has a name — including the
-    /// one whose meaning is still open.
+    /// `Routing` is total over its two bits, and the stored values are the ones measured
+    /// at the instrument rather than inferred from the specimen naming.
     #[test]
-    fn routing_is_total() {
-        assert_eq!(Routing::from_bits(0).unwrap(), Routing::Unset);
-        assert_eq!(Routing::from_bits(1).unwrap(), Routing::Off);
+    fn routing_matches_what_the_instrument_stores() {
+        assert_eq!(Routing::from_bits(0).unwrap(), Routing::Off);
+        assert_eq!(Routing::from_bits(1).unwrap(), Routing::Unknown);
         assert_eq!(Routing::from_bits(2).unwrap(), Routing::Lower);
         assert_eq!(Routing::from_bits(3).unwrap(), Routing::Upper);
 
@@ -441,10 +474,21 @@ mod tests {
             assert_eq!(Routing::from_bits(bits).unwrap().to_bits(), bits);
         }
 
-        // Unset and Off both read as "not routed", but they are different bytes and the
-        // type keeps them apart.
-        assert_eq!(Routing::Unset.part(), None);
-        assert_eq!(Routing::Off.part(), None);
-        assert_ne!(Routing::Unset, Routing::Off);
+        // The panel's numbering is not the stored encoding shifted: off agrees at 0, but
+        // the two engaged positions land on 2 and 3.
+        assert_eq!(Routing::from_panel(0), Some(Routing::Off));
+        assert_eq!(Routing::from_panel(1), Some(Routing::Lower));
+        assert_eq!(Routing::from_panel(2), Some(Routing::Upper));
+        assert_eq!(Routing::from_panel(3), None);
+        assert_eq!(Routing::Lower.to_bits(), 2);
+        assert_eq!(Routing::Upper.to_bits(), 3);
+
+        // The unexplained state must not render as `off` — collapsing them is how it
+        // stayed invisible.
+        assert_eq!(Routing::Off.to_string(), "off");
+        assert_eq!(Routing::Unknown.to_string(), "unknown (1)");
+        assert!(Routing::Unknown.is_unknown());
+        assert!(!Routing::Off.is_unknown());
+        assert_eq!(Routing::Unknown.part(), None);
     }
 }

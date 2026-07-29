@@ -544,7 +544,7 @@ pub(crate) fn print_summary(entity: &Entity) {
                     fx.fx1_rate,
                     yn(extra.fx1_control),
                 ),
-                None => println!("    fx1   off"),
+                None => println!("    fx1   {}", fx.fx1),
             }
             match fx.fx2.part() {
                 Some(part) => println!(
@@ -553,14 +553,14 @@ pub(crate) fn print_summary(entity: &Entity) {
                     fx.fx2_rate.as_u8(),
                     yn(extra.fx2_deep),
                 ),
-                None => println!("    fx2   off"),
+                None => println!("    fx2   {}", fx.fx2),
             }
             match fx.fx3.part() {
                 Some(part) => println!(
                     "    fx3   {part:<5}  {:<9}  compression {}",
                     fx.fx3_type, fx.fx3_compression,
                 ),
-                None => println!("    fx3   off"),
+                None => println!("    fx3   {}", fx.fx3),
             }
             match fx.fx4.part() {
                 Some(part) => println!(
@@ -570,7 +570,7 @@ pub(crate) fn print_summary(entity: &Entity) {
                     fx.fx4_moisture,
                     yn(fx.fx4_ping_pong),
                 ),
-                None => println!("    delay off"),
+                None => println!("    delay {}", fx.fx4),
             }
             // ⚠️ The reverb enable bit reads `true` in every `fx5_1xx` specimen, and the
             // corpus README's "0: on, 1: off" would make all of them captures of a
