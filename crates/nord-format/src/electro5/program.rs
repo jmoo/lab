@@ -65,6 +65,20 @@ type UpperEnabled = Field<bool, 9, 9>;
 type DrawbarLive = Field<bool, 8, 8>;
 
 #[binrw]
+// Validation belongs to the *read*, not to a step the caller has to remember. The fields
+// this panel decodes fallibly used to be `binrw` `try_calc`, so a file with an impossible
+// value failed to parse; deferring the decode to the accessors would have moved that check
+// to access time and left `Schema::read_be` — public API — handing back a panel that cannot
+// be read. Asserting here keeps the old contract for every path that turns bytes into a
+// `CenterPanel`, not just the one that goes through [`Program::read_from`].
+//
+// `validate` runs a second time only to build the message, which `binrw` evaluates on the
+// failure path alone.
+#[br(assert(
+    CenterPanel { settings, settings2, settings3 }.validate().is_ok(),
+    "{}",
+    CenterPanel { settings, settings2, settings3 }.validate().unwrap_err(),
+))]
 pub struct CenterPanel {
     // 0x2e..0x2f                 0x2e     0x2f
     #[brw(big)]
@@ -1460,14 +1474,6 @@ impl Program {
             ));
         }
 
-        // Panels holding a private backing word decode on demand rather than at read,
-        // so their range checks are made here instead — same contract as the `try_calc`
-        // fields they replaced: a file with an impossible value fails the read.
-        schema
-            .center_panel
-            .validate()
-            .map_err(|e| io::Error::other(e.to_string()))?;
-
         Ok(Program {
             location: schema.header.location,
             name: None,
@@ -2382,6 +2388,38 @@ mod tests {
         assert!(organ.set_vib_type(Vox, VibChorus::C1).is_err());
         assert!(organ.set_vib_type(Farfisa, VibChorus::C2).is_ok());
         assert!(organ.set_vib_type(Pipe, VibChorus::V1).is_err());
+    }
+
+    /// Validation is part of `BinRead`, not a step a caller has to remember.
+    ///
+    /// `Schema` is public and derives `BinRead`, so `Schema::read_be` is a decode path
+    /// that never touches [`Program::read_from`]. Under the old `try_calc` style it
+    /// validated for free, because the check *was* the read. Moving the decode into the
+    /// accessors put that at risk: for a while this back door handed back a panel whose
+    /// `left_part` could not be read, and only the front door refused it.
+    #[test]
+    fn no_decode_path_can_skip_validation() {
+        use binrw::BinRead;
+        use std::io::Cursor;
+
+        let mut program = Program::new((0, 0).try_into().unwrap());
+        // 0b111 is not an `Instrument`, and no setter can produce it.
+        program.schema.center_panel.settings |= 0b1110_0000_0000_0000;
+        let mut bytes = Vec::new();
+        program.write_to(&mut Cursor::new(&mut bytes)).unwrap();
+
+        assert!(
+            Program::read_from(&mut Cursor::new(&mut bytes)).is_err(),
+            "the front door accepted an undecodable panel",
+        );
+        assert!(
+            Schema::read_be(&mut Cursor::new(&mut bytes)).is_err(),
+            "`Schema::read_be` accepted an undecodable panel — validation is not in the read",
+        );
+        assert!(
+            CenterPanel::read_be(&mut Cursor::new(&bytes[0x2e..0x35])).is_err(),
+            "`CenterPanel::read_be` accepted an undecodable panel",
+        );
     }
 
     /// A file whose bits do not decode is still refused at read, not at access — the
