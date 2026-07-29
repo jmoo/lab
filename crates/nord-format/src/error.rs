@@ -39,6 +39,16 @@ pub enum ParseError {
     },
 }
 
+/// A decode that cannot fail still has to satisfy `?` when it sits alongside ones that
+/// can — a component whose every bit pattern is meaningful (a knob position, a total
+/// enumeration) has `Error = Infallible`, and this is the conversion that lets the two
+/// kinds share one decode path.
+impl From<std::convert::Infallible> for ParseError {
+    fn from(never: std::convert::Infallible) -> Self {
+        match never {}
+    }
+}
+
 #[derive(ThisError, Debug)]
 pub enum Error {
     #[error("{0}")]

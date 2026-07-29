@@ -109,6 +109,106 @@ impl<const OFFSET: u8, const MIN: i8, const MAX: i8> PartialEq<i32> for RangedI8
     }
 }
 
+/// An unsigned value constrained to `0..=MAX`.
+///
+/// The counterpart to [`RangedI8`] for the fields that are still just integers — knob
+/// positions, model slots, effect selectors. It exists so a packed field's *slot* can be
+/// expressed in the field's *type*: `RangedU8<127>` occupies seven bits, so
+/// [`crate::bits::Field`] can prove at compile time that it fits a seven-bit slot, and no
+/// value that would overrun the slot can be constructed in the first place.
+///
+/// That is what makes an encode infallible. Holding these as raw `u8` meant a legal
+/// assignment (`panel.gain = 200`) could only be caught when the bytes were written —
+/// mid-stream, with a partial file already emitted. Here the same mistake is refused at
+/// the point of construction, and writing cannot fail at all.
+///
+/// `MAX` is what the *slot* holds, not what the instrument uses. Tightening it to the
+/// domain (organ type is `0..=4`, not `0..=7`) would reject files this decoder currently
+/// accepts, so it needs evidence rather than inference — see the note in
+/// [[RFC-0001]]-adjacent discussion. Slot-width bounds introduce no such risk.
+#[derive(Copy, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RangedU8<const MAX: u8> {
+    inner: u8,
+}
+
+impl<const MAX: u8> RangedU8<MAX> {
+    /// The largest value this type can hold.
+    pub const MAX: u8 = MAX;
+
+    pub fn new(value: u8) -> Result<Self, ParseError> {
+        value.try_into()
+    }
+
+    pub fn as_u8(&self) -> u8 {
+        self.inner
+    }
+
+    pub fn inner(&self) -> u8 {
+        self.inner
+    }
+}
+
+impl<const MAX: u8> Packed for RangedU8<MAX> {
+    const MAX_BITS: u32 = bits_for(MAX as u64);
+    type Error = ParseError;
+
+    fn from_bits(bits: u64) -> Result<Self, ParseError> {
+        (bits as u8).try_into()
+    }
+
+    fn to_bits(&self) -> u64 {
+        self.inner as u64
+    }
+}
+
+impl<const MAX: u8> TryFrom<u8> for RangedU8<MAX> {
+    type Error = ParseError;
+
+    fn try_from(value: u8) -> Result<Self, ParseError> {
+        if value > MAX {
+            return Err(ParseError::OutOfBounds(
+                format!("{value}"),
+                format!("{MAX}"),
+            ));
+        }
+        Ok(RangedU8 { inner: value })
+    }
+}
+
+impl<const MAX: u8> TryFrom<u16> for RangedU8<MAX> {
+    type Error = ParseError;
+
+    fn try_from(value: u16) -> Result<Self, ParseError> {
+        u8::try_from(value)
+            .map_err(|_| ParseError::OutOfBounds(format!("{value}"), format!("{MAX}")))?
+            .try_into()
+    }
+}
+
+impl<const MAX: u8> From<RangedU8<MAX>> for u8 {
+    fn from(value: RangedU8<MAX>) -> u8 {
+        value.inner
+    }
+}
+
+impl<const MAX: u8> Debug for RangedU8<MAX> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl<const MAX: u8> std::fmt::Display for RangedU8<MAX> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl<const MAX: u8> PartialEq<u8> for RangedU8<MAX> {
+    fn eq(&self, other: &u8) -> bool {
+        self.inner == *other
+    }
+}
+
 /// A pair of u16 values that are guaranteed to be within a given range.
 #[derive(Clone, Default, Copy, PartialEq, Eq, Hash)]
 pub struct RangedU16Pair<const X_MAX: u16, const Y_MAX: u16> {

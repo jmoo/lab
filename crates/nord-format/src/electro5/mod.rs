@@ -1,3 +1,7 @@
+pub mod components;
+pub use components::{
+    EqualizerPart, Fx1Type, Fx2Type, Fx3Type, Fx5Type, Level, OrganType, PianoCategory, Routing,
+};
 pub mod live;
 pub mod settings;
 pub use settings::Settings;

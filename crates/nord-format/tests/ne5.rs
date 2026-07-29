@@ -16,7 +16,10 @@
 //! test case — see `Projects/Nord Utils.md`.
 
 use nord_format::common::bank::Item;
-use nord_format::electro5::{Instrument, SplitPoint};
+use nord_format::electro5::{
+    EqualizerPart, Fx1Type, Fx2Type, Fx3Type, Fx5Type, Instrument, OrganType, PianoCategory,
+    Routing, SplitPoint,
+};
 use nord_format::{electro5, Entity};
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
@@ -486,7 +489,8 @@ fn test_ne5_program_read_write_fx() {
                         1 => {
                             assert_eq!(
                                 program.schema.effects_panel.fx1,
-                                part_select + 1,
+                                Routing::from_panel(part_select)
+                                    .unwrap_or_else(|| panic!("bad part select in {path}")),
                                 "fx1 part select mismatch in file {}",
                                 path
                             );
@@ -505,14 +509,14 @@ fn test_ne5_program_read_write_fx() {
                             assert_eq!(
                                 program.schema.effects_panel.fx1_type,
                                 match fx_type {
-                                    0 => 3, // pan 1
-                                    1 => 4, // pan 2
-                                    2 => 5, // pan 1&2
-                                    3 => 6, // wah
-                                    4 => 7, // rm
-                                    5 => 0, // trem 1
-                                    6 => 1, // trem 2
-                                    7 => 2, // trem 1&2
+                                    0 => Fx1Type::Pan1,
+                                    1 => Fx1Type::Pan2,
+                                    2 => Fx1Type::Pan1And2,
+                                    3 => Fx1Type::Wah,
+                                    4 => Fx1Type::Rm,
+                                    5 => Fx1Type::Trem1,
+                                    6 => Fx1Type::Trem2,
+                                    7 => Fx1Type::Trem1And2,
                                     a => panic!("unknown fx1 type {} in file {}", a, path),
                                 },
                                 "fx1 type mismatch in file {}",
@@ -522,7 +526,8 @@ fn test_ne5_program_read_write_fx() {
                         2 => {
                             assert_eq!(
                                 program.schema.effects_panel.fx2,
-                                part_select + 1,
+                                Routing::from_panel(part_select)
+                                    .unwrap_or_else(|| panic!("bad part select in {path}")),
                                 "fx2 part select mismatch in file {}",
                                 path
                             );
@@ -541,12 +546,12 @@ fn test_ne5_program_read_write_fx() {
                             assert_eq!(
                                 program.schema.effects_panel.fx2_type,
                                 match fx_type {
-                                    0 => 2, // flang
-                                    1 => 3, // choir1
-                                    2 => 4, // choir2
-                                    3 => 5, // vibe
-                                    4 => 0, // phas1
-                                    5 => 1, // phas2
+                                    0 => Fx2Type::Flanger,
+                                    1 => Fx2Type::Chorus1,
+                                    2 => Fx2Type::Chorus2,
+                                    3 => Fx2Type::Vibe,
+                                    4 => Fx2Type::Phaser1,
+                                    5 => Fx2Type::Phaser2,
                                     a => panic!("unknown fx2 type {} in file {}", a, path),
                                 },
                                 "fx2 type mismatch in file {}",
@@ -556,17 +561,19 @@ fn test_ne5_program_read_write_fx() {
                         3 => {
                             assert_eq!(
                                 program.schema.effects_panel.fx3,
-                                part_select + 1,
+                                Routing::from_panel(part_select)
+                                    .unwrap_or_else(|| panic!("bad part select in {path}")),
                                 "fx3 part select mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx3_compression as f32, fx_value,
+                                program.schema.effects_panel.fx3_compression.as_u8() as f32,
+                                fx_value,
                                 "fx3 compression mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx3_compression > 0,
+                                program.schema.effects_panel.fx3_compression.as_u8() > 0,
                                 switch_enabled != 0,
                                 "fx3 drive on mismatch in file {}",
                                 path
@@ -574,12 +581,12 @@ fn test_ne5_program_read_write_fx() {
                             assert_eq!(
                                 program.schema.effects_panel.fx3_type,
                                 match fx_type {
-                                    0 => 0, // none
-                                    1 => 3, // twin
-                                    2 => 4, // rotary
-                                    3 => 5, // comp
-                                    4 => 1, // small
-                                    5 => 2, // jc
+                                    0 => Fx3Type::None_,
+                                    1 => Fx3Type::Twin,
+                                    2 => Fx3Type::Rotary,
+                                    3 => Fx3Type::Comp,
+                                    4 => Fx3Type::Small,
+                                    5 => Fx3Type::Jc,
                                     a => panic!("unknown fx3 type {} in file {}", a, path),
                                 },
                                 "fx3 type mismatch in file {}",
@@ -589,7 +596,8 @@ fn test_ne5_program_read_write_fx() {
                         4 => {
                             assert_eq!(
                                 program.schema.effects_panel.fx4,
-                                part_select + 1,
+                                Routing::from_panel(part_select)
+                                    .unwrap_or_else(|| panic!("bad part select in {path}")),
                                 "fx4 part select mismatch in file {}",
                                 path
                             );
@@ -600,13 +608,13 @@ fn test_ne5_program_read_write_fx() {
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx4_moisture as f32,
+                                program.schema.effects_panel.fx4_moisture.as_u8() as f32,
                                 ((fx_value / 10_f32) * 127_f32).floor(),
                                 "fx4 moisture mismatch in file {}",
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx4_tempo as f32,
+                                program.schema.effects_panel.fx4_tempo.as_u8() as f32,
                                 fx_value2.unwrap().floor(),
                                 "fx4 tempo mismatch in file {}",
                                 path
@@ -625,18 +633,19 @@ fn test_ne5_program_read_write_fx() {
                                 path
                             );
                             assert_eq!(
-                                program.schema.effects_panel.fx5_moisture as f32, fx_value,
+                                program.schema.effects_panel.fx5_moisture.as_u8() as f32,
+                                fx_value,
                                 "fx5 moisture mismatch in file {}",
                                 path
                             );
                             assert_eq!(
                                 program.schema.effects_panel.fx5_type,
                                 match fx_type {
-                                    0 => 2, // stage
-                                    1 => 3, // hall-soft
-                                    2 => 4, // hall
-                                    3 => 0, // room
-                                    4 => 1, // stage-soft
+                                    0 => Fx5Type::Stage,
+                                    1 => Fx5Type::HallSoft,
+                                    2 => Fx5Type::Hall,
+                                    3 => Fx5Type::Room,
+                                    4 => Fx5Type::StageSoft,
                                     a => panic!("unknown fx5 type {} in file {}", a, path),
                                 },
                                 "fx5 type mismatch in file {}",
@@ -1058,30 +1067,80 @@ fn test_ne5_b3_bass_drawbars_match_filenames() {
 
 /// Piano `category` as stored, and the backup directory it corresponds to. The
 /// dial order on disk starts at Grand, so the two are not in step.
-const PIANO_CATEGORIES: [(u8, &str); 6] = [
-    (0, "Grand"),
-    (1, "Upright"),
-    (2, "EPiano1"),
-    (3, "EPiano2"),
-    (4, "Clavinet"),
-    (5, "Harps"),
+const PIANO_CATEGORIES: [(PianoCategory, &str); 6] = [
+    (PianoCategory::Grand, "Grand"),
+    (PianoCategory::Upright, "Upright"),
+    (PianoCategory::EPiano1, "EPiano1"),
+    (PianoCategory::EPiano2, "EPiano2"),
+    (PianoCategory::Clavinet, "Clavinet"),
+    (PianoCategory::Harpsichord, "Harps"),
 ];
 
 /// `(category, model, id, name)` for every piano slot the `programs/piano`
 /// specimens select. Ids and names come from the USB captures, not from this
 /// decoder; the names are the shipped `.npno` basenames.
-const PIANO_IDS: [(u8, u8, u32, &str); 11] = [
-    (0, 0, 0xd303_b5f2, "Royal Grand 3D YaS6 XL 5.4"),
-    (0, 5, 0x4ca6_ab08, "Electric Grand 1 CP80  5.3"),
-    (1, 0, 0x645f_053e, "Grand Upright YaU3 Lrg 5.4"),
-    (1, 5, 0x42a7_a3a3, "HonkyTonkUpright      Sml 5.3"),
-    (2, 0, 0x6434_2577, "EPiano 1    Mk I Low Deep  5.3"),
-    (2, 9, 0x19c5_f749, "EP8 Nefertiti Lrg 6.0"),
-    (3, 0, 0xd1ac_cddd, "DX7 FullTines  Lrg 5.4"),
-    (3, 2, 0x17a8_d178, "Ballad EP1  Sml 5.2"),
-    (4, 0, 0x9bed_fa45, "Clavinet D6  5.0"),
-    (5, 0, 0xf121_ce36, "Ital Harpsich 1B Long Stri 5.0"),
-    (5, 2, 0x1251_b69a, "Ital Harpsich 1D Lute 5.0"),
+const PIANO_IDS: [(PianoCategory, u8, u32, &str); 11] = [
+    (
+        PianoCategory::Grand,
+        0,
+        0xd303_b5f2,
+        "Royal Grand 3D YaS6 XL 5.4",
+    ),
+    (
+        PianoCategory::Grand,
+        5,
+        0x4ca6_ab08,
+        "Electric Grand 1 CP80  5.3",
+    ),
+    (
+        PianoCategory::Upright,
+        0,
+        0x645f_053e,
+        "Grand Upright YaU3 Lrg 5.4",
+    ),
+    (
+        PianoCategory::Upright,
+        5,
+        0x42a7_a3a3,
+        "HonkyTonkUpright      Sml 5.3",
+    ),
+    (
+        PianoCategory::EPiano1,
+        0,
+        0x6434_2577,
+        "EPiano 1    Mk I Low Deep  5.3",
+    ),
+    (
+        PianoCategory::EPiano1,
+        9,
+        0x19c5_f749,
+        "EP8 Nefertiti Lrg 6.0",
+    ),
+    (
+        PianoCategory::EPiano2,
+        0,
+        0xd1ac_cddd,
+        "DX7 FullTines  Lrg 5.4",
+    ),
+    (
+        PianoCategory::EPiano2,
+        2,
+        0x17a8_d178,
+        "Ballad EP1  Sml 5.2",
+    ),
+    (PianoCategory::Clavinet, 0, 0x9bed_fa45, "Clavinet D6  5.0"),
+    (
+        PianoCategory::Harpsichord,
+        0,
+        0xf121_ce36,
+        "Ital Harpsich 1B Long Stri 5.0",
+    ),
+    (
+        PianoCategory::Harpsichord,
+        2,
+        0x1251_b69a,
+        "Ital Harpsich 1D Lute 5.0",
+    ),
 ];
 
 /// `(samp lib number, id)` for the sample slots `programs/sample` selects. As
@@ -1159,26 +1218,26 @@ fn test_ne5_program_piano_id() {
     let piano_re = Regex::new(r"([0-9])([0-3])([01])([0-3])_([0-9]{2})_([0-9A-Fa-f]{2})\.ne5p$")
         .expect("piano filename pattern");
 
-    // Filename type digit -> the value stored in `category`.
-    fn category_of(ee: u8) -> u8 {
+    // Filename type digit -> the category it names.
+    fn category_of(ee: u8) -> PianoCategory {
         match ee {
-            1 => 2, // ep1
-            2 => 3, // ep2
-            3 => 4, // clav
-            4 => 5, // harps
-            5 => 0, // grand
-            6 => 1, // upright
+            1 => PianoCategory::EPiano1,
+            2 => PianoCategory::EPiano2,
+            3 => PianoCategory::Clavinet,
+            4 => PianoCategory::Harpsichord,
+            5 => PianoCategory::Grand,
+            6 => PianoCategory::Upright,
             _ => panic!("bad piano type digit: {ee}"),
         }
     }
 
-    let golden: BTreeMap<(u8, u8), (u32, &str)> = PIANO_IDS
+    let golden: BTreeMap<(PianoCategory, u8), (u32, &str)> = PIANO_IDS
         .iter()
         .map(|&(category, model, id, name)| ((category, model), (id, name)))
         .collect();
 
     let mut checks = 0usize;
-    let mut covered: BTreeSet<(u8, u8)> = BTreeSet::new();
+    let mut covered: BTreeSet<(PianoCategory, u8)> = BTreeSet::new();
 
     for path in ne5p_files(&corpus_dir().join("programs/piano")) {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
@@ -1207,7 +1266,7 @@ fn test_ne5_program_piano_id() {
             assert_eq!(piano.piano_model, model, "piano_model in {name}");
         }
 
-        let slot = (piano.category, piano.piano_model);
+        let slot = (piano.category, piano.piano_model.as_u8());
         let (id, piano_name) = golden
             .get(&slot)
             .unwrap_or_else(|| panic!("no golden id for slot {slot:?}, from {name}"));
@@ -1326,8 +1385,8 @@ fn test_ne5_backup_dependency_ids() {
         "member list looks empty"
     );
 
-    let mut slot_of: BTreeMap<u32, (u8, u8)> = BTreeMap::new();
-    let mut id_of: BTreeMap<(u8, u8), u32> = BTreeMap::new();
+    let mut slot_of: BTreeMap<u32, (PianoCategory, u8)> = BTreeMap::new();
+    let mut id_of: BTreeMap<(PianoCategory, u8), u32> = BTreeMap::new();
     let mut sample_ids: BTreeSet<u32> = BTreeSet::new();
     let mut programs = 0usize;
 
@@ -1337,7 +1396,7 @@ fn test_ne5_backup_dependency_ids() {
         let (piano, sample) = (&schema.piano_panel, &schema.sample_panel);
 
         if piano.id != 0 {
-            let slot = (piano.category, piano.piano_model);
+            let slot = (piano.category, piano.piano_model.as_u8());
 
             // (category, model) and id are two names for the same piano, so the
             // map between them is a bijection across all 624 programs.
@@ -1456,13 +1515,13 @@ fn test_ne5_a_mutation_in_every_panel_reaches_the_bytes() {
         (
             "center_panel.gain",
             0x2e..=0x34,
-            |p| p.schema.center_panel.gain = 96,
+            |p| p.schema.center_panel.gain = 96u8.try_into().unwrap(),
             |p| assert_eq!(p.gain(), 96),
         ),
         (
             "piano_panel.touch",
             0x3a..=0x41,
-            |p| p.schema.piano_panel.touch = 3,
+            |p| p.schema.piano_panel.touch = 3u8.try_into().unwrap(),
             |p| assert_eq!(p.piano().touch, 3),
         ),
         (
@@ -1480,28 +1539,28 @@ fn test_ne5_a_mutation_in_every_panel_reaches_the_bytes() {
         (
             "effects_panel.fx3_compression",
             0x93..=0x9f,
-            |p| p.schema.effects_panel.fx3_compression = 101,
+            |p| p.schema.effects_panel.fx3_compression = 101u8.try_into().unwrap(),
             |p| assert_eq!(p.fx_panel().fx3_compression, 101),
         ),
         (
             // A cross-word field: three bits in 0x9a, four in 0x9b.
             "effects_panel.equalizer_freq_gain",
             0x93..=0x9f,
-            |p| p.schema.effects_panel.equalizer_freq_gain = 0x55,
+            |p| p.schema.effects_panel.equalizer_freq_gain = 0x55u8.try_into().unwrap(),
             |p| assert_eq!(p.fx_panel().equalizer_freq_gain, 0x55),
         ),
         (
             // The other one: five bits in 0x9e, two in 0x9f.
             "effects_panel.fx5_moisture",
             0x93..=0x9f,
-            |p| p.schema.effects_panel.fx5_moisture = 0x2a,
+            |p| p.schema.effects_panel.fx5_moisture = 0x2au8.try_into().unwrap(),
             |p| assert_eq!(p.fx_panel().fx5_moisture, 0x2a),
         ),
         (
             "extra.equalizer_part",
             0xa1..=0xa4,
-            |p| p.schema.extra.equalizer_part = 2,
-            |p| assert_eq!(p.extra().equalizer_part, 2),
+            |p| p.schema.extra.equalizer_part = EqualizerPart::Both,
+            |p| assert_eq!(p.extra().equalizer_part, EqualizerPart::Both),
         ),
     ];
 
@@ -1570,4 +1629,92 @@ fn test_ne5_organ_drawbars_survive_a_rewrite() {
             "rewriting the drawbars changed {name}",
         );
     }
+}
+
+/// No corpus program holds a value we cannot name.
+///
+/// The decoder deliberately does *not* refuse an unrecognised value — 604 of 617
+/// programs carry an effect routing of `0`, whose meaning has never been recovered, so a
+/// strict decoder would reject 98% of the evidence. See the
+/// [`components`](nord_format::electro5::components) module docs for why that trade goes
+/// the way it does.
+///
+/// Preserving a value is not the same as being content with it, though. Every sparse
+/// component reports whether it decoded to `Unknown`, and this sweeps the corpus for any
+/// that did. It passes today, which says the recovered value sets are complete *for the
+/// specimens we have*. When it fails, a new specimen has produced a value nobody has
+/// named — which is a finding, not a bug: go name it, then this goes green again.
+#[test]
+fn test_ne5_no_corpus_program_holds_an_unrecognised_value() {
+    let mut paths = ne5p_files(&corpus_dir().join("programs"));
+    paths.extend(ne5p_files(
+        &corpus_dir().join("usb/backup/full_backup/contents/Program"),
+    ));
+    assert!(
+        !paths.is_empty(),
+        "no programs found — is the corpus present?"
+    );
+
+    let mut unknowns: BTreeMap<&'static str, BTreeSet<u64>> = BTreeMap::new();
+
+    for path in &paths {
+        let Entity::Program(nord_format::Program::Electro5(p)) =
+            nord_format::from_path(path.display().to_string().as_str()).unwrap()
+        else {
+            continue;
+        };
+        let (c, pi, fx, ex) = (
+            &p.schema.center_panel,
+            &p.schema.piano_panel,
+            &p.schema.effects_panel,
+            &p.schema.extra,
+        );
+
+        let mut check = |field: &'static str, unknown: bool, raw: u64| {
+            if unknown {
+                unknowns.entry(field).or_default().insert(raw);
+            }
+        };
+        check(
+            "center.organ_type",
+            c.organ_type.is_unknown(),
+            c.organ_type.raw().into(),
+        );
+        check(
+            "piano.category",
+            pi.category.is_unknown(),
+            pi.category.raw().into(),
+        );
+        check(
+            "fx.fx1_type",
+            fx.fx1_type.is_unknown(),
+            fx.fx1_type.raw().into(),
+        );
+        check(
+            "fx.fx2_type",
+            fx.fx2_type.is_unknown(),
+            fx.fx2_type.raw().into(),
+        );
+        check(
+            "fx.fx3_type",
+            fx.fx3_type.is_unknown(),
+            fx.fx3_type.raw().into(),
+        );
+        check(
+            "fx.fx5_type",
+            fx.fx5_type.is_unknown(),
+            fx.fx5_type.raw().into(),
+        );
+        check(
+            "extra.equalizer_part",
+            ex.equalizer_part.is_unknown(),
+            ex.equalizer_part.raw().into(),
+        );
+    }
+
+    assert!(
+        unknowns.is_empty(),
+        "corpus holds values no component can name — worth investigating, not \
+         suppressing: {unknowns:?}",
+    );
 }
