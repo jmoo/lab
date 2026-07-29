@@ -42,6 +42,21 @@ impl Instrument {
     }
 }
 
+impl crate::bits::Packed for Instrument {
+    // Three variants, so two bits — even though the panel's slot is three bits wide.
+    const MAX_BITS: u32 = 2;
+    type Error = crate::error::ParseError;
+
+    fn from_bits(bits: u64) -> Result<Self, Self::Error> {
+        Instrument::try_from(bits as u8)
+            .map_err(|e| crate::error::ParseError::OutOfBounds(format!("{bits}"), e.to_string()))
+    }
+
+    fn to_bits(&self) -> u64 {
+        self.as_u8() as u64
+    }
+}
+
 impl TryFrom<u8> for Instrument {
     type Error = &'static str;
 

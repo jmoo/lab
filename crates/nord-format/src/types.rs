@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Formatter};
 
+use crate::bits::{bits_for, Packed};
 use crate::common::bank::Location;
 use crate::error::ParseError;
 
@@ -16,6 +17,23 @@ impl<const OFFSET: u8, const MIN: i8, const MAX: i8> RangedI8<OFFSET, MIN, MAX> 
 
     pub fn inner(&self) -> i8 {
         self.inner
+    }
+}
+
+/// On disk a `RangedI8` is stored biased by `OFFSET`, so its widest encoding is
+/// `MAX + OFFSET` — 13 for an Electro 5 octave shift (`-6..=6` biased by 7), which needs
+/// four bits. Decoding validates the range, so an out-of-range slot is an error rather
+/// than a plausible-looking wrong number.
+impl<const OFFSET: u8, const MIN: i8, const MAX: i8> Packed for RangedI8<OFFSET, MIN, MAX> {
+    const MAX_BITS: u32 = bits_for((MAX as i16 + OFFSET as i16) as u64);
+    type Error = ParseError;
+
+    fn from_bits(bits: u64) -> Result<Self, ParseError> {
+        (bits as u8).try_into()
+    }
+
+    fn to_bits(&self) -> u64 {
+        self.as_u8() as u64
     }
 }
 

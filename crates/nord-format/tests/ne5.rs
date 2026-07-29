@@ -1402,3 +1402,172 @@ fn test_ne5_backup_dependency_ids() {
         sample_ids.len(),
     );
 }
+
+/// Write every panel back out untouched. The file must come out byte-identical.
+///
+/// Under the decoded-struct shape this is nearly free — decode and encode are inverse
+/// conversions and the write path always runs the encoder — but it is still the check
+/// that a `Field<T, HI, LO>` range is right, which the plain round-trip never was: on
+/// master each word was preserved verbatim and the decoded fields were `#[bw(ignore)]`,
+/// so a wrong mask changed nothing.
+///
+/// It also pins every bit no field names, which is what the private `words` copy on each
+/// panel exists for. Delete it and re-packing would zero `PianoPanel` 60..59, 53..49 and
+/// the rest.
+#[test]
+fn test_ne5_every_panel_re_encodes_to_the_same_bytes() {
+    let paths = ne5p_files(&corpus_dir().join("programs"));
+    assert!(
+        !paths.is_empty(),
+        "no programs found — is the corpus present?"
+    );
+
+    for path in &paths {
+        let name = path.display().to_string();
+        let original = read(path).unwrap();
+        let mut program = read_program_checked(path);
+
+        let mut rewritten: Vec<u8> = Vec::new();
+        program.write_to(&mut Cursor::new(&mut rewritten)).unwrap();
+
+        assert_eq!(
+            original.as_slice(),
+            rewritten.as_slice(),
+            "re-encoding changed {name}",
+        );
+    }
+}
+
+/// The RFC-0001 acceptance test, one field per panel: assign to it, write, read it back,
+/// see the change — and see that nothing outside that panel's own bytes moved.
+///
+/// Every one of these was silently discarded on master. Note the shape of the mutations:
+/// they are plain field assignments, which is the whole point of this branch.
+#[test]
+fn test_ne5_a_mutation_in_every_panel_reaches_the_bytes() {
+    type Case = (
+        &'static str,
+        std::ops::RangeInclusive<usize>,
+        fn(&mut electro5::Program),
+        fn(&electro5::Program),
+    );
+
+    let cases: Vec<Case> = vec![
+        (
+            "center_panel.gain",
+            0x2e..=0x34,
+            |p| p.schema.center_panel.gain = 96,
+            |p| assert_eq!(p.gain(), 96),
+        ),
+        (
+            "piano_panel.touch",
+            0x3a..=0x41,
+            |p| p.schema.piano_panel.touch = 3,
+            |p| assert_eq!(p.piano().touch, 3),
+        ),
+        (
+            "sample_panel.number",
+            0x46..=0x4d,
+            |p| p.schema.sample_panel.number = 211,
+            |p| assert_eq!(p.sample().number, 211),
+        ),
+        (
+            "organ_panel.b3_perc_third",
+            0x4e..=0x92,
+            |p| p.schema.organ_panel.set_b3_perc_third(true),
+            |p| assert!(p.organ().b3_perc_third()),
+        ),
+        (
+            "effects_panel.fx3_compression",
+            0x93..=0x9f,
+            |p| p.schema.effects_panel.fx3_compression = 101,
+            |p| assert_eq!(p.fx_panel().fx3_compression, 101),
+        ),
+        (
+            // A cross-word field: three bits in 0x9a, four in 0x9b.
+            "effects_panel.equalizer_freq_gain",
+            0x93..=0x9f,
+            |p| p.schema.effects_panel.equalizer_freq_gain = 0x55,
+            |p| assert_eq!(p.fx_panel().equalizer_freq_gain, 0x55),
+        ),
+        (
+            // The other one: five bits in 0x9e, two in 0x9f.
+            "effects_panel.fx5_moisture",
+            0x93..=0x9f,
+            |p| p.schema.effects_panel.fx5_moisture = 0x2a,
+            |p| assert_eq!(p.fx_panel().fx5_moisture, 0x2a),
+        ),
+        (
+            "extra.equalizer_part",
+            0xa1..=0xa4,
+            |p| p.schema.extra.equalizer_part = 2,
+            |p| assert_eq!(p.extra().equalizer_part, 2),
+        ),
+    ];
+
+    let paths = ne5p_files(&corpus_dir().join("programs"));
+    assert!(
+        !paths.is_empty(),
+        "no programs found — is the corpus present?"
+    );
+
+    for path in &paths {
+        let name = path.display().to_string();
+        let original = read(path).unwrap();
+
+        for (field, span, mutate, check) in &cases {
+            let mut program = read_program_checked(path);
+            mutate(&mut program);
+
+            let mut mutated: Vec<u8> = Vec::new();
+            program.write_to(&mut Cursor::new(&mut mutated)).unwrap();
+
+            for (at, (before, after)) in original.iter().zip(&mutated).enumerate() {
+                let allowed = span.contains(&at) || (0x18..=0x1b).contains(&at);
+                assert!(
+                    allowed || before == after,
+                    "setting {field} changed byte {at:#04x} of {name}",
+                );
+            }
+
+            let Entity::Program(nord_format::Program::Electro5(reread)) =
+                nord_format::from_stream(&mut Cursor::new(&mut mutated)).unwrap()
+            else {
+                panic!("expected an electro5 program in {name}")
+            };
+            check(&reread);
+        }
+    }
+}
+
+/// Drawbars: reading nine nibbles and writing them back is a no-op. The organ panel is
+/// held identical to the accessor branch, so this is the same test.
+#[test]
+fn test_ne5_organ_drawbars_survive_a_rewrite() {
+    use electro5::OrganModel::*;
+
+    for path in ne5p_files(&corpus_dir().join("programs")) {
+        let name = path.display().to_string();
+        let original = read(&path).unwrap();
+        let mut program = read_program_checked(&path);
+
+        let organ = &mut program.schema.organ_panel;
+        for model in [B3, Vox, Farfisa, Pipe] {
+            for preset in [1u8, 2] {
+                let bars = organ.drawbars(model, preset);
+                if bars.iter().any(|&b| b > 8) {
+                    continue;
+                }
+                organ.set_drawbars(model, preset, bars).unwrap();
+            }
+        }
+
+        let mut rewritten: Vec<u8> = Vec::new();
+        program.write_to(&mut Cursor::new(&mut rewritten)).unwrap();
+        assert_eq!(
+            original.as_slice(),
+            rewritten.as_slice(),
+            "rewriting the drawbars changed {name}",
+        );
+    }
+}

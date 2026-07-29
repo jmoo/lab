@@ -1,7 +1,9 @@
+use crate::bits::{Field, FieldOverflow, Straddle};
 use crate::common;
 use crate::common::{bank, PartMix};
 use crate::crc::{CrcReader, CrcWriter};
 use crate::electro5::{Instrument, OctaveShift, SplitPoint, Transpose};
+use crate::error::ParseError;
 use crate::types::RangedU16Pair;
 use binrw::{binrw, BinRead, BinReaderExt, BinWriterExt};
 
@@ -21,162 +23,208 @@ pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
 pub type Header = common::Header<Location>;
 pub type Bank = bank::Bank<Program, Location>;
 
-// 0x2e-0x32
+// 0x2e-0x34 — the centre panel.
+//
+// The **decoded-struct** shape: `binrw` reads the three backing words, `TryFrom` turns
+// them into a struct of ordinary `pub` fields, and the write direction runs the same
+// conversion backwards. There are no accessors — `panel.gain = 96` is how you change a
+// value, exactly as before, except that now it reaches the file.
+//
+// The private `words` copy is what makes that possible without losing anything: encoding
+// starts from the bytes as they were read and overlays only the named fields, so every
+// bit no field claims — `settings3` 7..0, and the rest — round-trips untouched. Without
+// it, re-packing would zero every gap bit.
+//
+// Bit ranges are `Field<T, HI, LO>`, the same definitions the accessor branch uses. That
+// is deliberate: authoring a position once is settled, and holding it constant makes this
+// a comparison of the *surface* — `pub` fields against getters and setters — and of
+// nothing else.
+
+/// 0x2e..0x2f — `settings`.
+type LeftPart = Field<Instrument, 15, 13>;
+type RightPart = Field<Instrument, 12, 10>;
+type LeftOctaveShift = Field<OctaveShift, 9, 6>;
+type RightOctaveShift = Field<OctaveShift, 5, 2>;
+type LeftSustain = Field<bool, 1, 1>;
+type RightSustain = Field<bool, 0, 0>;
+
+/// 0x30 — `settings2`.
+type LeftControl = Field<bool, 7, 7>;
+type RightControl = Field<bool, 6, 6>;
+type UnknownBoolean1 = Field<bool, 5, 5>;
+type Split = Field<bool, 4, 4>;
+type SplitPointField = Field<SplitPoint, 3, 1>;
+type TransposeEnabled = Field<bool, 0, 0>;
+
+/// 0x31..0x34 — `settings3`.
+type TransposeField = Field<Transpose, 31, 28>;
+type PartMixField = Field<PartMix, 27, 21>;
+type Gain = Field<u8, 20, 14>;
+type OrganType = Field<u8, 13, 11>;
+type LowerEnabled = Field<bool, 10, 10>;
+type UpperEnabled = Field<bool, 9, 9>;
+type DrawbarLive = Field<bool, 8, 8>;
+
+/// The centre panel's three packed words, as they sit on disk.
 #[binrw]
-#[derive(Debug, Default)]
-pub struct CenterPanel {
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CenterWords {
     // 0x2e..0x2f                 0x2e     0x2f
     #[brw(big)]
-    #[bw(calc =
-    (* left_part as u16) << 13
-    | (* right_part as u16) << 10
-    | ((((* left_octave_shift).as_u8()) as u16) << 6)
-    | ((((* right_octave_shift).as_u8()) as u16) << 2)
-    | ((* left_sustain as u16) << 1)
-    | (* right_sustain as u16)
-    )]
     settings: u16,
-
-    #[br(try_calc = (((settings & 0b11100000_00000000) >> ((8*1)+5)) as u8).try_into())]
-    #[bw(ignore)]
-    pub left_part: Instrument,
-
-    #[br(try_calc = (((settings & 0b00011100_00000000) >> ((8*1)+2)) as u8).try_into())]
-    #[bw(ignore)]
-    pub right_part: Instrument,
-
-    #[br(try_calc = (((settings & 0b00000011_11000000) >> ((8*0)+6)) as u8).try_into())]
-    #[bw(ignore)]
-    pub left_octave_shift: OctaveShift,
-
-    #[br(try_calc = (((settings & 0b00000000_00111100) >> ((8*0)+2)) as u8).try_into())]
-    #[bw(ignore)]
-    pub right_octave_shift: OctaveShift,
-
-    #[br(calc = ((settings & 0b00000000_00000010) >> ((8*0)+1)) != 0)]
-    #[bw(ignore)]
-    pub left_sustain: bool,
-
-    #[br(calc = ((settings & 0b00000000_00000001) >> ((8*0)+0)) != 0)]
-    #[bw(ignore)]
-    pub right_sustain: bool,
-
     // 0x30                    0x30
     #[brw(big)]
-    #[bw(calc =
-    (* left_control as u8) << 7
-    | (* right_control as u8) << 6
-    | ((* unknown_boolean1 as u8) << 5)
-    | ((* split as u8) << 4)
-    | ((* split_point as u8) << 1)
-    | (* transpose_enabled as u8)
-    )]
-    pub settings2: u8,
-
-    // 0x30
-    #[br(calc = ((settings2 & 0b10000000) >> 7) != 0)]
-    #[bw(ignore)]
-    pub left_control: bool,
-
-    // 0x30
-    #[br(calc = ((settings2 & 0b01000000) >> 6) != 0)]
-    #[bw(ignore)]
-    pub right_control: bool,
-
-    // always zero
-    // 0x30
-    #[br(calc = ((settings2 & 0b00100000) >> 5) != 0)]
-    #[bw(ignore)]
-    pub unknown_boolean1: bool,
-
-    // 0x30
-    #[br(calc = ((settings2 & 0b00010000) >> 4) != 0)]
-    #[bw(ignore)]
-    pub split: bool,
-
-    // 0x30
-    #[br(try_calc = ((settings2 & 0b00001110) >> 1).try_into())]
-    #[bw(ignore)]
-    pub split_point: SplitPoint,
-
-    // 0x30
-    // NOTE: Sometimes the electro 5 leaves this as true even when the transpose is 0. It will
-    // not show a transpose light when this happens
-    #[br(calc = (settings2 & 0b00000001) != 0)]
-    #[bw(ignore)]
-    pub transpose_enabled: bool,
-
+    settings2: u8,
     // 0x31..34                     0x31      0x32      0x33     0x34
     #[brw(big)]
-    pub settings3: u32,
+    settings3: u32,
+}
 
-    // -6, 5, 4, 3, 2, 1, 0, 1 111
-    // transpose (0 to 12  big endian = -6 to -6 half steps transposition)
-    #[br(try_calc = (((settings3 & 0b11110000_00000000_00000000_00000000) >> ((8 * 2) + 12)) as u16).try_into())]
-    #[bw(ignore)]
+#[derive(Debug, Default)]
+pub struct CenterPanel {
+    /// The words this panel was decoded from, kept so the bits no field names survive a
+    /// re-encode. Private: it is a source of *unnamed* bits only — every named field is
+    /// authoritative over it on write.
+    words: CenterWords,
+
+    pub left_part: Instrument,
+    pub right_part: Instrument,
+    pub left_octave_shift: OctaveShift,
+    pub right_octave_shift: OctaveShift,
+    pub left_sustain: bool,
+    pub right_sustain: bool,
+
+    pub left_control: bool,
+    pub right_control: bool,
+    /// Always zero in every corpus specimen. Named so it is visible, not so it is used.
+    pub unknown_boolean1: bool,
+    pub split: bool,
+    pub split_point: SplitPoint,
+    /// NOTE: the Electro 5 sometimes leaves this true even when the transpose is 0. It
+    /// shows no transpose light when that happens.
+    pub transpose_enabled: bool,
+
+    /// Half-step transposition, `-6..=6`, stored biased by 6.
     pub transpose: Transpose,
-
-    #[br(try_calc = (((settings3 & 0b00001111_11100000_00000000_00000000) >> ((8 * 2) + 5)) as u16).try_into())]
-    #[bw(ignore)]
     pub part_mix: PartMix,
-
-    // 0..127 (0..10)
-    #[br(calc = ((settings3 & 0b00000000_00011111_11000000_00000000) >> ((8 * 1) + 6)) as u8)]
-    #[bw(ignore)]
+    /// 0..=127, shown on the panel as 0..10. **Seven bits on disk** — see
+    /// [`CenterWords::try_from`], which refuses to encode 128 or more rather than let it
+    /// overrun `part_mix`.
     pub gain: u8,
-
-    #[br(calc = ((settings3 & 0b00000000_00000000_00111000_00000000) >> ((8 * 1) + 3)) as u8)]
-    #[bw(ignore)]
+    /// `0` b3, `1` b3+bass, `2` pipe, `3` vox, `4` farfisa. Three bits on disk.
     pub organ_type: u8,
-
-    #[br(calc = ((settings3 & 0b00000000_00000000_00000100_00000000) >> ((8 * 1) + 2)) != 0)]
-    #[bw(ignore)]
     pub lower_enabled: bool,
-
-    #[br(calc = ((settings3 & 0b00000000_00000000_00000010_00000000) >> ((8 * 1) + 1)) != 0)]
-    #[bw(ignore)]
     pub upper_enabled: bool,
-
-    #[br(calc = ((settings3 & 0b00000000_00000000_00000001_00000000) >> ((8 * 1) + 0)) != 0)]
-    #[bw(ignore)]
     pub drawbar_live: bool,
 }
 
-// 0x3a..0x41
+impl TryFrom<CenterWords> for CenterPanel {
+    type Error = ParseError;
+
+    /// Decode. Fallible, and called from inside `BinRead`, so a file holding an
+    /// impossible value fails to parse — there is no way to obtain a `CenterPanel` that
+    /// has not been through here.
+    fn try_from(w: CenterWords) -> Result<Self, ParseError> {
+        Ok(CenterPanel {
+            words: w,
+            left_part: LeftPart::get(w.settings)?,
+            right_part: RightPart::get(w.settings)?,
+            left_octave_shift: LeftOctaveShift::get(w.settings)?,
+            right_octave_shift: RightOctaveShift::get(w.settings)?,
+            left_sustain: LeftSustain::read(w.settings),
+            right_sustain: RightSustain::read(w.settings),
+            left_control: LeftControl::read(w.settings2),
+            right_control: RightControl::read(w.settings2),
+            unknown_boolean1: UnknownBoolean1::read(w.settings2),
+            split: Split::read(w.settings2),
+            split_point: SplitPointField::get(w.settings2)?,
+            transpose_enabled: TransposeEnabled::read(w.settings2),
+            transpose: TransposeField::get(w.settings3)?,
+            part_mix: PartMixField::get(w.settings3)?,
+            gain: Gain::read(w.settings3),
+            organ_type: OrganType::read(w.settings3),
+            lower_enabled: LowerEnabled::read(w.settings3),
+            upper_enabled: UpperEnabled::read(w.settings3),
+            drawbar_live: DrawbarLive::read(w.settings3),
+        })
+    }
+}
+
+impl TryFrom<&CenterPanel> for CenterWords {
+    type Error = FieldOverflow;
+
+    /// Encode, overlaying the named fields onto the words the panel was read from.
+    ///
+    /// Fallible, and this is where the shape costs something: `gain` and `organ_type` are
+    /// `pub u8` in a 7- and a 3-bit slot, so `panel.gain = 200` is a perfectly legal
+    /// assignment that fails **here**, at write time, well away from the line that caused
+    /// it. Refusing beats truncating — a silent truncation would corrupt `part_mix` next
+    /// door — but the error cannot be reported where the mistake is.
+    fn try_from(p: &CenterPanel) -> Result<Self, FieldOverflow> {
+        let mut w = p.words;
+
+        LeftPart::set(&mut w.settings, p.left_part);
+        RightPart::set(&mut w.settings, p.right_part);
+        LeftOctaveShift::set(&mut w.settings, p.left_octave_shift);
+        RightOctaveShift::set(&mut w.settings, p.right_octave_shift);
+        LeftSustain::set(&mut w.settings, p.left_sustain);
+        RightSustain::set(&mut w.settings, p.right_sustain);
+
+        LeftControl::set(&mut w.settings2, p.left_control);
+        RightControl::set(&mut w.settings2, p.right_control);
+        UnknownBoolean1::set(&mut w.settings2, p.unknown_boolean1);
+        Split::set(&mut w.settings2, p.split);
+        SplitPointField::set(&mut w.settings2, p.split_point);
+        TransposeEnabled::set(&mut w.settings2, p.transpose_enabled);
+
+        TransposeField::set(&mut w.settings3, p.transpose);
+        PartMixField::set(&mut w.settings3, p.part_mix);
+        Gain::checked_set(&mut w.settings3, p.gain)?;
+        OrganType::checked_set(&mut w.settings3, p.organ_type)?;
+        LowerEnabled::set(&mut w.settings3, p.lower_enabled);
+        UpperEnabled::set(&mut w.settings3, p.upper_enabled);
+        DrawbarLive::set(&mut w.settings3, p.drawbar_live);
+
+        Ok(w)
+    }
+}
+
+// 0x3a..0x41 — the piano panel.
+
+/// 0x3a..0x41 — `settings`. Bits 60..59 and 53..49 are named by nothing and survive in
+/// [`PianoPanel::words`].
+type PianoCategory = Field<u8, 63, 61>;
+type PianoModel = Field<u8, 58, 54>;
+type ClavModel = Field<u8, 48, 47>;
+type PianoAcoustics = Field<u8, 46, 45>;
+type PianoTouch = Field<u8, 44, 43>;
+type PianoMono = Field<bool, 42, 42>;
+type PianoId = Field<u32, 41, 10>;
+
 #[binrw]
-#[derive(Debug, Default)]
-pub struct PianoPanel {
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PianoWords {
     // 0x3a..0x41               0x3a      0x3b     0x3c     0x3d     0x3e     0x3f     0x40    0x41
     #[brw(big)]
     settings: u64,
+}
 
-    // 5 == 0, 6 == 1, 1 == 2, 2 == 3, 3 == 4, 4 == 5
-    #[br(calc = ((settings & 0b11100000_00000000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 7) + 5)) as u8)]
-    #[bw(ignore)]
+#[derive(Debug, Default)]
+pub struct PianoPanel {
+    words: PianoWords,
+
+    /// 5 == 0, 6 == 1, 1 == 2, 2 == 3, 3 == 4, 4 == 5. Three bits on disk.
     pub category: u8,
-
     /// Zero-based model slot *within* [`category`](Self::category) — the panel's
-    /// Model dial. A slot coordinate, not an identity; see [`id`](Self::id).
-    #[br(calc = ((settings & 0b00000111_11000000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 6) + 6)) as u8)]
-    #[bw(ignore)]
+    /// Model dial. A slot coordinate, not an identity; see [`id`](Self::id). Five bits.
     pub piano_model: u8,
-
-    #[br(calc = ((settings & 0b00000000_00000001_10000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 7)) as u8)]
-    #[bw(ignore)]
+    /// Two bits.
     pub clav_model: u8,
-
-    #[br(calc = ((settings & 0b00000000_00000000_01100000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 5)) as u8)]
-    #[bw(ignore)]
+    /// Two bits.
     pub acoustics: u8,
-
-    #[br(calc = ((settings & 0b00000000_00000000_00011000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 3)) as u8)]
-    #[bw(ignore)]
+    /// Two bits.
     pub touch: u8,
-
-    #[br(calc = ((settings & 0b00000000_00000000_00000100_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 2)) != 0)]
-    #[bw(ignore)]
     pub mono: bool,
-
     /// The piano (`.npno`) this program depends on: a stable 32-bit id in bits
     /// 41..=10, independent of where the piano sits in the instrument's library.
     /// `0` means "no piano referenced". This — not
@@ -184,50 +232,112 @@ pub struct PianoPanel {
     /// slot coordinates — is what resolves the song → program → piano chain, and
     /// what Nord Sound Manager checks to decide whether a Restore is missing a
     /// dependency.
-    #[br(calc = ((settings & 0b00000000_00000000_00000011_11111111_11111111_11111111_11111100_00000000) >> ((8 * 1) + 2)) as u32)]
-    #[bw(ignore)]
     pub id: u32,
 }
 
-// 0x46..0x4d
+impl TryFrom<PianoWords> for PianoPanel {
+    type Error = ParseError;
+
+    fn try_from(w: PianoWords) -> Result<Self, ParseError> {
+        Ok(PianoPanel {
+            words: w,
+            category: PianoCategory::read(w.settings),
+            piano_model: PianoModel::read(w.settings),
+            clav_model: ClavModel::read(w.settings),
+            acoustics: PianoAcoustics::read(w.settings),
+            touch: PianoTouch::read(w.settings),
+            mono: PianoMono::read(w.settings),
+            id: PianoId::read(w.settings),
+        })
+    }
+}
+
+impl TryFrom<&PianoPanel> for PianoWords {
+    type Error = FieldOverflow;
+
+    fn try_from(p: &PianoPanel) -> Result<Self, FieldOverflow> {
+        let mut w = p.words;
+        PianoCategory::checked_set(&mut w.settings, p.category)?;
+        PianoModel::checked_set(&mut w.settings, p.piano_model)?;
+        ClavModel::checked_set(&mut w.settings, p.clav_model)?;
+        PianoAcoustics::checked_set(&mut w.settings, p.acoustics)?;
+        PianoTouch::checked_set(&mut w.settings, p.touch)?;
+        PianoMono::set(&mut w.settings, p.mono);
+        PianoId::set(&mut w.settings, p.id);
+        Ok(w)
+    }
+}
+
+// 0x46..0x4d — the sample panel.
+
+/// 0x46..0x4d — `settings`.
+type SampleAttack = Field<u8, 63, 57>;
+type SampleDecayRelease = Field<u8, 56, 50>;
+type SampleNumber = Field<u8, 49, 42>;
+type SampleId = Field<u32, 41, 10>;
+type SampleDynamics = Field<u8, 9, 8>;
+type SampleFilter = Field<bool, 7, 7>;
+
 #[binrw]
-#[derive(Debug, Default)]
-pub struct SamplePanel {
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SampleWords {
     // 0x46..0x4d               0x46      0x47     0x48     0x49     0x4a     0x4b     0x4c    0x4d
     #[brw(big)]
     settings: u64,
+}
 
-    #[br(calc = ((settings & 0b11111110_00000000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 7) + 1)) as u8)]
-    #[bw(ignore)]
+#[derive(Debug, Default)]
+pub struct SamplePanel {
+    words: SampleWords,
+
+    /// Seven bits on disk.
     pub attack: u8,
-
-    #[br(calc = ((settings & 0b00000001_11111100_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 6) + 2)) as u8)]
-    #[bw(ignore)]
+    /// Seven bits on disk.
     pub decay_release: u8,
-
     /// Zero-based slot of the sample in the instrument's Samp Lib, i.e. the
     /// number shown on the panel minus one. This is a *position*, not an
     /// identity: adding or deleting samples renumbers it, and the corpus has
     /// ids that appear under several numbers (and numbers reused by several
     /// ids). Use [`id`](Self::id) to resolve the dependency.
-    #[br(calc = ((settings & 0b00000000_00000011_11111100_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 2)) as u8)]
-    #[bw(ignore)]
     pub number: u8,
-
     /// The sample (`.nsmp`) this program depends on: a stable 32-bit id in bits
     /// 41..=10, laid out exactly as [`PianoPanel::id`]. `0` means "no sample
     /// referenced".
-    #[br(calc = ((settings & 0b00000000_00000000_00000011_11111111_11111111_11111111_11111100_00000000) >> ((8 * 1) + 2)) as u32)]
-    #[bw(ignore)]
     pub id: u32,
-
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000000_00000011_00000000) >> ((8 * 1) + 0)) as u8)]
-    #[bw(ignore)]
+    /// Two bits on disk.
     pub dynamics: u8,
-
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000000_00000000_10000000) >> ((8 * 0) + 7)) != 0)]
-    #[bw(ignore)]
     pub filter: bool,
+}
+
+impl TryFrom<SampleWords> for SamplePanel {
+    type Error = ParseError;
+
+    fn try_from(w: SampleWords) -> Result<Self, ParseError> {
+        Ok(SamplePanel {
+            words: w,
+            attack: SampleAttack::read(w.settings),
+            decay_release: SampleDecayRelease::read(w.settings),
+            number: SampleNumber::read(w.settings),
+            id: SampleId::read(w.settings),
+            dynamics: SampleDynamics::read(w.settings),
+            filter: SampleFilter::read(w.settings),
+        })
+    }
+}
+
+impl TryFrom<&SamplePanel> for SampleWords {
+    type Error = FieldOverflow;
+
+    fn try_from(p: &SamplePanel) -> Result<Self, FieldOverflow> {
+        let mut w = p.words;
+        SampleAttack::checked_set(&mut w.settings, p.attack)?;
+        SampleDecayRelease::checked_set(&mut w.settings, p.decay_release)?;
+        SampleNumber::set(&mut w.settings, p.number);
+        SampleId::set(&mut w.settings, p.id);
+        SampleDynamics::checked_set(&mut w.settings, p.dynamics)?;
+        SampleFilter::set(&mut w.settings, p.filter);
+        Ok(w)
+    }
 }
 
 // 0x4e..0x92 — the organ panel. The Electro 5 stores the full drawbar +
@@ -268,6 +378,33 @@ fn read_drawbars(raw: &[u8], at: usize) -> [u8; 9] {
     }
     bars
 }
+
+// The organ panel's flags, as positions within whichever byte holds them. Unlike the
+// other panels these aliases are not bound to one word — the same `VibOn` is applied to
+// four different bytes — so nothing stops the wrong alias being applied to the wrong
+// byte. That is the cost of `Field` over a byte array rather than a backing word, and
+// the reason RFC-0001 treats a full `OrganPanel` conversion as its own question.
+
+/// `0x53`/`0x65`/`0x75`/`0x85` bit 6 — preset 2 selected.
+type OrganPreset = Field<bool, 6, 6>;
+/// Nibble-packed drawbars, high nibble first.
+type DrawbarHigh = Field<u8, 7, 4>;
+type DrawbarLow = Field<u8, 3, 0>;
+/// `0x59`/`0x60`/`0x6b`/`0x71`/`0x7b`/`0x81` bit 3 — vibrato/chorus on.
+type VibOn = Field<bool, 3, 3>;
+/// `0x51`/`0x63`/`0x73` bits 7..5 — index into the model's vib/chorus table.
+type VibType = Field<u8, 7, 5>;
+/// `0x59`/`0x60` bit 2 — B3 percussion on.
+type PercOn = Field<bool, 2, 2>;
+/// `0x51` bit 4 — percussion third harmonic.
+type PercThird = Field<bool, 4, 4>;
+/// `0x51` bits 3..2 — percussion decay speed, encoded 2/1/3 for soft/fast/both.
+type PercSpeedField = Field<u8, 3, 2>;
+/// Within the 12-bit b3-bass field assembled from `0x59`'s low nibble and `0x5a`.
+type BassBar1 = Field<u8, 9, 6>;
+type BassBar2 = Field<u8, 5, 2>;
+/// `0x59`'s low nibble — the only part of that byte the b3-bass field owns.
+type BassHighNibble = Field<u8, 3, 0>;
 
 /// The Electro 5's four organ models. (B3-bass shares the B3 storage slots, so
 /// it isn't a separate model here.)
@@ -486,14 +623,8 @@ impl OrganPanel {
     /// `None` for Pipe. Each model exposes a different subset of the six modes,
     /// so the stored 3-bit value indexes into a per-model table.
     pub fn vib_type(&self, model: OrganModel) -> Option<VibChorus> {
-        use VibChorus::*;
-        let (byte, table): (usize, &[VibChorus]) = match model {
-            OrganModel::B3 => (org(0x51), &[V1, C1, V2, C2, V3, C3]),
-            OrganModel::Vox => (org(0x63), &[V1, V2, V3]),
-            OrganModel::Farfisa => (org(0x73), &[V1, V2, C2, C3]),
-            OrganModel::Pipe => return None,
-        };
-        table.get((self.raw[byte] >> 5) as usize).copied()
+        let (byte, table) = Self::vib_table(model)?;
+        table.get(VibType::read(self.raw[byte]) as usize).copied()
     }
 
     /// Whether B3 percussion is on for `preset` (B3 only).
@@ -517,69 +648,243 @@ impl OrganPanel {
             _ => PercSpeed::Both,
         }
     }
+    // ── writes ──────────────────────────────────────────────────────────────────
+    //
+    // The organ panel keeps its existing shape rather than converting to `Field`:
+    // RFC-0001 notes it is the best-tested and most-correct code in the file, and its
+    // 552 bits live in a `[u8; 69]`, which is not a backing *word*. Its problem was
+    // never silent write loss — it has no public decoded fields to assign to — but the
+    // absence of any way to write at all. `Field` still does the per-byte bit work, so
+    // the position of each flag is authored once here too.
+
+    /// Select `preset` (1 or 2) for `model`.
+    pub fn set_preset(&mut self, model: OrganModel, preset: u8) {
+        OrganPreset::set(&mut self.raw[Self::preset_byte(model)], preset == 2);
+    }
+
+    /// Store nine drawbar positions for `model`'s `preset`. Positions are physical,
+    /// `0..=8`; anything higher is refused rather than truncated into its neighbour,
+    /// since two bars share a byte.
+    pub fn set_drawbars(
+        &mut self,
+        model: OrganModel,
+        preset: u8,
+        bars: [u8; 9],
+    ) -> Result<(), FieldOverflow> {
+        if let Some(&bad) = bars.iter().find(|&&b| b > 8) {
+            return Err(FieldOverflow {
+                value: bad as u64,
+                width: 4,
+            });
+        }
+
+        let at = Self::drawbar_offset(model, preset);
+        for (n, bar) in bars.into_iter().enumerate() {
+            let byte = &mut self.raw[at + n / 2];
+            if n % 2 == 0 {
+                DrawbarHigh::checked_set(byte, bar)?;
+            } else {
+                DrawbarLow::checked_set(byte, bar)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Set the Farfisa tabs, which are on/off rather than continuous: on stores `8`,
+    /// off stores `0`. Any other stored value that happened to be there is lost — the
+    /// instrument only reads which side of the ≥5 threshold it falls on, but the byte
+    /// itself does change, so this is not a round-trip-safe way to touch a Farfisa
+    /// program you did not mean to rewrite.
+    pub fn set_farfisa_tabs(&mut self, preset: u8, tabs: [bool; 9]) {
+        let mut bars = [0u8; 9];
+        for (bar, on) in bars.iter_mut().zip(tabs) {
+            *bar = if on { 8 } else { 0 };
+        }
+        self.set_drawbars(OrganModel::Farfisa, preset, bars)
+            .expect("0 and 8 are both in range");
+    }
+
+    /// Turn vibrato/chorus on or off for `model`'s `preset`. No-op for Pipe, which has
+    /// none.
+    pub fn set_vib_on(&mut self, model: OrganModel, preset: u8, on: bool) {
+        if let Some(i) = Self::effect_byte(model, preset) {
+            VibOn::set(&mut self.raw[i], on);
+        }
+    }
+
+    /// Select the vibrato/chorus mode for `model` (shared across presets).
+    ///
+    /// Fails when the mode is not one the model offers — each exposes a different
+    /// subset of the six, and Pipe none at all. The stored value is the *index* into
+    /// that model's table, so this cannot be a plain bit write.
+    pub fn set_vib_type(&mut self, model: OrganModel, vib: VibChorus) -> Result<(), ParseError> {
+        let (byte, table) = match Self::vib_table(model) {
+            Some(pair) => pair,
+            None => {
+                return Err(ParseError::OutOfBounds(
+                    format!("{vib:?}"),
+                    format!("{model:?} has no vibrato/chorus"),
+                ))
+            }
+        };
+
+        match table.iter().position(|&v| v == vib) {
+            Some(index) => {
+                VibType::checked_set(&mut self.raw[byte], index as u8)
+                    .expect("no model's table has more than six entries");
+                Ok(())
+            }
+            None => Err(ParseError::OutOfBounds(
+                format!("{vib:?}"),
+                format!("{model:?} offers {table:?}"),
+            )),
+        }
+    }
+
+    /// Turn B3 percussion on or off for `preset`.
+    pub fn set_b3_perc_on(&mut self, preset: u8, on: bool) {
+        let at = org(if preset == 2 { 0x60 } else { 0x59 });
+        PercOn::set(&mut self.raw[at], on);
+    }
+
+    /// Percussion third harmonic (shared across presets).
+    pub fn set_b3_perc_third(&mut self, on: bool) {
+        PercThird::set(&mut self.raw[org(0x51)], on);
+    }
+
+    /// Percussion decay speed (shared across presets). Note the encoding is not
+    /// monotonic — see [`Self::b3_perc_speed`].
+    pub fn set_b3_perc_speed(&mut self, speed: PercSpeed) {
+        let bits = match speed {
+            PercSpeed::Off => 0,
+            PercSpeed::Soft => 2,
+            PercSpeed::Fast => 1,
+            PercSpeed::Both => 3,
+        };
+        PercSpeedField::checked_set(&mut self.raw[org(0x51)], bits)
+            .expect("all four speeds encode in two bits");
+    }
+
+    /// The two bass drawbars of B3-with-bass preset 1 — a 12-bit field spanning
+    /// `0x59`'s low nibble and `0x5a`, so a straddler inside a byte array rather than
+    /// across two words. Positions are `0..=8`; the field's low two bits are unused and
+    /// are left as they are found.
+    pub fn set_b3_bass_drawbars(&mut self, bars: [u8; 2]) -> Result<(), FieldOverflow> {
+        if let Some(&bad) = bars.iter().find(|&&b| b > 8) {
+            return Err(FieldOverflow {
+                value: bad as u64,
+                width: 4,
+            });
+        }
+
+        let mut field = ((self.raw[org(0x59)] as u16 & 0x0F) << 8) | self.raw[org(0x5a)] as u16;
+        BassBar1::checked_set(&mut field, bars[0])?;
+        BassBar2::checked_set(&mut field, bars[1])?;
+
+        // Only the low nibble of 0x59 belongs to the field; its high nibble is bar 9 of
+        // the main block and bits 3/2 are vibrato and percussion.
+        BassHighNibble::checked_set(&mut self.raw[org(0x59)], (field >> 8) as u8)
+            .expect("the field was assembled from a nibble, so bits 15..12 are clear");
+        self.raw[org(0x5a)] = field as u8;
+        Ok(())
+    }
+
+    /// The vib/chorus selection byte and the modes it indexes, or `None` for Pipe.
+    fn vib_table(model: OrganModel) -> Option<(usize, &'static [VibChorus])> {
+        use VibChorus::*;
+        match model {
+            OrganModel::B3 => Some((org(0x51), &[V1, C1, V2, C2, V3, C3])),
+            OrganModel::Vox => Some((org(0x63), &[V1, V2, V3])),
+            OrganModel::Farfisa => Some((org(0x73), &[V1, V2, C2, C3])),
+            OrganModel::Pipe => None,
+        }
+    }
 }
 
-// 0x93..0x9F
+/// `[u8; 69]` has no `Default` — the std impls stop at 32 — so this one is written out
+/// rather than derived like the other panels'.
+impl Default for OrganPanel {
+    fn default() -> Self {
+        OrganPanel {
+            raw: [0; ORGAN_LEN],
+        }
+    }
+}
+
+// 0x93..0x9f — the effects panel, which holds the format's two cross-word fields.
+
+/// 0x93..0x9a — `settings`.
+type Fx1 = Field<u8, 63, 62>;
+type Fx1Type = Field<u8, 61, 58>;
+type Fx1Rate = Field<u8, 57, 51>;
+type Fx2 = Field<u8, 50, 49>;
+type Fx2Type = Field<u8, 48, 45>;
+type Fx2Rate = Field<u8, 44, 38>;
+type Fx4 = Field<u8, 37, 36>;
+type Fx4Feedback = Field<u8, 35, 34>;
+type Fx4Tempo = Field<u8, 33, 27>;
+type Fx4Moisture = Field<u8, 26, 20>;
+type Fx4PingPong = Field<bool, 19, 19>;
+type EqualizerOn = Field<bool, 18, 18>;
+type EqualizerFreq = Field<u8, 16, 10>;
+type EqualizerTreble = Field<u8, 9, 3>;
+
+/// 0x9b..0x9e — `settings2`.
+type EqualizerBass = Field<u8, 27, 21>;
+type Fx3 = Field<u8, 20, 19>;
+type Fx3Type = Field<u8, 18, 16>;
+type Fx3Compression = Field<u8, 15, 9>;
+type Fx5 = Field<bool, 8, 8>;
+type Fx5Type = Field<u8, 7, 5>;
+
+/// 0x9f — `settings3`.
+type RotaryStop = Field<u8, 5, 5>;
+type RotarySpeed = Field<u8, 4, 4>;
+
+/// The two cross-word fields: three bits at the bottom of 0x9a plus four at the top of
+/// 0x9b, and five bits in 0x9e plus two in 0x9f.
+type EqualizerFreqGain = Straddle<u8, Field<u8, 2, 0>, Field<u8, 31, 28>>;
+type Fx5Moisture = Straddle<u8, Field<u8, 4, 0>, Field<u8, 7, 6>>;
+
 #[binrw]
-#[derive(Debug, Default)]
-pub struct EffectsPanel {
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EffectsWords {
     // 0x93..0x9a               0x93      0x94     0x95     0x96     0x97     0x98     0x99    0x9a
     #[brw(big)]
     settings: u64,
+    // 0x9b..0x9e
+    #[brw(big)]
+    settings2: u32,
+    // 0x9f
+    #[brw(big)]
+    settings3: u8,
+}
 
-    // fx1 (0: off, 1: lower, 2: upper)
-    #[br(calc = ((settings & 0b11000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 7) + 6)) as u8)]
-    #[bw(ignore)]
+#[derive(Debug, Default)]
+pub struct EffectsPanel {
+    words: EffectsWords,
+
+    /// 0: off, 1: lower, 2: upper. Two bits on disk.
     pub fx1: u8,
-
-    // fx1 type (1: pan1, pan2, pan1&2, 2: wah, rm, trem1, trem2, trem1&2)
-    #[br(calc = ((settings & 0b00111100_00000000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 7) + 2)) as u8)]
-    #[bw(ignore)]
+    /// 1: pan1, pan2, pan1&2; 2: wah, rm, trem1, trem2, trem1&2. Four bits.
     pub fx1_type: u8,
-
-    // fx1 rate 0..127 (0..10)
-    #[br(calc = ((settings & 0b00000011_11111000_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 6) + 3)) as u8)]
-    #[bw(ignore)]
+    /// 0..127, shown as 0..10. Seven bits.
     pub fx1_rate: u8,
-
-    // fx2 (0: off, 1: lower, 2: upper
-    #[br(calc = ((settings & 0b00000000_00000110_00000000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 6) + 1)) as u8)]
-    #[bw(ignore)]
+    /// 0: off, 1: lower, 2: upper. Two bits.
     pub fx2: u8,
-
-    // fx2 type (flang, choir1, choir2, vibe, phas1, phas2)
-    #[br(calc = ((settings & 0b00000000_00000001_11100000_00000000_00000000_00000000_00000000_00000000) >> ((8 * 5) + 5)) as u8)]
-    #[bw(ignore)]
+    /// flang, choir1, choir2, vibe, phas1, phas2. Four bits.
     pub fx2_type: u8,
-
-    // fx2 rate 0..127 (0..10)
-    #[br(calc = ((settings & 0b00000000_00000000_00011111_11000000_00000000_00000000_00000000_00000000) >> ((8 * 4) + 6)) as u8)]
-    #[bw(ignore)]
+    /// 0..127, shown as 0..10. Seven bits.
     pub fx2_rate: u8,
-
-    // fx4 (0: off, 1: lower, 2: upper)
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00110000_00000000_00000000_00000000_00000000) >> ((8 * 4) + 4)) as u8)]
-    #[bw(ignore)]
+    /// 0: off, 1: lower, 2: upper. Two bits.
     pub fx4: u8,
-
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00001100_00000000_00000000_00000000_00000000) >> ((8 * 4) + 2)) as u8)]
-    #[bw(ignore)]
+    /// Two bits.
     pub fx4_feedback: u8,
-
-    // fx4 rate 0..127 (750ms..20ms)
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000011_11111000_00000000_00000000_00000000) >> ((8 * 3) + 3)) as u8)]
-    #[bw(ignore)]
+    /// 0..127, 750ms..20ms. Seven bits.
     pub fx4_tempo: u8,
-
-    // fx4 wet/dry 0..127 (0..10)
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000111_11110000_00000000_00000000) >> ((8 * 2) + 4)) as u8)]
-    #[bw(ignore)]
+    /// Delay wet/dry, 0..127, shown as 0..10. Seven bits.
     pub fx4_moisture: u8,
-
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00001000_00000000_00000000) >> ((8 * 2) + 3)) != 0)]
-    #[bw(ignore)]
     pub fx4_ping_pong: bool,
-
     /// EQ engaged. **Which part it applies to is not in this word** — see
     /// [`Extra::equalizer_part`].
     ///
@@ -587,101 +892,165 @@ pub struct EffectsPanel {
     /// only ever answer 0 or 2: diffing the four named `equalizer/{0,1,2,3}_…`
     /// specimens shows they are byte-identical across `0x93..0x9a` apart from this
     /// single bit, and the lower/upper/both choice lives at `0xa1`.
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000100_00000000_00000000) >> ((8 * 2) + 2)) != 0)]
-    #[bw(ignore)]
     pub equalizer_on: bool,
-
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000001_11111100_00000000) >> ((8 * 1) + 2)) as u8)]
-    #[bw(ignore)]
+    /// Seven bits.
     pub equalizer_freq: u8,
-
-    #[br(calc = ((settings & 0b00000000_00000000_00000000_00000000_00000000_00000000_00000011_11111000) >> ((8 * 0) + 3)) as u8)]
-    #[bw(ignore)]
+    /// Seven bits.
     pub equalizer_treble: u8,
-
-    // 0x9b..0x9e
-    #[brw(big)]
-    settings2: u32,
-
-    //                           0x9a                                     0x9b      0x9c     0x9d      0x9e
-    #[br(calc = (((settings & 0b00000111) << 4) as u8) + (((settings2 & 0b11110000_00000000_00000000_00000000) >> ((8 * 3) + 4)) as u8))]
-    #[bw(ignore)]
+    /// Seven bits, **split across two words** — three in 0x9a, four in 0x9b. Nothing at
+    /// this level says so; the split lives entirely in the conversion.
     pub equalizer_freq_gain: u8,
-
-    //                           0x9b      0x9c      0x9d     0x9e
-    #[br(calc = ((settings2 & 0b00001111_11100000_00000000_00000000) >> ((8 * 2) + 5)) as u8)]
-    #[bw(ignore)]
+    /// Seven bits.
     pub equalizer_bass: u8,
-
-    // fx3 (0: off, 1: lower, 2: upper)
-    #[br(calc = ((settings2 & 0b00000000_00011000_00000000_00000000) >> ((8 * 2) + 3)) as u8)]
-    #[bw(ignore)]
+    /// 0: off, 1: lower, 2: upper. Two bits.
     pub fx3: u8,
-
-    // fx3 type (none, twin, rotary, comp, small, jc)
-    #[br(calc = ((settings2 & 0b00000000_00000111_00000000_00000000) >> ((8 * 2) + 0)) as u8)]
-    #[bw(ignore)]
+    /// none, twin, rotary, comp, small, jc. Three bits.
     pub fx3_type: u8,
-
-    // fx3 rate 0..127 (0..10)
-    #[br(calc = ((settings2 & 0b00000000_00000000_11111110_00000000) >> ((8 * 1) + 1)) as u8)]
-    #[bw(ignore)]
+    /// 0..127, shown as 0..10. Seven bits.
     pub fx3_compression: u8,
-
-    #[br(calc = ((settings2 & 0b00000000_00000000_00000001_00000000) >> ((8 * 1) + 0)) != 0)]
-    #[bw(ignore)]
     pub fx5: bool,
-
-    #[br(calc = ((settings2 & 0b00000000_00000000_00000000_11100000) >> ((8 * 0) + 5)) as u8)]
-    #[bw(ignore)]
+    /// Three bits.
     pub fx5_type: u8,
-
-    // 0x9f
-    #[brw(big)]
-    settings3: u8,
-
-    // 0x9b..0x9f                  0x9b      0x9c      0x9d     0x9e                                   0x9f
-    #[br(calc = ((((settings2 & 0b00000000_00000000_00000000_00011111)) << 2) as u8) + ((settings3 & 0b11000000) >> 6))]
-    #[bw(ignore)]
+    /// Seven bits, **split across two words** — five in 0x9e, two in 0x9f.
     pub fx5_moisture: u8,
-
-    // 0 = off, 1 = on
-    #[br(calc = ((settings3 & 0b00100000) >> ((8 * 0) + 5)) as u8)]
-    #[bw(ignore)]
+    /// 0 = off, 1 = on. One bit.
     pub rotary_stop: u8,
-
-    // 0 = slow, 1 = fast
-    #[br(calc = ((settings3 & 0b00010000) >> ((8 * 0) + 4)) as u8)]
-    #[bw(ignore)]
+    /// 0 = slow, 1 = fast. One bit.
     pub rotary_speed: u8,
 }
 
+impl TryFrom<EffectsWords> for EffectsPanel {
+    type Error = ParseError;
+
+    fn try_from(w: EffectsWords) -> Result<Self, ParseError> {
+        Ok(EffectsPanel {
+            words: w,
+            fx1: Fx1::read(w.settings),
+            fx1_type: Fx1Type::read(w.settings),
+            fx1_rate: Fx1Rate::read(w.settings),
+            fx2: Fx2::read(w.settings),
+            fx2_type: Fx2Type::read(w.settings),
+            fx2_rate: Fx2Rate::read(w.settings),
+            fx4: Fx4::read(w.settings),
+            fx4_feedback: Fx4Feedback::read(w.settings),
+            fx4_tempo: Fx4Tempo::read(w.settings),
+            fx4_moisture: Fx4Moisture::read(w.settings),
+            fx4_ping_pong: Fx4PingPong::read(w.settings),
+            equalizer_on: EqualizerOn::read(w.settings),
+            equalizer_freq: EqualizerFreq::read(w.settings),
+            equalizer_treble: EqualizerTreble::read(w.settings),
+            equalizer_freq_gain: EqualizerFreqGain::read(w.settings, w.settings2),
+            equalizer_bass: EqualizerBass::read(w.settings2),
+            fx3: Fx3::read(w.settings2),
+            fx3_type: Fx3Type::read(w.settings2),
+            fx3_compression: Fx3Compression::read(w.settings2),
+            fx5: Fx5::read(w.settings2),
+            fx5_type: Fx5Type::read(w.settings2),
+            fx5_moisture: Fx5Moisture::read(w.settings2, w.settings3),
+            rotary_stop: RotaryStop::read(w.settings3),
+            rotary_speed: RotarySpeed::read(w.settings3),
+        })
+    }
+}
+
+impl TryFrom<&EffectsPanel> for EffectsWords {
+    type Error = FieldOverflow;
+
+    /// Twenty of this panel's twenty-four fields are raw integers in slots narrower than
+    /// a `u8`, so almost every line here can fail at write time. That is the shape's
+    /// cost concentrated in one place.
+    fn try_from(p: &EffectsPanel) -> Result<Self, FieldOverflow> {
+        let mut w = p.words;
+
+        Fx1::checked_set(&mut w.settings, p.fx1)?;
+        Fx1Type::checked_set(&mut w.settings, p.fx1_type)?;
+        Fx1Rate::checked_set(&mut w.settings, p.fx1_rate)?;
+        Fx2::checked_set(&mut w.settings, p.fx2)?;
+        Fx2Type::checked_set(&mut w.settings, p.fx2_type)?;
+        Fx2Rate::checked_set(&mut w.settings, p.fx2_rate)?;
+        Fx4::checked_set(&mut w.settings, p.fx4)?;
+        Fx4Feedback::checked_set(&mut w.settings, p.fx4_feedback)?;
+        Fx4Tempo::checked_set(&mut w.settings, p.fx4_tempo)?;
+        Fx4Moisture::checked_set(&mut w.settings, p.fx4_moisture)?;
+        Fx4PingPong::set(&mut w.settings, p.fx4_ping_pong);
+        EqualizerOn::set(&mut w.settings, p.equalizer_on);
+        EqualizerFreq::checked_set(&mut w.settings, p.equalizer_freq)?;
+        EqualizerTreble::checked_set(&mut w.settings, p.equalizer_treble)?;
+
+        EqualizerBass::checked_set(&mut w.settings2, p.equalizer_bass)?;
+        Fx3::checked_set(&mut w.settings2, p.fx3)?;
+        Fx3Type::checked_set(&mut w.settings2, p.fx3_type)?;
+        Fx3Compression::checked_set(&mut w.settings2, p.fx3_compression)?;
+        Fx5::set(&mut w.settings2, p.fx5);
+        Fx5Type::checked_set(&mut w.settings2, p.fx5_type)?;
+
+        RotaryStop::checked_set(&mut w.settings3, p.rotary_stop)?;
+        RotarySpeed::checked_set(&mut w.settings3, p.rotary_speed)?;
+
+        // The cross-word pair. Order matters against the single-word writes above only
+        // in that these must not be clobbered by them — they are not, since no range
+        // overlaps.
+        EqualizerFreqGain::checked_set(&mut w.settings, &mut w.settings2, p.equalizer_freq_gain)?;
+        Fx5Moisture::checked_set(&mut w.settings2, &mut w.settings3, p.fx5_moisture)?;
+
+        Ok(w)
+    }
+}
+
 // 0xa1..0xa4
+
+/// 0xa1..0xa4 — `settings`.
+type Fx1Control = Field<bool, 28, 28>;
+type Fx2Deep = Field<bool, 27, 27>;
+type EqualizerPart = Field<u8, 26, 25>;
+
 #[binrw]
-#[derive(Debug, Default)]
-pub struct Extra {
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExtraWords {
     #[brw(big)]
     settings: u32,
+}
 
-    // fx1 control pedal (0: off, 1: on)
-    #[br(calc = ((settings & 0b00010000_00000000_00000000_00000000) >> ((8 * 3) + 4)) != 0)]
-    #[bw(ignore)]
+#[derive(Debug, Default)]
+pub struct Extra {
+    words: ExtraWords,
+
+    /// fx1 control pedal.
     pub fx1_control: bool,
-
-    // fx1 deep (0: off, 1: on)
-    #[br(calc = ((settings & 0b00001000_00000000_00000000_00000000) >> ((8 * 3) + 3)) != 0)]
-    #[bw(ignore)]
+    /// fx2 deep.
     pub fx2_deep: bool,
-
     /// Which part the equalizer applies to: `0` lower, `1` upper, `2` lower+upper.
     ///
     /// Whether the EQ is engaged at all is a separate bit,
     /// [`EffectsPanel::equalizer_on`] — so `0` here means *lower*, not *off*. Located
     /// by diffing the `equalizer/{0,1,2,3}_…` specimens, which differ only at `0xa1`
-    /// (and in the enable bit and CRC).
-    #[br(calc = ((settings & 0b00000110_00000000_00000000_00000000) >> ((8 * 3) + 1)) as u8)]
-    #[bw(ignore)]
+    /// (and in the enable bit and CRC). Two bits on disk.
     pub equalizer_part: u8,
+}
+
+impl TryFrom<ExtraWords> for Extra {
+    type Error = ParseError;
+
+    fn try_from(w: ExtraWords) -> Result<Self, ParseError> {
+        Ok(Extra {
+            words: w,
+            fx1_control: Fx1Control::read(w.settings),
+            fx2_deep: Fx2Deep::read(w.settings),
+            equalizer_part: EqualizerPart::read(w.settings),
+        })
+    }
+}
+
+impl TryFrom<&Extra> for ExtraWords {
+    type Error = FieldOverflow;
+
+    fn try_from(p: &Extra) -> Result<Self, FieldOverflow> {
+        let mut w = p.words;
+        Fx1Control::set(&mut w.settings, p.fx1_control);
+        Fx2Deep::set(&mut w.settings, p.fx2_deep);
+        EqualizerPart::checked_set(&mut w.settings, p.equalizer_part)?;
+        Ok(w)
+    }
 }
 
 #[binrw]
@@ -702,30 +1071,45 @@ pub struct Schema {
     program_version: u16,
 
     // 0x2e..0x34
+    //
+    // `binrw` reads the packed words and `try_map` converts, so decoding happens inside
+    // `BinRead` and a file with an impossible value fails to parse. This is discussion
+    // #184's sanctioned pattern: the packing lives in a mapped companion, never in
+    // `binrw` itself.
+    #[br(try_map = |w: CenterWords| CenterPanel::try_from(w))]
+    #[bw(try_map = |p: &CenterPanel| CenterWords::try_from(p))]
     pub center_panel: CenterPanel,
 
     // 0x35..0x3b
     pad1: [u8; (0x39 - 0x34) as usize],
 
     // 0x3a..0x41
+    #[br(try_map = |w: PianoWords| PianoPanel::try_from(w))]
+    #[bw(try_map = |p: &PianoPanel| PianoWords::try_from(p))]
     pub piano_panel: PianoPanel,
 
     // 0x42..0x45
     pad2: [u8; (0x45 - 0x41) as usize],
 
     // 0x46..0x4d
+    #[br(try_map = |w: SampleWords| SamplePanel::try_from(w))]
+    #[bw(try_map = |p: &SamplePanel| SampleWords::try_from(p))]
     pub sample_panel: SamplePanel,
 
     // 0x4e..0x92
     pub organ_panel: OrganPanel,
 
     // 0x93..0x9f
+    #[br(try_map = |w: EffectsWords| EffectsPanel::try_from(w))]
+    #[bw(try_map = |p: &EffectsPanel| EffectsWords::try_from(p))]
     pub effects_panel: EffectsPanel,
 
     // 0xa0
     todo: u8,
 
     // 0xa1..0xa4
+    #[br(try_map = |w: ExtraWords| Extra::try_from(w))]
+    #[bw(try_map = |p: &Extra| ExtraWords::try_from(p))]
     pub extra: Extra,
 }
 
@@ -751,9 +1135,7 @@ impl Program {
                 center_panel: CenterPanel::default(),
                 piano_panel: PianoPanel::default(),
                 sample_panel: SamplePanel::default(),
-                organ_panel: OrganPanel {
-                    raw: [0; ORGAN_LEN],
-                },
+                organ_panel: OrganPanel::default(),
                 effects_panel: EffectsPanel::default(),
                 extra: Extra::default(),
             },
@@ -943,6 +1325,183 @@ mod tests {
         );
     }
 
+    // ── the decoded-struct shape's costs and guarantees ─────────────────────────
+
+    use std::io::Cursor;
+
+    /// **The cost of `pub` fields.** A slot narrower than its Rust type can be assigned a
+    /// value that does not fit, and nothing can object until encode time.
+    ///
+    /// `gain` is seven bits held as `u8`. `panel.gain = 200` is a legal assignment to a
+    /// public field of a public struct: it compiles, it type-checks, and the panel now
+    /// holds a value that cannot be written. Refusing at encode beats truncating — a
+    /// truncation would silently corrupt `part_mix` next door — but the report arrives
+    /// nowhere near the line that caused it.
+    #[test]
+    fn an_out_of_range_assignment_is_caught_only_at_write() {
+        let mut program = Program::new((0, 0).try_into().unwrap());
+
+        // Compiles. No error, no warning, no way to object.
+        program.schema.center_panel.gain = 200;
+
+        let mut bytes = Vec::new();
+        let err = program
+            .write_to(&mut Cursor::new(&mut bytes))
+            .expect_err("200 does not fit seven bits");
+        assert!(
+            err.to_string().contains("does not fit"),
+            "unhelpful error: {err}",
+        );
+
+        // And the failure lands mid-write: the stream already holds a partial program.
+        // Callers going through `nord_format::to_bytes` are fine — it discards the
+        // buffer — but a caller writing straight to a file is not.
+        assert!(
+            !bytes.is_empty() && bytes.len() < FILE_LEN,
+            "expected a partial write, got {} of {FILE_LEN} bytes",
+            bytes.len(),
+        );
+    }
+
+    /// The same hazard exists on every raw-integer field in a narrow slot. Counted here
+    /// so the comparison has a number rather than an impression.
+    #[test]
+    fn the_number_of_fields_that_can_be_assigned_an_unwritable_value() {
+        // center: gain (7), organ_type (3)
+        // piano:  category (3), piano_model (5), clav_model (2), acoustics (2), touch (2)
+        // sample: attack (7), decay_release (7), dynamics (2)
+        // fx:     fx1 (2), fx1_type (4), fx1_rate (7), fx2 (2), fx2_type (4), fx2_rate (7),
+        //         fx3 (2), fx3_type (3), fx3_compression (7), fx4 (2), fx4_feedback (2),
+        //         fx4_tempo (7), fx4_moisture (7), fx5_type (3), fx5_moisture (7),
+        //         equalizer_freq (7), equalizer_freq_gain (7), equalizer_bass (7),
+        //         equalizer_treble (7), rotary_stop (1), rotary_speed (1)
+        // extra:  equalizer_part (2)
+        //
+        // Every one is a `pub u8` whose slot is narrower than eight bits.
+        let narrow_pub_u8_fields = 2 + 5 + 3 + 21 + 1;
+        assert_eq!(narrow_pub_u8_fields, 32);
+    }
+
+    /// Re-stamp the body CRC after corrupting a byte, so a decode test exercises the
+    /// field check rather than the checksum.
+    fn restamp_crc(bytes: &mut [u8]) {
+        use crate::crc::MultipartCrc32;
+        let mut crc = MultipartCrc32::new(0x2c, 0xa4 - 0x2c);
+        crc.update(0, bytes);
+        bytes[0x18..0x1c].copy_from_slice(&crc.checksum().to_le_bytes());
+    }
+
+    /// Validation is part of `BinRead`, not a step a caller has to remember.
+    ///
+    /// This shape gets it structurally: `#[br(try_map)]` runs the fallible decode inside
+    /// the read, so `Schema::read_be` — public API that never touches
+    /// [`Program::read_from`] — validates too, with nothing to forget. Note there is no
+    /// way to build the corrupt input through the API at all: `left_part` is an
+    /// `Instrument`, so a panel in memory *cannot* hold the invalid value. It has to be
+    /// forged in the bytes.
+    #[test]
+    fn no_decode_path_can_skip_validation() {
+        use binrw::BinRead;
+
+        let mut program = Program::new((0, 0).try_into().unwrap());
+        let mut bytes = Vec::new();
+        program.write_to(&mut Cursor::new(&mut bytes)).unwrap();
+
+        // Self-check: re-stamping an untouched file must be a no-op.
+        let pristine = bytes.clone();
+        restamp_crc(&mut bytes);
+        assert_eq!(bytes, pristine, "the CRC helper does not match the writer");
+
+        // 0b111 is not an `Instrument`.
+        bytes[0x2e] |= 0b1110_0000;
+        restamp_crc(&mut bytes);
+
+        let front = Program::read_from(&mut Cursor::new(&mut bytes))
+            .expect_err("the front door accepted an undecodable panel");
+        assert!(
+            front.to_string().contains("exceeds bound"),
+            "refused for the wrong reason: {front}",
+        );
+        assert!(
+            Schema::read_be(&mut Cursor::new(&bytes)).is_err(),
+            "`Schema::read_be` accepted an undecodable panel",
+        );
+        assert!(
+            CenterPanel::try_from(
+                CenterWords::read_be(&mut Cursor::new(&bytes[0x2e..0x35])).unwrap()
+            )
+            .is_err(),
+            "the conversion itself accepted an undecodable panel",
+        );
+    }
+
+    /// Bits no field names survive a re-encode, because each panel keeps the words it was
+    /// decoded from. This is what the private `words` copy buys, and the reason the shape
+    /// can migrate one field at a time.
+    #[test]
+    fn unnamed_bits_survive_a_re_encode() {
+        // `PianoPanel` 60..59 and 53..49 are named by nothing.
+        const GAPS: u64 = (0b11 << 59) | (0b11111 << 49);
+
+        let mut words = PianoWords { settings: 0 };
+        words.settings |= GAPS;
+        let mut panel = PianoPanel::try_from(words).unwrap();
+        panel.category = 2;
+        panel.id = 0xdead_beef;
+
+        let out = PianoWords::try_from(&panel).unwrap();
+        assert_eq!(out.settings & GAPS, GAPS, "a re-encode cleared a gap bit");
+
+        let mut panel = PianoPanel::try_from(PianoWords { settings: 0 }).unwrap();
+        panel.category = 7;
+        panel.piano_model = 31;
+        let out = PianoWords::try_from(&panel).unwrap();
+        assert_eq!(out.settings & GAPS, 0, "a re-encode set a gap bit");
+    }
+
+    /// Decode and encode are inverses on any word the decoder accepts.
+    #[test]
+    fn decode_and_encode_are_inverse() {
+        for pattern in [0u64, u64::MAX, 0xa5a5_a5a5_a5a5_a5a5, 0x5a5a_5a5a_5a5a_5a5a] {
+            let words = PianoWords { settings: pattern };
+            let panel = PianoPanel::try_from(words).unwrap();
+            assert_eq!(PianoWords::try_from(&panel).unwrap().settings, pattern);
+
+            let words = SampleWords { settings: pattern };
+            let panel = SamplePanel::try_from(words).unwrap();
+            assert_eq!(SampleWords::try_from(&panel).unwrap().settings, pattern);
+
+            let words = CenterWords {
+                settings: pattern as u16,
+                settings2: pattern as u8,
+                settings3: pattern as u32,
+            };
+            if let Ok(panel) = CenterPanel::try_from(words) {
+                let out = CenterWords::try_from(&panel).unwrap();
+                assert_eq!(
+                    (out.settings, out.settings2, out.settings3),
+                    (words.settings, words.settings2, words.settings3),
+                );
+            }
+        }
+    }
+
+    /// A default panel has to encode, which a zeroed word alone would not: an octave
+    /// shift of zero is stored as 7, so all-zero bits decode as -7 — out of range. Here
+    /// the derived `Default` gives the *fields* their proper defaults and the encode
+    /// lays them over the zeroed words, so it comes out right without special handling.
+    #[test]
+    fn the_default_panel_encodes_and_decodes() {
+        let panel = CenterPanel::default();
+        let words = CenterWords::try_from(&panel).unwrap();
+        let back = CenterPanel::try_from(words).expect("default panel must decode");
+
+        assert_eq!(back.left_octave_shift, 0);
+        assert_eq!(back.right_octave_shift, 0);
+        assert_eq!(back.transpose, 0);
+        assert_eq!(back.left_part, Instrument::Organ);
+    }
+
     /// Build an organ panel from `(absolute offset, byte)` pairs; everything else 0.
     fn panel(bytes: &[(usize, u8)]) -> OrganPanel {
         let mut raw = [0u8; ORGAN_LEN];
@@ -958,13 +1517,25 @@ mod tests {
     #[test]
     fn b3_bass_drawbars_decode_from_the_packed_field() {
         // bar1 = 4, bar2 = 0  ->  field 0x100
-        assert_eq!(panel(&[(0x59, 0x01), (0x5a, 0x00)]).b3_bass_drawbars(), [4, 0]);
+        assert_eq!(
+            panel(&[(0x59, 0x01), (0x5a, 0x00)]).b3_bass_drawbars(),
+            [4, 0]
+        );
         // bar1 = 0, bar2 = 4  ->  field 0x010
-        assert_eq!(panel(&[(0x59, 0x00), (0x5a, 0x10)]).b3_bass_drawbars(), [0, 4]);
+        assert_eq!(
+            panel(&[(0x59, 0x00), (0x5a, 0x10)]).b3_bass_drawbars(),
+            [0, 4]
+        );
         // bar1 = 8, bar2 = 7  ->  field 0x21c
-        assert_eq!(panel(&[(0x59, 0x02), (0x5a, 0x1c)]).b3_bass_drawbars(), [8, 7]);
+        assert_eq!(
+            panel(&[(0x59, 0x02), (0x5a, 0x1c)]).b3_bass_drawbars(),
+            [8, 7]
+        );
         // bar1 = 8, bar2 = 8  ->  field 0x220
-        assert_eq!(panel(&[(0x59, 0x02), (0x5a, 0x20)]).b3_bass_drawbars(), [8, 8]);
+        assert_eq!(
+            panel(&[(0x59, 0x02), (0x5a, 0x20)]).b3_bass_drawbars(),
+            [8, 8]
+        );
         // all down
         assert_eq!(panel(&[]).b3_bass_drawbars(), [0, 0]);
     }
@@ -975,10 +1546,19 @@ mod tests {
     #[test]
     fn b3_bass_drawbars_ignore_the_flags_sharing_that_byte() {
         // Same field as `1100_88iiiiiii`: bar 9 = 8 in the high nibble, bars still 8,8.
-        assert_eq!(panel(&[(0x59, 0x82), (0x5a, 0x20)]).b3_bass_drawbars(), [8, 8]);
+        assert_eq!(
+            panel(&[(0x59, 0x82), (0x5a, 0x20)]).b3_bass_drawbars(),
+            [8, 8]
+        );
         // Vibrato (0x08) and percussion (0x04) on must not disturb the reading.
-        assert_eq!(panel(&[(0x59, 0x0e), (0x5a, 0x20)]).b3_bass_drawbars(), [8, 8]);
-        assert_eq!(panel(&[(0x59, 0xfe), (0x5a, 0x20)]).b3_bass_drawbars(), [8, 8]);
+        assert_eq!(
+            panel(&[(0x59, 0x0e), (0x5a, 0x20)]).b3_bass_drawbars(),
+            [8, 8]
+        );
+        assert_eq!(
+            panel(&[(0x59, 0xfe), (0x5a, 0x20)]).b3_bass_drawbars(),
+            [8, 8]
+        );
     }
 
     /// Farfisa's drawbars are on/off tabs: >= 5 is on. The raw nibble is still stored
@@ -987,14 +1567,29 @@ mod tests {
     fn farfisa_drawbars_are_on_off_tabs() {
         // 0x77 is Farfisa preset 1: nine nibbles, high-nibble first.
         // bars 0..8 = 8,7,6,5,4,3,2,1,0 -> on for >= 5.
-        let p = panel(&[(0x77, 0x87), (0x78, 0x65), (0x79, 0x43), (0x7a, 0x21), (0x7b, 0x00)]);
-        assert_eq!(p.drawbars(OrganModel::Farfisa, 1), [8, 7, 6, 5, 4, 3, 2, 1, 0]);
+        let p = panel(&[
+            (0x77, 0x87),
+            (0x78, 0x65),
+            (0x79, 0x43),
+            (0x7a, 0x21),
+            (0x7b, 0x00),
+        ]);
+        assert_eq!(
+            p.drawbars(OrganModel::Farfisa, 1),
+            [8, 7, 6, 5, 4, 3, 2, 1, 0]
+        );
         assert_eq!(
             p.farfisa_tabs(1),
             [true, true, true, true, false, false, false, false, false]
         );
         // The threshold sits between 4 and 5.
-        let edge = panel(&[(0x77, 0x54), (0x78, 0x00), (0x79, 0x00), (0x7a, 0x00), (0x7b, 0x00)]);
+        let edge = panel(&[
+            (0x77, 0x54),
+            (0x78, 0x00),
+            (0x79, 0x00),
+            (0x7a, 0x00),
+            (0x7b, 0x00),
+        ]);
         assert_eq!(edge.farfisa_tabs(1)[0], true, "5 should read as on");
         assert_eq!(edge.farfisa_tabs(1)[1], false, "4 should read as off");
     }
