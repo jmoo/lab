@@ -1,7 +1,9 @@
+use crate::bits::{Field, FieldOverflow};
 use crate::common;
 use crate::common::{bank, PartMix};
 use crate::crc::{CrcReader, CrcWriter};
 use crate::electro5::{Instrument, OctaveShift, SplitPoint, Transpose};
+use crate::error::ParseError;
 use crate::types::RangedU16Pair;
 use binrw::{binrw, BinRead, BinReaderExt, BinWriterExt};
 
@@ -21,125 +23,305 @@ pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
 pub type Header = common::Header<Location>;
 pub type Bank = bank::Bank<Program, Location>;
 
-// 0x2e-0x32
+// 0x2e-0x34 — the centre panel. RFC-0001's option **B+** prototype: the three backing
+// words are private and every logical value is a `Field<T, HI, LO>` with a getter *and*
+// a setter, so an assignment lands in the bytes instead of being discarded.
+//
+// Before this, the panel decoded into ~15 `pub` fields carrying `#[bw(ignore)]`, and
+// which of them survived a write depended on whether their word had a `bw(calc)`:
+// `settings` and `settings2` were recomputed from their decoded fields, `settings3` was
+// stored verbatim, so `panel.gain = 3` compiled, changed nothing, and reported success.
+// Identical syntax, opposite semantics, nothing in the type system marking the
+// difference. Now there are no public decoded fields to assign to at all.
+//
+// Bits are numbered from the LSB of each word, which for these big-endian words means
+// `HI`/`LO` map directly onto the old `0b…` masks. Unnamed bits — `settings3` 7..0, and
+// `unknown_boolean1` aside, whatever else is not listed — are simply not fields; they
+// stay in the word untouched and round-trip verbatim.
+
+/// 0x2e..0x2f — parts, octave shifts, sustain.
+type LeftPart = Field<Instrument, 15, 13>;
+type RightPart = Field<Instrument, 12, 10>;
+type LeftOctaveShift = Field<OctaveShift, 9, 6>;
+type RightOctaveShift = Field<OctaveShift, 5, 2>;
+type LeftSustain = Field<bool, 1, 1>;
+type RightSustain = Field<bool, 0, 0>;
+
+/// 0x30 — pedals, split, transpose enable.
+type LeftControl = Field<bool, 7, 7>;
+type RightControl = Field<bool, 6, 6>;
+type UnknownBoolean1 = Field<bool, 5, 5>;
+type Split = Field<bool, 4, 4>;
+type SplitPointField = Field<SplitPoint, 3, 1>;
+type TransposeEnabled = Field<bool, 0, 0>;
+
+/// 0x31..0x34 — transpose, part mix, gain, organ selection.
+type TransposeField = Field<Transpose, 31, 28>;
+type PartMixField = Field<PartMix, 27, 21>;
+type Gain = Field<u8, 20, 14>;
+type OrganType = Field<u8, 13, 11>;
+type LowerEnabled = Field<bool, 10, 10>;
+type UpperEnabled = Field<bool, 9, 9>;
+type DrawbarLive = Field<bool, 8, 8>;
+
 #[binrw]
-#[derive(Debug, Default)]
 pub struct CenterPanel {
     // 0x2e..0x2f                 0x2e     0x2f
     #[brw(big)]
-    #[bw(calc =
-    (* left_part as u16) << 13
-    | (* right_part as u16) << 10
-    | ((((* left_octave_shift).as_u8()) as u16) << 6)
-    | ((((* right_octave_shift).as_u8()) as u16) << 2)
-    | ((* left_sustain as u16) << 1)
-    | (* right_sustain as u16)
-    )]
     settings: u16,
-
-    #[br(try_calc = (((settings & 0b11100000_00000000) >> ((8*1)+5)) as u8).try_into())]
-    #[bw(ignore)]
-    pub left_part: Instrument,
-
-    #[br(try_calc = (((settings & 0b00011100_00000000) >> ((8*1)+2)) as u8).try_into())]
-    #[bw(ignore)]
-    pub right_part: Instrument,
-
-    #[br(try_calc = (((settings & 0b00000011_11000000) >> ((8*0)+6)) as u8).try_into())]
-    #[bw(ignore)]
-    pub left_octave_shift: OctaveShift,
-
-    #[br(try_calc = (((settings & 0b00000000_00111100) >> ((8*0)+2)) as u8).try_into())]
-    #[bw(ignore)]
-    pub right_octave_shift: OctaveShift,
-
-    #[br(calc = ((settings & 0b00000000_00000010) >> ((8*0)+1)) != 0)]
-    #[bw(ignore)]
-    pub left_sustain: bool,
-
-    #[br(calc = ((settings & 0b00000000_00000001) >> ((8*0)+0)) != 0)]
-    #[bw(ignore)]
-    pub right_sustain: bool,
 
     // 0x30                    0x30
     #[brw(big)]
-    #[bw(calc =
-    (* left_control as u8) << 7
-    | (* right_control as u8) << 6
-    | ((* unknown_boolean1 as u8) << 5)
-    | ((* split as u8) << 4)
-    | ((* split_point as u8) << 1)
-    | (* transpose_enabled as u8)
-    )]
-    pub settings2: u8,
-
-    // 0x30
-    #[br(calc = ((settings2 & 0b10000000) >> 7) != 0)]
-    #[bw(ignore)]
-    pub left_control: bool,
-
-    // 0x30
-    #[br(calc = ((settings2 & 0b01000000) >> 6) != 0)]
-    #[bw(ignore)]
-    pub right_control: bool,
-
-    // always zero
-    // 0x30
-    #[br(calc = ((settings2 & 0b00100000) >> 5) != 0)]
-    #[bw(ignore)]
-    pub unknown_boolean1: bool,
-
-    // 0x30
-    #[br(calc = ((settings2 & 0b00010000) >> 4) != 0)]
-    #[bw(ignore)]
-    pub split: bool,
-
-    // 0x30
-    #[br(try_calc = ((settings2 & 0b00001110) >> 1).try_into())]
-    #[bw(ignore)]
-    pub split_point: SplitPoint,
-
-    // 0x30
-    // NOTE: Sometimes the electro 5 leaves this as true even when the transpose is 0. It will
-    // not show a transpose light when this happens
-    #[br(calc = (settings2 & 0b00000001) != 0)]
-    #[bw(ignore)]
-    pub transpose_enabled: bool,
+    settings2: u8,
 
     // 0x31..34                     0x31      0x32      0x33     0x34
     #[brw(big)]
-    pub settings3: u32,
+    settings3: u32,
+}
 
-    // -6, 5, 4, 3, 2, 1, 0, 1 111
-    // transpose (0 to 12  big endian = -6 to -6 half steps transposition)
-    #[br(try_calc = (((settings3 & 0b11110000_00000000_00000000_00000000) >> ((8 * 2) + 12)) as u16).try_into())]
-    #[bw(ignore)]
-    pub transpose: Transpose,
+impl CenterPanel {
+    pub fn left_part(&self) -> Result<Instrument, ParseError> {
+        LeftPart::get(self.settings)
+    }
 
-    #[br(try_calc = (((settings3 & 0b00001111_11100000_00000000_00000000) >> ((8 * 2) + 5)) as u16).try_into())]
-    #[bw(ignore)]
-    pub part_mix: PartMix,
+    pub fn set_left_part(&mut self, value: Instrument) {
+        LeftPart::set(&mut self.settings, value)
+    }
 
-    // 0..127 (0..10)
-    #[br(calc = ((settings3 & 0b00000000_00011111_11000000_00000000) >> ((8 * 1) + 6)) as u8)]
-    #[bw(ignore)]
-    pub gain: u8,
+    pub fn right_part(&self) -> Result<Instrument, ParseError> {
+        RightPart::get(self.settings)
+    }
 
-    #[br(calc = ((settings3 & 0b00000000_00000000_00111000_00000000) >> ((8 * 1) + 3)) as u8)]
-    #[bw(ignore)]
-    pub organ_type: u8,
+    pub fn set_right_part(&mut self, value: Instrument) {
+        RightPart::set(&mut self.settings, value)
+    }
 
-    #[br(calc = ((settings3 & 0b00000000_00000000_00000100_00000000) >> ((8 * 1) + 2)) != 0)]
-    #[bw(ignore)]
-    pub lower_enabled: bool,
+    pub fn left_octave_shift(&self) -> Result<OctaveShift, ParseError> {
+        LeftOctaveShift::get(self.settings)
+    }
 
-    #[br(calc = ((settings3 & 0b00000000_00000000_00000010_00000000) >> ((8 * 1) + 1)) != 0)]
-    #[bw(ignore)]
-    pub upper_enabled: bool,
+    pub fn set_left_octave_shift(&mut self, value: OctaveShift) {
+        LeftOctaveShift::set(&mut self.settings, value)
+    }
 
-    #[br(calc = ((settings3 & 0b00000000_00000000_00000001_00000000) >> ((8 * 1) + 0)) != 0)]
-    #[bw(ignore)]
-    pub drawbar_live: bool,
+    pub fn right_octave_shift(&self) -> Result<OctaveShift, ParseError> {
+        RightOctaveShift::get(self.settings)
+    }
+
+    pub fn set_right_octave_shift(&mut self, value: OctaveShift) {
+        RightOctaveShift::set(&mut self.settings, value)
+    }
+
+    pub fn left_sustain(&self) -> bool {
+        LeftSustain::read(self.settings)
+    }
+
+    pub fn set_left_sustain(&mut self, value: bool) {
+        LeftSustain::set(&mut self.settings, value)
+    }
+
+    pub fn right_sustain(&self) -> bool {
+        RightSustain::read(self.settings)
+    }
+
+    pub fn set_right_sustain(&mut self, value: bool) {
+        RightSustain::set(&mut self.settings, value)
+    }
+
+    pub fn left_control(&self) -> bool {
+        LeftControl::read(self.settings2)
+    }
+
+    pub fn set_left_control(&mut self, value: bool) {
+        LeftControl::set(&mut self.settings2, value)
+    }
+
+    pub fn right_control(&self) -> bool {
+        RightControl::read(self.settings2)
+    }
+
+    pub fn set_right_control(&mut self, value: bool) {
+        RightControl::set(&mut self.settings2, value)
+    }
+
+    /// Always zero in every corpus specimen. Named so it is visible, not so it is used.
+    pub fn unknown_boolean1(&self) -> bool {
+        UnknownBoolean1::read(self.settings2)
+    }
+
+    pub fn split(&self) -> bool {
+        Split::read(self.settings2)
+    }
+
+    pub fn set_split(&mut self, value: bool) {
+        Split::set(&mut self.settings2, value)
+    }
+
+    pub fn split_point(&self) -> Result<SplitPoint, ParseError> {
+        SplitPointField::get(self.settings2)
+    }
+
+    pub fn set_split_point(&mut self, value: SplitPoint) {
+        SplitPointField::set(&mut self.settings2, value)
+    }
+
+    /// NOTE: the Electro 5 sometimes leaves this true even when the transpose is 0. It
+    /// shows no transpose light when that happens.
+    pub fn transpose_enabled(&self) -> bool {
+        TransposeEnabled::read(self.settings2)
+    }
+
+    pub fn set_transpose_enabled(&mut self, value: bool) {
+        TransposeEnabled::set(&mut self.settings2, value)
+    }
+
+    /// Half-step transposition, `-6..=6`, stored biased by 6.
+    pub fn transpose(&self) -> Result<Transpose, ParseError> {
+        TransposeField::get(self.settings3)
+    }
+
+    pub fn set_transpose(&mut self, value: Transpose) {
+        TransposeField::set(&mut self.settings3, value)
+    }
+
+    pub fn part_mix(&self) -> Result<PartMix, ParseError> {
+        PartMixField::get(self.settings3)
+    }
+
+    pub fn set_part_mix(&mut self, value: PartMix) {
+        PartMixField::set(&mut self.settings3, value)
+    }
+
+    /// 0..=127, shown on the panel as 0..10.
+    pub fn gain(&self) -> u8 {
+        Gain::read(self.settings3)
+    }
+
+    /// Fallible because the slot is seven bits and a `u8` is eight: 128 or more would
+    /// overrun into [`Self::part_mix`]. This is the write-side width validation
+    /// RFC-0001 lists as a new requirement — nothing checked it before because nothing
+    /// wrote.
+    pub fn set_gain(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        Gain::checked_set(&mut self.settings3, value)
+    }
+
+    /// `0` b3, `1` b3+bass, `2` pipe, `3` vox, `4` farfisa.
+    pub fn organ_type(&self) -> u8 {
+        OrganType::read(self.settings3)
+    }
+
+    pub fn set_organ_type(&mut self, value: u8) -> Result<(), FieldOverflow> {
+        OrganType::checked_set(&mut self.settings3, value)
+    }
+
+    pub fn lower_enabled(&self) -> bool {
+        LowerEnabled::read(self.settings3)
+    }
+
+    pub fn set_lower_enabled(&mut self, value: bool) {
+        LowerEnabled::set(&mut self.settings3, value)
+    }
+
+    pub fn upper_enabled(&self) -> bool {
+        UpperEnabled::read(self.settings3)
+    }
+
+    pub fn set_upper_enabled(&mut self, value: bool) {
+        UpperEnabled::set(&mut self.settings3, value)
+    }
+
+    pub fn drawbar_live(&self) -> bool {
+        DrawbarLive::read(self.settings3)
+    }
+
+    pub fn set_drawbar_live(&mut self, value: bool) {
+        DrawbarLive::set(&mut self.settings3, value)
+    }
+
+    /// Decode every fallible field, reporting the first that does not hold a valid
+    /// value.
+    ///
+    /// Decoding used to happen inside `binrw`'s `try_calc`, so a bad value failed the
+    /// *read*. Now that values are decoded on demand, that check has to be made
+    /// explicitly — [`Program::read_from`] calls this, which keeps the old contract: a
+    /// `Program` that was read successfully decodes cleanly, and the only way to change
+    /// a field afterwards is through a typed setter.
+    pub fn validate(&self) -> Result<(), ParseError> {
+        self.left_part()?;
+        self.right_part()?;
+        self.left_octave_shift()?;
+        self.right_octave_shift()?;
+        self.split_point()?;
+        self.transpose()?;
+        self.part_mix()?;
+        Ok(())
+    }
+}
+
+/// Coherent defaults, built through the setters rather than left as a zeroed word.
+///
+/// A zeroed `settings` decodes to an octave shift of `-7`, which is out of range — the
+/// old `Default` only avoided that because the write path recomputed the word from the
+/// decoded fields and the read path never saw the zeros. With the word authoritative,
+/// the default has to be a real default.
+///
+/// One behavioural change falls out of this: a program from [`Program::new`] now has
+/// `transpose = 0`, where before `settings3` was left at zero and decoded as `-6`.
+impl Default for CenterPanel {
+    fn default() -> Self {
+        let mut panel = CenterPanel {
+            settings: 0,
+            settings2: 0,
+            settings3: 0,
+        };
+        panel.set_left_part(Instrument::default());
+        panel.set_right_part(Instrument::default());
+        panel.set_left_octave_shift(OctaveShift::default());
+        panel.set_right_octave_shift(OctaveShift::default());
+        panel.set_split_point(SplitPoint::default());
+        panel.set_transpose(Transpose::default());
+        panel.set_part_mix(PartMix::default());
+        panel
+    }
+}
+
+/// Renders a decoded value, or its error, in place of the raw word.
+struct Decoded<T, E>(Result<T, E>);
+
+impl<T: Debug, E: std::fmt::Display> Debug for Decoded<T, E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Ok(value) => Debug::fmt(value, f),
+            Err(e) => write!(f, "<invalid: {e}>"),
+        }
+    }
+}
+
+/// Hand-written so a panel dump still shows decoded values rather than three integers.
+/// A field that does not decode prints as `<invalid: …>` instead of aborting the dump.
+impl Debug for CenterPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CenterPanel")
+            .field("left_part", &Decoded(self.left_part()))
+            .field("right_part", &Decoded(self.right_part()))
+            .field("left_octave_shift", &Decoded(self.left_octave_shift()))
+            .field("right_octave_shift", &Decoded(self.right_octave_shift()))
+            .field("left_sustain", &self.left_sustain())
+            .field("right_sustain", &self.right_sustain())
+            .field("left_control", &self.left_control())
+            .field("right_control", &self.right_control())
+            .field("split", &self.split())
+            .field("split_point", &Decoded(self.split_point()))
+            .field("transpose", &Decoded(self.transpose()))
+            .field("transpose_enabled", &self.transpose_enabled())
+            .field("part_mix", &Decoded(self.part_mix()))
+            .field("gain", &self.gain())
+            .field("organ_type", &self.organ_type())
+            .field("lower_enabled", &self.lower_enabled())
+            .field("upper_enabled", &self.upper_enabled())
+            .field("drawbar_live", &self.drawbar_live())
+            .finish()
+    }
 }
 
 // 0x3a..0x41
@@ -736,6 +918,10 @@ pub struct Program {
     name: Option<String>,
 }
 
+/// Why the accessors below may unwrap a decode. See [`CenterPanel::validate`].
+const VALIDATED: &str =
+    "centre panel was validated at read and can only be changed through a typed setter";
+
 impl Program {
     pub fn new(location: Location) -> Program {
         Program {
@@ -776,6 +962,14 @@ impl Program {
             ));
         }
 
+        // Panels holding a private backing word decode on demand rather than at read,
+        // so their range checks are made here instead — same contract as the `try_calc`
+        // fields they replaced: a file with an impossible value fails the read.
+        schema
+            .center_panel
+            .validate()
+            .map_err(|e| io::Error::other(e.to_string()))?;
+
         Ok(Program {
             location: schema.header.location,
             name: None,
@@ -792,60 +986,79 @@ impl Program {
         }
     }
 
+    /// The centre panel, whose fields read *and* write — see [`CenterPanel`].
+    ///
+    /// The `lower_*`/`upper_*` methods below are a naming facade over it (the panel
+    /// speaks left/right, the instrument speaks lower/upper); reach for this when you
+    /// want to change something.
+    pub fn center(&mut self) -> &mut CenterPanel {
+        &mut self.schema.center_panel
+    }
+
+    // The centre panel's fallible fields were validated by `read_from`, and the only
+    // way to change one afterwards is a typed setter, so these cannot see an invalid
+    // value. Keeping the panics here rather than in the panel means the accessor's
+    // signature stays honest for anyone constructing a panel by other means.
     pub fn lower_part(&self) -> Instrument {
-        self.schema.center_panel.left_part
+        self.schema.center_panel.left_part().expect(VALIDATED)
     }
 
     pub fn upper_part(&self) -> Instrument {
-        self.schema.center_panel.right_part
+        self.schema.center_panel.right_part().expect(VALIDATED)
     }
 
     pub fn lower_octave_shift(&self) -> OctaveShift {
-        self.schema.center_panel.left_octave_shift
+        self.schema
+            .center_panel
+            .left_octave_shift()
+            .expect(VALIDATED)
     }
 
     pub fn upper_octave_shift(&self) -> OctaveShift {
-        self.schema.center_panel.right_octave_shift
+        self.schema
+            .center_panel
+            .right_octave_shift()
+            .expect(VALIDATED)
     }
 
     pub fn lower_sustain(&self) -> bool {
-        self.schema.center_panel.left_sustain
+        self.schema.center_panel.left_sustain()
     }
 
     pub fn upper_sustain(&self) -> bool {
-        self.schema.center_panel.right_sustain
+        self.schema.center_panel.right_sustain()
     }
 
     pub fn lower_control(&self) -> bool {
-        self.schema.center_panel.left_control
+        self.schema.center_panel.left_control()
     }
 
     pub fn upper_control(&self) -> bool {
-        self.schema.center_panel.right_control
+        self.schema.center_panel.right_control()
     }
 
     pub fn split_point(&self) -> SplitPoint {
-        self.schema.center_panel.split_point
+        self.schema.center_panel.split_point().expect(VALIDATED)
     }
 
     pub fn split(&self) -> bool {
-        self.schema.center_panel.split
+        self.schema.center_panel.split()
     }
 
     pub fn transpose(&self) -> Transpose {
-        self.schema.center_panel.transpose
+        self.schema.center_panel.transpose().expect(VALIDATED)
     }
 
     pub fn transpose_enabled(&self) -> bool {
-        self.schema.center_panel.transpose_enabled
+        self.schema.center_panel.transpose_enabled()
     }
 
     pub fn part_mix(&self) -> PartMix {
-        self.schema.center_panel.part_mix
+        self.schema.center_panel.part_mix().expect(VALIDATED)
     }
 
     pub fn gain(&self) -> u8 {
-        self.schema.center_panel.gain
+        self.schema.center_panel.gain()
     }
 
     pub fn fx_panel(&self) -> &EffectsPanel {
@@ -870,7 +1083,7 @@ impl Program {
     /// [`OrganPanel::b3_bass_drawbars`]); preset 2 is an ordinary B3. Reading preset 1's
     /// nine nibbles in that mode shows stale values.
     pub fn organ_type(&self) -> u8 {
-        self.schema.center_panel.organ_type
+        self.schema.center_panel.organ_type()
     }
 
     /// The piano panel, including [`PianoPanel::id`] — the program's **piano dependency
@@ -958,13 +1171,25 @@ mod tests {
     #[test]
     fn b3_bass_drawbars_decode_from_the_packed_field() {
         // bar1 = 4, bar2 = 0  ->  field 0x100
-        assert_eq!(panel(&[(0x59, 0x01), (0x5a, 0x00)]).b3_bass_drawbars(), [4, 0]);
+        assert_eq!(
+            panel(&[(0x59, 0x01), (0x5a, 0x00)]).b3_bass_drawbars(),
+            [4, 0]
+        );
         // bar1 = 0, bar2 = 4  ->  field 0x010
-        assert_eq!(panel(&[(0x59, 0x00), (0x5a, 0x10)]).b3_bass_drawbars(), [0, 4]);
+        assert_eq!(
+            panel(&[(0x59, 0x00), (0x5a, 0x10)]).b3_bass_drawbars(),
+            [0, 4]
+        );
         // bar1 = 8, bar2 = 7  ->  field 0x21c
-        assert_eq!(panel(&[(0x59, 0x02), (0x5a, 0x1c)]).b3_bass_drawbars(), [8, 7]);
+        assert_eq!(
+            panel(&[(0x59, 0x02), (0x5a, 0x1c)]).b3_bass_drawbars(),
+            [8, 7]
+        );
         // bar1 = 8, bar2 = 8  ->  field 0x220
-        assert_eq!(panel(&[(0x59, 0x02), (0x5a, 0x20)]).b3_bass_drawbars(), [8, 8]);
+        assert_eq!(
+            panel(&[(0x59, 0x02), (0x5a, 0x20)]).b3_bass_drawbars(),
+            [8, 8]
+        );
         // all down
         assert_eq!(panel(&[]).b3_bass_drawbars(), [0, 0]);
     }
@@ -975,10 +1200,19 @@ mod tests {
     #[test]
     fn b3_bass_drawbars_ignore_the_flags_sharing_that_byte() {
         // Same field as `1100_88iiiiiii`: bar 9 = 8 in the high nibble, bars still 8,8.
-        assert_eq!(panel(&[(0x59, 0x82), (0x5a, 0x20)]).b3_bass_drawbars(), [8, 8]);
+        assert_eq!(
+            panel(&[(0x59, 0x82), (0x5a, 0x20)]).b3_bass_drawbars(),
+            [8, 8]
+        );
         // Vibrato (0x08) and percussion (0x04) on must not disturb the reading.
-        assert_eq!(panel(&[(0x59, 0x0e), (0x5a, 0x20)]).b3_bass_drawbars(), [8, 8]);
-        assert_eq!(panel(&[(0x59, 0xfe), (0x5a, 0x20)]).b3_bass_drawbars(), [8, 8]);
+        assert_eq!(
+            panel(&[(0x59, 0x0e), (0x5a, 0x20)]).b3_bass_drawbars(),
+            [8, 8]
+        );
+        assert_eq!(
+            panel(&[(0x59, 0xfe), (0x5a, 0x20)]).b3_bass_drawbars(),
+            [8, 8]
+        );
     }
 
     /// Farfisa's drawbars are on/off tabs: >= 5 is on. The raw nibble is still stored
@@ -987,14 +1221,29 @@ mod tests {
     fn farfisa_drawbars_are_on_off_tabs() {
         // 0x77 is Farfisa preset 1: nine nibbles, high-nibble first.
         // bars 0..8 = 8,7,6,5,4,3,2,1,0 -> on for >= 5.
-        let p = panel(&[(0x77, 0x87), (0x78, 0x65), (0x79, 0x43), (0x7a, 0x21), (0x7b, 0x00)]);
-        assert_eq!(p.drawbars(OrganModel::Farfisa, 1), [8, 7, 6, 5, 4, 3, 2, 1, 0]);
+        let p = panel(&[
+            (0x77, 0x87),
+            (0x78, 0x65),
+            (0x79, 0x43),
+            (0x7a, 0x21),
+            (0x7b, 0x00),
+        ]);
+        assert_eq!(
+            p.drawbars(OrganModel::Farfisa, 1),
+            [8, 7, 6, 5, 4, 3, 2, 1, 0]
+        );
         assert_eq!(
             p.farfisa_tabs(1),
             [true, true, true, true, false, false, false, false, false]
         );
         // The threshold sits between 4 and 5.
-        let edge = panel(&[(0x77, 0x54), (0x78, 0x00), (0x79, 0x00), (0x7a, 0x00), (0x7b, 0x00)]);
+        let edge = panel(&[
+            (0x77, 0x54),
+            (0x78, 0x00),
+            (0x79, 0x00),
+            (0x7a, 0x00),
+            (0x7b, 0x00),
+        ]);
         assert_eq!(edge.farfisa_tabs(1)[0], true, "5 should read as on");
         assert_eq!(edge.farfisa_tabs(1)[1], false, "4 should read as off");
     }
@@ -1007,5 +1256,277 @@ mod tests {
         assert_eq!(p.farfisa_tabs(1)[1], false);
         assert_eq!(p.farfisa_tabs(2)[0], false);
         assert_eq!(p.farfisa_tabs(2)[1], true);
+    }
+
+    // ── centre panel: the RFC-0001 acceptance tests ──────────────────────────────
+    //
+    // RFC-0002 P0.4 asks for one mutation test per panel: set a field, write, read
+    // back, assert the value changed *and* that nothing else did. Every one of these
+    // failed before the B+ conversion — assigning to a decoded field compiled, changed
+    // nothing, and reported success.
+
+    use std::io::Cursor;
+
+    /// A panel with nothing at a default, so a mutation that leaks into a neighbour has
+    /// something to disturb.
+    fn busy_panel() -> CenterPanel {
+        let mut p = CenterPanel::default();
+        p.set_left_part(Instrument::Sample);
+        p.set_right_part(Instrument::Piano);
+        p.set_left_octave_shift((-6i8).try_into().unwrap());
+        p.set_right_octave_shift(5i8.try_into().unwrap());
+        p.set_left_sustain(true);
+        p.set_right_sustain(true);
+        p.set_left_control(true);
+        p.set_right_control(true);
+        p.set_split(true);
+        p.set_split_point(SplitPoint::F5);
+        p.set_transpose_enabled(true);
+        p.set_transpose(4i8.try_into().unwrap());
+        p.set_part_mix(100u8.try_into().unwrap());
+        p.set_gain(96).unwrap();
+        p.set_organ_type(4).unwrap();
+        p.set_lower_enabled(true);
+        p.set_upper_enabled(true);
+        p.set_drawbar_live(true);
+        p
+    }
+
+    /// Every decoded value of the panel, rendered for comparison. Keeping this in one
+    /// place is what makes "and nothing else moved" checkable field by field.
+    fn decoded(p: &CenterPanel) -> Vec<(&'static str, String)> {
+        vec![
+            ("left_part", format!("{:?}", p.left_part())),
+            ("right_part", format!("{:?}", p.right_part())),
+            ("left_octave_shift", format!("{:?}", p.left_octave_shift())),
+            (
+                "right_octave_shift",
+                format!("{:?}", p.right_octave_shift()),
+            ),
+            ("left_sustain", format!("{:?}", p.left_sustain())),
+            ("right_sustain", format!("{:?}", p.right_sustain())),
+            ("left_control", format!("{:?}", p.left_control())),
+            ("right_control", format!("{:?}", p.right_control())),
+            ("unknown_boolean1", format!("{:?}", p.unknown_boolean1())),
+            ("split", format!("{:?}", p.split())),
+            ("split_point", format!("{:?}", p.split_point())),
+            ("transpose_enabled", format!("{:?}", p.transpose_enabled())),
+            ("transpose", format!("{:?}", p.transpose())),
+            ("part_mix", format!("{:?}", p.part_mix())),
+            ("gain", format!("{:?}", p.gain())),
+            ("organ_type", format!("{:?}", p.organ_type())),
+            ("lower_enabled", format!("{:?}", p.lower_enabled())),
+            ("upper_enabled", format!("{:?}", p.upper_enabled())),
+            ("drawbar_live", format!("{:?}", p.drawbar_live())),
+        ]
+    }
+
+    /// Each setter, paired with the field it is allowed to change.
+    #[allow(clippy::type_complexity)]
+    fn mutations() -> Vec<(&'static str, fn(&mut CenterPanel))> {
+        vec![
+            ("left_part", |p| p.set_left_part(Instrument::Organ)),
+            ("right_part", |p| p.set_right_part(Instrument::Sample)),
+            ("left_octave_shift", |p| {
+                p.set_left_octave_shift(6i8.try_into().unwrap())
+            }),
+            ("right_octave_shift", |p| {
+                p.set_right_octave_shift((-3i8).try_into().unwrap())
+            }),
+            ("left_sustain", |p| p.set_left_sustain(false)),
+            ("right_sustain", |p| p.set_right_sustain(false)),
+            ("left_control", |p| p.set_left_control(false)),
+            ("right_control", |p| p.set_right_control(false)),
+            ("split", |p| p.set_split(false)),
+            ("split_point", |p| p.set_split_point(SplitPoint::Lower)),
+            ("transpose_enabled", |p| p.set_transpose_enabled(false)),
+            ("transpose", |p| p.set_transpose((-5i8).try_into().unwrap())),
+            ("part_mix", |p| p.set_part_mix(13u8.try_into().unwrap())),
+            ("gain", |p| p.set_gain(127).unwrap()),
+            ("organ_type", |p| p.set_organ_type(1).unwrap()),
+            ("lower_enabled", |p| p.set_lower_enabled(false)),
+            ("upper_enabled", |p| p.set_upper_enabled(false)),
+            ("drawbar_live", |p| p.set_drawbar_live(false)),
+        ]
+    }
+
+    /// The headline defect RFC-0001 exists to fix: a write to a decoded field used to
+    /// be discarded silently. Every setter must move its own field and no other.
+    #[test]
+    fn setting_a_field_changes_that_field_and_only_that_field() {
+        for (name, mutate) in mutations() {
+            let before = busy_panel();
+            let mut after = busy_panel();
+            mutate(&mut after);
+
+            for ((field, was), (_, now)) in decoded(&before).into_iter().zip(decoded(&after)) {
+                if field == name {
+                    assert_ne!(was, now, "set_{name} did not change {field}");
+                } else {
+                    assert_eq!(was, now, "set_{name} disturbed {field}");
+                }
+            }
+        }
+    }
+
+    /// …and it has to survive the trip through the bytes, which is the half that
+    /// `#[bw(ignore)]` used to drop.
+    #[test]
+    fn a_mutated_field_survives_a_write_read_cycle() {
+        for (name, mutate) in mutations() {
+            let mut program = Program::new((0, 0).try_into().unwrap());
+            *program.center() = busy_panel();
+            mutate(program.center());
+            let expected = decoded(program.center());
+
+            let mut bytes = Vec::new();
+            program.write_to(&mut Cursor::new(&mut bytes)).unwrap();
+            let reread = Program::read_from(&mut Cursor::new(&mut bytes)).unwrap_or_else(|e| {
+                panic!("set_{name} produced a program that will not read: {e}")
+            });
+
+            assert_eq!(
+                expected,
+                decoded(&reread.schema.center_panel),
+                "set_{name} did not survive the write",
+            );
+        }
+    }
+
+    /// A centre-panel write must stay inside the centre panel. Only `0x2e..=0x34` and
+    /// the body CRC at `0x18..=0x1b` may move.
+    #[test]
+    fn a_mutation_touches_only_the_panels_own_bytes() {
+        let bytes_of = |panel: CenterPanel| {
+            let mut program = Program::new((0, 0).try_into().unwrap());
+            *program.center() = panel;
+            let mut bytes = Vec::new();
+            program.write_to(&mut Cursor::new(&mut bytes)).unwrap();
+            bytes
+        };
+
+        let before = bytes_of(busy_panel());
+
+        for (name, mutate) in mutations() {
+            let mut panel = busy_panel();
+            mutate(&mut panel);
+            let after = bytes_of(panel);
+
+            assert_eq!(before.len(), after.len());
+            for (at, (b, a)) in before.iter().zip(&after).enumerate() {
+                let allowed = (0x2e..=0x34).contains(&at) || (0x18..=0x1b).contains(&at);
+                assert!(
+                    allowed || b == a,
+                    "set_{name} changed byte {at:#04x} ({b:#04x} -> {a:#04x})",
+                );
+            }
+            assert_ne!(before, after, "set_{name} changed no bytes at all");
+        }
+    }
+
+    /// Width validation, the requirement that only appears once writes are derived: a
+    /// `u8` gain does not fit its seven-bit slot, so an over-wide value has to be
+    /// refused rather than allowed to overrun `part_mix` next door.
+    #[test]
+    fn a_value_too_wide_for_its_slot_is_refused_not_truncated() {
+        let mut panel = busy_panel();
+        let before = decoded(&panel);
+
+        let err = panel.set_gain(128).unwrap_err();
+        assert_eq!(err.width, 7);
+        assert_eq!(
+            decoded(&panel),
+            before,
+            "a refused write still changed bits"
+        );
+
+        // Three bits for the organ selection; 8 is one too many.
+        assert!(panel.set_organ_type(8).is_err());
+        assert_eq!(
+            decoded(&panel),
+            before,
+            "a refused write still changed bits"
+        );
+
+        // The largest value that does fit still goes through.
+        assert!(panel.set_organ_type(7).is_ok());
+        assert_eq!(panel.organ_type(), 7);
+        assert_eq!(panel.gain(), 96, "a legal write disturbed its neighbour");
+    }
+
+    /// Rewriting a field with the value just read must be a no-op, on any word — the
+    /// property that says a setter lands exactly where its getter looks. The gap bits
+    /// (`settings3` 7..0, which no field names) are what makes this non-trivial.
+    #[test]
+    fn rewriting_a_field_with_its_own_value_changes_nothing() {
+        for pattern in [0x0000_0000u32, 0xffff_ffff, 0xa5a5_a5a5, 0x5a5a_5a5a] {
+            let mut panel = CenterPanel {
+                settings: pattern as u16,
+                settings2: pattern as u8,
+                settings3: pattern,
+            };
+            // Only fields whose current bits decode can be written back.
+            if panel.validate().is_err() {
+                continue;
+            }
+            let (s1, s2, s3) = (panel.settings, panel.settings2, panel.settings3);
+
+            panel.set_left_part(panel.left_part().unwrap());
+            panel.set_right_part(panel.right_part().unwrap());
+            panel.set_left_octave_shift(panel.left_octave_shift().unwrap());
+            panel.set_right_octave_shift(panel.right_octave_shift().unwrap());
+            panel.set_left_sustain(panel.left_sustain());
+            panel.set_right_sustain(panel.right_sustain());
+            panel.set_left_control(panel.left_control());
+            panel.set_right_control(panel.right_control());
+            panel.set_split(panel.split());
+            panel.set_split_point(panel.split_point().unwrap());
+            panel.set_transpose_enabled(panel.transpose_enabled());
+            panel.set_transpose(panel.transpose().unwrap());
+            panel.set_part_mix(panel.part_mix().unwrap());
+            panel.set_gain(panel.gain()).unwrap();
+            panel.set_organ_type(panel.organ_type()).unwrap();
+            panel.set_lower_enabled(panel.lower_enabled());
+            panel.set_upper_enabled(panel.upper_enabled());
+            panel.set_drawbar_live(panel.drawbar_live());
+
+            assert_eq!(
+                (s1, s2, s3),
+                (panel.settings, panel.settings2, panel.settings3)
+            );
+        }
+    }
+
+    /// The default panel has to decode, which a zeroed word does not: an octave shift
+    /// of zero is stored as 7, so all-zero bits mean `-7` — out of range. The old
+    /// `Default` got away with it because nothing ever read it back.
+    #[test]
+    fn the_default_panel_decodes() {
+        let panel = CenterPanel::default();
+        panel.validate().expect("default panel must decode");
+
+        assert_eq!(panel.left_octave_shift().unwrap(), 0);
+        assert_eq!(panel.right_octave_shift().unwrap(), 0);
+        assert_eq!(panel.transpose().unwrap(), 0);
+        assert_eq!(panel.left_part().unwrap(), Instrument::Organ);
+    }
+
+    /// A file whose bits do not decode is still refused at read, not at access — the
+    /// contract `try_calc` used to provide, now enforced by `validate`.
+    #[test]
+    fn a_program_whose_center_panel_cannot_decode_is_refused_at_read() {
+        let mut program = Program::new((0, 0).try_into().unwrap());
+        // 0b111 is not an instrument, and it is not reachable through the setters.
+        program.schema.center_panel.settings |= 0b1110_0000_0000_0000;
+
+        let mut bytes = Vec::new();
+        program.write_to(&mut Cursor::new(&mut bytes)).unwrap();
+
+        let err = Program::read_from(&mut Cursor::new(&mut bytes))
+            .expect_err("an undecodable centre panel must not read");
+        assert!(
+            err.to_string().contains("exceeds bound"),
+            "unhelpful: {err}"
+        );
     }
 }

@@ -268,13 +268,13 @@ fn test_ne5_program_read_write_center_panel() {
                             path
                         );
                         assert!(
-                            program.schema.center_panel.lower_enabled,
+                            program.schema.center_panel.lower_enabled(),
                             "lower part enabled mismatch in file {}",
                             path
                         );
                     } else {
                         assert!(
-                            !program.schema.center_panel.lower_enabled,
+                            !program.schema.center_panel.lower_enabled(),
                             "lower part enabled mismatch in file {}",
                             path
                         );
@@ -288,13 +288,13 @@ fn test_ne5_program_read_write_center_panel() {
                             path
                         );
                         assert!(
-                            program.schema.center_panel.upper_enabled,
+                            program.schema.center_panel.upper_enabled(),
                             "upper part enabled mismatch in file {}",
                             path
                         );
                     } else {
                         assert!(
-                            !program.schema.center_panel.upper_enabled,
+                            !program.schema.center_panel.upper_enabled(),
                             "upper part enabled mismatch in file {}",
                             path
                         );
@@ -1401,4 +1401,134 @@ fn test_ne5_backup_dependency_ids() {
         "{} distinct sample ids referenced but only {samples} `.nsmp` members shipped",
         sample_ids.len(),
     );
+}
+
+/// Every centre-panel setter writes exactly where its getter reads — checked against
+/// every specimen in the corpus.
+///
+/// Reading a field and writing the same value straight back must be a no-op on the
+/// backing word. That is a much stronger statement than the byte-exact round-trip
+/// above, which the old code passed while decoding wrong values: the word was kept
+/// verbatim and the decoded fields were `#[bw(ignore)]`, so a mask could disagree with
+/// its shift and nothing noticed. Here the write path actually goes through the field
+/// definitions, so a `Field<T, HI, LO>` whose range is wrong changes bytes and this
+/// fails.
+///
+/// It also pins the bits *no* field names — `settings3` 7..0 and `settings2` bit 5 —
+/// which is the property that lets a panel migrate to B+ one field at a time.
+#[test]
+fn test_ne5_center_panel_setters_write_where_the_getters_read() {
+    let paths = ne5p_files(&corpus_dir().join("programs"));
+    assert!(
+        !paths.is_empty(),
+        "no programs found — is the corpus present?"
+    );
+
+    for path in &paths {
+        let name = path.display().to_string();
+        let original = read(path).unwrap();
+        let mut program = read_program_checked(path);
+
+        {
+            let p = program.center();
+            p.set_left_part(p.left_part().unwrap());
+            p.set_right_part(p.right_part().unwrap());
+            p.set_left_octave_shift(p.left_octave_shift().unwrap());
+            p.set_right_octave_shift(p.right_octave_shift().unwrap());
+            p.set_left_sustain(p.left_sustain());
+            p.set_right_sustain(p.right_sustain());
+            p.set_left_control(p.left_control());
+            p.set_right_control(p.right_control());
+            p.set_split(p.split());
+            p.set_split_point(p.split_point().unwrap());
+            p.set_transpose_enabled(p.transpose_enabled());
+            p.set_transpose(p.transpose().unwrap());
+            p.set_part_mix(p.part_mix().unwrap());
+            p.set_gain(p.gain()).unwrap();
+            p.set_organ_type(p.organ_type()).unwrap();
+            p.set_lower_enabled(p.lower_enabled());
+            p.set_upper_enabled(p.upper_enabled());
+            p.set_drawbar_live(p.drawbar_live());
+        }
+
+        let mut rewritten: Vec<u8> = Vec::new();
+        program.write_to(&mut Cursor::new(&mut rewritten)).unwrap();
+
+        assert_eq!(
+            original.as_slice(),
+            rewritten.as_slice(),
+            "rewriting the centre panel with its own values changed {name}",
+        );
+    }
+}
+
+/// The RFC-0001 acceptance test against real specimens: change one field on a corpus
+/// program, write it, read it back, and see the change — plus see that nothing outside
+/// the centre panel's own bytes moved.
+///
+/// Before the B+ conversion the `settings3` fields (transpose, part mix, gain, organ
+/// selection, the three enables) could not be changed at all: they were decoded from a
+/// word that was written back verbatim, so the mutation vanished and the file came out
+/// byte-identical.
+#[test]
+fn test_ne5_a_center_panel_mutation_reaches_the_bytes() {
+    let paths = ne5p_files(&corpus_dir().join("programs"));
+    assert!(
+        !paths.is_empty(),
+        "no programs found — is the corpus present?"
+    );
+
+    for path in &paths {
+        let name = path.display().to_string();
+        let original = read(path).unwrap();
+        let mut program = read_program_checked(path);
+
+        // Pick values that differ from whatever the specimen holds, one per backing
+        // word, so all three are exercised on every file.
+        let gain = if program.center().gain() == 0 { 96 } else { 0 };
+        let sustain = !program.center().left_sustain();
+        let split = !program.center().split();
+
+        program.center().set_gain(gain).unwrap();
+        program.center().set_left_sustain(sustain);
+        program.center().set_split(split);
+
+        let mut mutated: Vec<u8> = Vec::new();
+        program.write_to(&mut Cursor::new(&mut mutated)).unwrap();
+        assert_ne!(
+            original, mutated,
+            "the mutation never reached the bytes: {name}"
+        );
+
+        // Only the centre panel (0x2e..=0x34) and the body CRC (0x18..=0x1b) may move.
+        for (at, (before, after)) in original.iter().zip(&mutated).enumerate() {
+            let allowed = (0x2e..=0x34).contains(&at) || (0x18..=0x1b).contains(&at);
+            assert!(
+                allowed || before == after,
+                "mutating the centre panel changed byte {at:#04x} of {name}",
+            );
+        }
+
+        let Entity::Program(nord_format::Program::Electro5(reread)) =
+            nord_format::from_stream(&mut Cursor::new(&mut mutated)).unwrap()
+        else {
+            panic!("expected an electro5 program in {name}")
+        };
+
+        assert_eq!(
+            reread.gain(),
+            gain,
+            "gain did not survive the write: {name}"
+        );
+        assert_eq!(
+            reread.lower_sustain(),
+            sustain,
+            "sustain did not survive the write: {name}",
+        );
+        assert_eq!(
+            reread.split(),
+            split,
+            "split did not survive the write: {name}"
+        );
+    }
 }

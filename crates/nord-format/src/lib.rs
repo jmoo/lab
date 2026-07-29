@@ -8,6 +8,7 @@
 // misread.
 #![allow(clippy::erasing_op, clippy::identity_op)]
 
+pub mod bits;
 pub mod common;
 pub mod crc;
 pub mod electro5;
