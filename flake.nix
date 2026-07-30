@@ -68,6 +68,7 @@
                 anki-tool
                 nord-cli
                 nord-format
+                nord-gui
                 nord-usb
                 open-bamboo-networking
                 ;

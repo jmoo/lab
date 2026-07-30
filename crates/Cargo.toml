@@ -3,6 +3,7 @@ members = [
   "anki-tool",
   "nord-bits-derive",
   "nord-cli",
+  "nord-gui",
   "nord-format",
   "nord-usb",
 ]

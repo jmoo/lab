@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>nord-gui</title>
+    <link data-trunk rel="rust" data-wasm-opt="0" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #141518;
+      }
+      canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      /* egui paints everything; this is only what shows while the wasm loads. */
+      #loading {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #e85c5c;
+        font: 16px system-ui, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loading">loading nord-gui…</div>
+    <canvas id="nord_gui_canvas"></canvas>
+    <script>
+      // The canvas covers it once eframe has painted its first frame.
+      addEventListener("load", () =>
+        setTimeout(() => document.getElementById("loading")?.remove(), 1500),
+      );
+    </script>
+  </body>
+</html>

@@ -50,6 +50,30 @@ lib'.composeManyExtensions [
 
     nord-cli = prev.lib.addMetaAttrs { mainProgram = "nord"; } prev.nord-cli;
 
+    # The one crate mkRustCrates cannot package unaided: eframe reaches its window
+    # system and GL driver through dlopen, so nothing shows up as a build input and
+    # the binary has to be able to find them at runtime.
+    nord-gui = prev.nord-gui.overrideAttrs (old: {
+      nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ final.makeWrapper ];
+      postInstall = ''
+        wrapProgram $out/bin/nord-gui \
+          --prefix LD_LIBRARY_PATH : ${
+            final.lib.makeLibraryPath (
+              with final;
+              [
+                libGL
+                libxkbcommon
+                wayland
+                xorg.libX11
+                xorg.libXcursor
+                xorg.libXi
+                xorg.libXrandr
+              ]
+            )
+          }
+      '';
+    });
+
     # Private repository of clavia nord files to test nord-format against
     nord-corpus = builtins.fetchGit {
       rev = "f52862e385ff5808db6bace1fbf455997f3ae588";
