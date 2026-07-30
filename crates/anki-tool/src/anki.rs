@@ -115,7 +115,9 @@ impl Scheduler {
 pub fn detect_scheduler() -> Result<Scheduler, String> {
     match find_cards("prop:r=1") {
         Ok(_) => Ok(Scheduler::Fsrs),
-        Err(e) if e.starts_with("AnkiConnect request failed") || e.starts_with("invalid response") => {
+        Err(e)
+            if e.starts_with("AnkiConnect request failed") || e.starts_with("invalid response") =>
+        {
             Err(e)
         }
         Err(_) => Ok(Scheduler::Sm2),
