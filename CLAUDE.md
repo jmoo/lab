@@ -134,6 +134,50 @@ Under the hood `mkRustCrate` uses `rustPlatform.buildRustPackage` over the whole
 - **Single child → dotted path** (`a.b.c = v;`); **2+ children → nested braces** (`a = { … };`). Decide per attrset literal; never merge across separate definitions / `mkMerge` / `mkIf`. A `mkOption { … }` call is *not* an attrset literal — never collapse it to `x.type = …`.
 - Pushed config is a `{ pkgs, ... }:` function so packages resolve at build time; never reference `pkgs` in an option *default* (there is no `pkgs` at the flake-parts level).
 
+## Comments
+
+Applies to Rust, shell and nix alike.
+
+**A comment states the invariant or the surprise. Git states the history.** Most bad comments are the second one standing in the first one's place.
+
+**Earns a comment**
+
+- **Non-obvious encodings** — `// perc speed stores 2/1/3 for soft/fast/both`.
+- **Hazards** — a correct-looking call that is wrong in some state. Lead with `⚠️`.
+- **Invariants** a reader would otherwise break, especially ones the type system can't hold.
+
+**Delete on sight**
+
+- Any sentence whose subject is a past version of the code — "earlier", "used to", "on master", "this previously". `git blame` holds it, and a reader who trusts it as current is misled.
+- Design rationale: why this shape was chosen over another. State what is true; the comparison is internal and the reader can't act on it.
+- Restating the next line.
+- Narrating the work: "now handle the edge case", "fixed the bug where…".
+
+**Mark provenance.** In the reverse-engineered crates (`crates/nord-*`) a guess presented as a fact costs hours downstream. Three states, three phrases:
+
+```rust
+// Confirmed on hardware.
+// Inferred from specimens; not confirmed on hardware.
+// Unexplained: real programs hold this, and the panel cannot produce it.
+```
+
+Never launder an inference into a statement by dropping the qualifier. Keep counts and dates out — the corpus grows and the comment silently goes wrong. Arithmetic that *shows* an encoding is not a measurement and is welcome: `// 43/127*10 = 3.39, and the panel reads 3.4`.
+
+**Don't reference the notes vault.** The RFCs and format notes are private; this repo is public, so `// see RFC-0001` is a dead pointer to every reader outside the vault. If a reader needs the fact, put the fact in the code. Public references — an upstream issue or discussion — are fine.
+
+**`///` vs `//`**
+
+- `///` is the **contract** — what a caller may rely on, written for someone who will never read the body. If it explains *how*, it probably wants to be `//`.
+- `//` is the **surprise inside the body** — written for someone already reading the code who would otherwise stop and ask why.
+
+**Density is a smell, not a target.** Roughly, a file past ~20% comment lines is usually carrying exposition:
+
+```sh
+awk 'END{printf "%.0f%%\n", c/n*100} /^[[:space:]]*(\/\/|#)/{c++} /[^[:space:]]/{n++}' <file>
+```
+
+Format and protocol files legitimately run higher — the bytes genuinely need explaining. Application code does not. Investigate, don't reflexively cut: deleting a hazard to hit a number is worse than the exposition was.
+
 ## Working in this repo
 
 - **Refactors must be behavior-preserving — verify it.** A pure restructure should leave the build derivations byte-identical. Capture before/after and diff:
