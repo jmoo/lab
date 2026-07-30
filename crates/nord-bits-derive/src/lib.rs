@@ -14,8 +14,9 @@
 //! }
 //! ```
 //!
-//! Generates the packed `<Name>Words` struct, both directions of the conversion, and a
-//! `Debug` over the decoded fields. Bits no field claims are preserved.
+//! Generates the packed `<Name>Words` struct, both directions of the conversion, a `Debug`
+//! over the decoded fields, and a `Panel` impl that lists them. Bits no field claims are
+//! preserved.
 //!
 //! A field spelled as a raw `u8`/`u16`/`u32`/`u64` may be wider than its slot, so it is
 //! written with a checked call and encoding is fallible; any other type carries its own
@@ -122,6 +123,16 @@ fn may_overflow(ty: &Type, width: u32) -> bool {
     raw_integer_bits(ty).is_some_and(|bits| bits > width)
 }
 
+/// Mask for the low `width` bits, as a literal — `width` is never 0, and 64 would
+/// overflow the shift.
+fn low_mask(width: u32) -> u64 {
+    if width >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
+    }
+}
+
 /// Whether every bit pattern is a valid value.
 fn decodes_totally(ty: &Type) -> bool {
     raw_integer_bits(ty).is_some()
@@ -182,6 +193,7 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
     let mut encode = Vec::new();
     let mut debug = Vec::new();
     let mut fields = Vec::new();
+    let mut values = Vec::new();
 
     for field in &named.named {
         let ident = field.ident.as_ref().expect("named fields");
@@ -212,6 +224,46 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         let width: u32 = places.iter().map(|p| p.hi - p.lo + 1).sum();
         let fallible = may_overflow(ty, width);
         any_fallible |= fallible;
+
+        // Where the bits sit and what sits there, both independent of `ty` — see
+        // `crate::panel::FieldValue`.
+        let (placement, raw) = match places.as_slice() {
+            [p] => {
+                let (word, lo) = (&p.word, p.lo);
+                let mask = low_mask(p.hi - p.lo + 1);
+                (
+                    format!("{}[{}:{}]", p.word, p.hi, p.lo),
+                    quote! { (crate::bits::Word::to_u64(self.words.#word) >> #lo) & #mask },
+                )
+            }
+            [high, low] => {
+                let (hw, hl) = (&high.word, high.lo);
+                let (lw, ll) = (&low.word, low.lo);
+                let hmask = low_mask(high.hi - high.lo + 1);
+                let lwidth = low.hi - low.lo + 1;
+                let lmask = low_mask(lwidth);
+                (
+                    format!(
+                        "{}[{}:{}]+{}[{}:{}]",
+                        high.word, high.hi, high.lo, low.word, low.hi, low.lo
+                    ),
+                    quote! {
+                        (((crate::bits::Word::to_u64(self.words.#hw) >> #hl) & #hmask) << #lwidth)
+                            | ((crate::bits::Word::to_u64(self.words.#lw) >> #ll) & #lmask)
+                    },
+                )
+            }
+            _ => unreachable!("Bits::parse rejects any other count"),
+        };
+
+        values.push(quote! {
+            crate::panel::FieldValue {
+                name: stringify!(#ident),
+                placement: #placement,
+                raw: #raw,
+                value: ::std::format!("{:?}", &self.#ident),
+            }
+        });
 
         match places.as_slice() {
             [p] => {
@@ -307,6 +359,14 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         }
 
         #encode_impl
+
+        impl crate::panel::Panel for #name {
+            const NAME: &'static str = stringify!(#name);
+
+            fn field_values(&self) -> ::std::vec::Vec<crate::panel::FieldValue> {
+                ::std::vec![#(#values,)*]
+            }
+        }
 
         /// The decoded values; the backing words are not printed.
         impl ::core::fmt::Debug for #name {
