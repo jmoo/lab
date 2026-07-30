@@ -27,20 +27,7 @@ pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
 pub type Header = common::Header<Location>;
 pub type Bank = bank::Bank<Program, Location>;
 
-// 0x2e-0x34 — the centre panel.
-//
-// **G+**: the panel is an ordinary Rust struct with `pub` fields, and each field carries
-// the bits it occupies. `#[bitpanel]` derives the packed `CenterPanelWords`, both
-// directions of the conversion, and a `Debug` over the decoded values. Nothing about the
-// position is spelled twice, and nothing about the encoding is written by hand.
-//
-// The field's *type* decides how it is written: a raw `u8` may be wider than its slot, so
-// it is encoded with a checked write; a domain type carries its range, so it is encoded
-// with the unchecked one and `Field` proves the fit at compile time. See the
-// `nord-bits-derive` module docs.
-//
-// Bits no field claims — `settings3` 7..0, and the rest — survive in the private word
-// copy, so a panel still migrates one field at a time.
+// 0x2e..0x34 — the centre panel.
 
 #[bitpanel(settings: u16, settings2: u8, settings3: u32)]
 #[derive(Default)]
@@ -62,15 +49,15 @@ pub struct CenterPanel {
     pub left_control: bool,
     #[bits(settings2, 6..=6)]
     pub right_control: bool,
-    /// Always zero in every corpus specimen. Named so it is visible, not so it is used.
+    /// Always zero in every specimen seen so far.
     #[bits(settings2, 5..=5)]
     pub unknown_boolean1: bool,
     #[bits(settings2, 4..=4)]
     pub split: bool,
     #[bits(settings2, 3..=1)]
     pub split_point: SplitPoint,
-    /// NOTE: the Electro 5 sometimes leaves this true even when the transpose is 0. It
-    /// shows no transpose light when that happens.
+    /// Sometimes left true even when the transpose is 0, in which case the instrument
+    /// shows no transpose light.
     #[bits(settings2, 0..=0)]
     pub transpose_enabled: bool,
 
@@ -82,7 +69,6 @@ pub struct CenterPanel {
     /// 0..=127, shown on the panel as 0..10.
     #[bits(settings3, 20..=14)]
     pub gain: Level,
-    /// `0` b3, `1` b3+bass, `2` pipe, `3` vox, `4` farfisa.
     #[bits(settings3, 13..=11)]
     pub organ_type: OrganType,
     #[bits(settings3, 10..=10)]
@@ -93,12 +79,11 @@ pub struct CenterPanel {
     pub drawbar_live: bool,
 }
 
-// 0x3a..0x41 — the piano panel. Bits 60..59 and 53..49 are named by nothing.
+// 0x3a..0x41 — the piano panel. Bits 60..59 and 53..49 are unclaimed.
 
 #[bitpanel(settings: u64)]
 #[derive(Default)]
 pub struct PianoPanel {
-    /// 5 == 0, 6 == 1, 1 == 2, 2 == 3, 3 == 4, 4 == 5.
     #[bits(settings, 63..=61)]
     pub category: PianoCategory,
     /// Zero-based model slot *within* [`category`](Self::category) — the panel's
@@ -113,13 +98,10 @@ pub struct PianoPanel {
     pub touch: RangedU8<3>,
     #[bits(settings, 42..=42)]
     pub mono: bool,
-    /// The piano (`.npno`) this program depends on: a stable 32-bit id in bits
-    /// 41..=10, independent of where the piano sits in the instrument's library.
-    /// `0` means "no piano referenced". This — not
-    /// [`category`](Self::category)/[`piano_model`](Self::piano_model), which are
-    /// slot coordinates — is what resolves the song → program → piano chain, and
-    /// what Nord Sound Manager checks to decide whether a Restore is missing a
-    /// dependency.
+    /// The piano (`.npno`) this program depends on: a stable id, independent of where
+    /// the piano sits in the library, and `0` when none is referenced. Use this — not
+    /// [`category`](Self::category)/[`piano_model`](Self::piano_model), which are slot
+    /// coordinates — to resolve the song → program → piano chain.
     #[bits(settings, 41..=10)]
     pub id: u32,
 }
@@ -133,17 +115,13 @@ pub struct SamplePanel {
     pub attack: Level,
     #[bits(settings, 56..=50)]
     pub decay_release: Level,
-    /// Zero-based slot of the sample in the instrument's Samp Lib, i.e. the
-    /// number shown on the panel minus one. This is a *position*, not an
-    /// identity: adding or deleting samples renumbers it, and the corpus has
-    /// ids that appear under several numbers (and numbers reused by several
-    /// ids). Use [`id`](Self::id) to resolve the dependency.
+    /// Zero-based slot in the instrument's Samp Lib — the panel number minus one. A
+    /// position, not an identity: adding or deleting samples renumbers it. Use
+    /// [`id`](Self::id) to resolve the dependency.
     #[bits(settings, 49..=42)]
     pub number: u8,
-    /// The sample (`.nsmp`) this program depends on: a stable 32-bit id in bits
-    /// 41..=10, laid out exactly as [`PianoPanel::id`]. Same range, same type — the
-    /// first shared component, reused across two panels before a second device model
-    /// exists to reuse it across.
+    /// The sample (`.nsmp`) this program depends on, laid out exactly as
+    /// [`PianoPanel::id`].
     #[bits(settings, 41..=10)]
     pub id: u32,
     #[bits(settings, 9..=8)]
@@ -152,23 +130,11 @@ pub struct SamplePanel {
     pub filter: bool,
 }
 
-// 0x4e..0x92 — the organ panel. The Electro 5 stores the full drawbar +
-// vib/perc state for *every* organ model (B3, Vox, Farfisa, Pipe) and both
-// presets, so switching model/preset on the instrument is lossless too.
+// 0x4e..0x92 — the organ panel. The instrument keeps the full drawbar and vib/perc
+// state for every model and both presets, so switching model or preset is lossless.
 //
-//   * Drawbars = 9 nibbles, physical position 0..=8, packed high-nibble first,
-//     at these panel offsets per model + preset (B3-bass shares the B3 slots):
-//         B3   p1 0x55  p2 0x5c      Vox  p1 0x67  p2 0x6d
-//         Farf p1 0x77  p2 0x7d      Pipe p1 0x87  p2 0x8d
-//     Every model stores the *physical* bar position on disk; the per-model
-//     "real" value (Farf's >=5 on/off, Vox's ignored 8th bar, B3-bass's remapped
-//     bass bars) is a display transform layered on top — NOT decoded here yet.
-//   * Preset selection = bit 0x40 of one byte per model group
-//         B3 0x53, Vox 0x65, Farf 0x75, Pipe 0x85   (0 = preset 1, 1 = preset 2)
-//
-// STILL RAW (byte map retained below): the vib/chorus on-off + type and perc
-// on/third/speed toggles. They round-trip byte-exact through `raw`; decoding
-// them semantically is the next organ increment.
+// Held as raw bytes rather than a packed word: the accessors below cover the decoded
+// parts, and everything else round-trips untouched.
 
 /// Length of the organ panel block, 0x4e..=0x92 (69 bytes).
 const ORGAN_LEN: usize = 0x92 - 0x4d;
@@ -191,11 +157,8 @@ fn read_drawbars(raw: &[u8], at: usize) -> [u8; 9] {
     bars
 }
 
-// The organ panel's flags, as positions within whichever byte holds them. Unlike the
-// other panels these aliases are not bound to one word — the same `VibOn` is applied to
-// four different bytes — so nothing stops the wrong alias being applied to the wrong
-// byte. That is the cost of `Field` over a byte array rather than a backing word, and
-// the reason RFC-0001 treats a full `OrganPanel` conversion as its own question.
+// The organ panel's flags. These name a bit position but not a word — the same `VibOn`
+// is applied to six different bytes — so each is documented with the bytes it belongs to.
 
 /// `0x53`/`0x65`/`0x75`/`0x85` bit 6 — preset 2 selected.
 type OrganPreset = Field<bool, 6, 6>;
@@ -234,79 +197,6 @@ pub struct OrganPanel {
     /// The whole 0x4e..=0x92 block, kept verbatim so the panel always
     /// round-trips byte-exact. Decoded values are exposed via the methods below.
     raw: [u8; ORGAN_LEN],
-    // // 0x4e..0x50
-    // pad: B24,
-    //
-    // // 0x51 0b11100000
-    // pub b3_vib_type: B3,
-    //
-    // // 0x51 0b00010000
-    // pub b3_perc_third: bool,
-    //
-    // // 0x51 0b00001100
-    // pub b3_perc_speed: B3,
-    //
-    // // 0x52
-    // pad2: u8,
-    //
-    // // 0x53 0b01000000
-    // pub b3_bass_preset: bool,
-    //
-    // // 0x54
-    // pub unknown_byte: u8,
-    //
-    // // 0x55 0b11111111_11111111_11111111_11111111_11110000
-    // pub preset1_b3_drawbars: Drawbars,
-
-    // Drawbars: 9 with 4 bits each representing a value of 0..8
-    // 0x4e..0x50      - pad
-    // 0x51 0b11100000 - preset 1/2 b3/b3-bass vib selection (010: 0, 101: 3)
-    // 0x51 0b00010000 - preset 1/2 b3/b3-bass perc third (0,1)
-    // 0x51 0b00001100 - preset 1/2 b3/b3-bass perc speed (10: 1, 01: 2, 11: 3)
-    // 0x52 0b00000000 - pad
-    // 0x53 0b01000000 - b3/b3-bass preset selection
-    // 0x54 0b00000000 - ?
-    // 0x55 0b11111111_11111111_11111111_11111111_11110000 - preset1 drawbars (b3 normal, b3-bass inverted for first two and then normal for the rest except their value is ignored)
-    // 0x59 0b00001000 - preset 1 b3/b3-bass vib on/off (0,1)
-    // 0x59 0b00000100 - preset 1 b3/b3-bass perc on/off (0,1)
-    // 0x59 0b00000010 - ?
-    // 0x59 0b00000001 - ?
-    // 0x5a 0b00000000 - ?
-    // 0x5b 0b00000000 - pad
-    // 0x5c 0b11111111_11111111_11111111_11111111_11110000 - preset2 drawbars (b3 normal, b3-bass normal)
-    // 0x60 0b00001000 - preset 2 b3/b3-bass vib on/off (0,1)
-    // 0x60 0b00000100 - preset 2 b3/b3-bass perc on/off (0,1)
-    // 0x60 0b00000010 - unknown boolean (true on all programs i have created, false on a bunch of random presets)
-    // 0x61 0b00100000 - unknown boolean (true on all programs i have created, false on a bunch of random presets)
-    // 0x62 0b00000000 - pad
-    // 0x63 0b11100000 - preset 1/2 vox vib selection (000: 4, 010: 2, 001: 0)
-    // 0x64 0b00000000 - pad
-    // 0x65 0b01000000 - vox preset selection
-    // 0x66 0b00000000 - pad
-    // 0x67 0b11111111_11111111_11111111_11111111_11110000 - preset1 drawbars (vox normal but 8th drawbar value is ignored)
-    // 0x6b 0b00001000 - preset 1 vox vib on/off
-    // 0x6c 0b00000000 - pad
-    // 0x6d 0b11111111_11111111_11111111_11111111_11110000 - preset1 drawbars (vox normal but 8th drawbar value is ignored)
-    // 0x71 0b00001000 - preset 2 vox vib on/off
-    // 0x72 0b00000000 - pad
-    // 0x73 0b11100000 - preset 1/2 farfisa vib selection (000: 4, 011: 3, 010: 1, 001: 0)
-    // 0x74 0b00000000 - pad
-    // 0x75 0b01000000 - farf preset selection
-    // 0x76 0b00000000 - pad
-    // 0x77 0b11111111_11111111_11111111_11111111_11110000 - preset1 drawbars (farfisa normal values but >= 5 is interpreted as 1 and anything else is interpreted as 0)
-    // 0x7b 0b00001000 - preset 1 farfisa vib on/off
-    // 0x7c 0b00000000 - pad
-    // 0x7d 0b11111111_11111111_11111111_11111111_11110000 - preset2 drawbars (farfisa normal values but >= 5 is interpreted as 1 and anything else is interpreted as 0)
-    // 0x81 0b00001000 - preset 2 farfisa vib on/off
-    // 0x82 0b00000000 - pad
-    // 0x83 0b00000000 - pad
-    // 0x84 - pad
-    // 0x85 0b01000000 - pipe preset selection
-    // 0x86 - pad
-    // 0x87 0b11111111_11111111_11111111_11111111_11110000 - preset1 drawbars (pipe normal)
-    // 0x8b 0b00001000 - unknown boolean (always true except for included preset 'Sunday')
-    // 0x8c 0b00000000 - pad
-    // 0x8d 0b11111111_11111111_11111111_11111111_11110000 - preset2 drawbars (pipe, normal)
 }
 
 /// A vibrato (`V`) or chorus (`C`) organ modulation at one of three depths.
@@ -461,22 +351,14 @@ impl OrganPanel {
         }
     }
     // ── writes ──────────────────────────────────────────────────────────────────
-    //
-    // The organ panel keeps its existing shape rather than converting to `Field`:
-    // RFC-0001 notes it is the best-tested and most-correct code in the file, and its
-    // 552 bits live in a `[u8; 69]`, which is not a backing *word*. Its problem was
-    // never silent write loss — it has no public decoded fields to assign to — but the
-    // absence of any way to write at all. `Field` still does the per-byte bit work, so
-    // the position of each flag is authored once here too.
 
     /// Select `preset` (1 or 2) for `model`.
     pub fn set_preset(&mut self, model: OrganModel, preset: u8) {
         OrganPreset::set(&mut self.raw[Self::preset_byte(model)], preset == 2);
     }
 
-    /// Store nine drawbar positions for `model`'s `preset`. Positions are physical,
-    /// `0..=8`; anything higher is refused rather than truncated into its neighbour,
-    /// since two bars share a byte.
+    /// Store nine drawbar positions, `0..=8`. Higher values are refused rather than
+    /// truncated, since two bars share a byte.
     pub fn set_drawbars(
         &mut self,
         model: OrganModel,
@@ -502,11 +384,10 @@ impl OrganPanel {
         Ok(())
     }
 
-    /// Set the Farfisa tabs, which are on/off rather than continuous: on stores `8`,
-    /// off stores `0`. Any other stored value that happened to be there is lost — the
-    /// instrument only reads which side of the ≥5 threshold it falls on, but the byte
-    /// itself does change, so this is not a round-trip-safe way to touch a Farfisa
-    /// program you did not mean to rewrite.
+    /// Set the Farfisa tabs: on stores `8`, off stores `0`. Any other stored value is
+    /// lost — the instrument only reads which side of the ≥5 threshold it falls on, but
+    /// the byte does change, so this will not round-trip a program you only meant to
+    /// read.
     pub fn set_farfisa_tabs(&mut self, preset: u8, tabs: [bool; 9]) {
         let mut bars = [0u8; 9];
         for (bar, on) in bars.iter_mut().zip(tabs) {
@@ -524,11 +405,8 @@ impl OrganPanel {
         }
     }
 
-    /// Select the vibrato/chorus mode for `model` (shared across presets).
-    ///
-    /// Fails when the mode is not one the model offers — each exposes a different
-    /// subset of the six, and Pipe none at all. The stored value is the *index* into
-    /// that model's table, so this cannot be a plain bit write.
+    /// Select the vibrato/chorus mode for `model`, shared across presets. Fails for a
+    /// mode the model does not offer; Pipe has none.
     pub fn set_vib_type(&mut self, model: OrganModel, vib: VibChorus) -> Result<(), ParseError> {
         let (byte, table) = match Self::vib_table(model) {
             Some(pair) => pair,
@@ -577,10 +455,8 @@ impl OrganPanel {
             .expect("all four speeds encode in two bits");
     }
 
-    /// The two bass drawbars of B3-with-bass preset 1 — a 12-bit field spanning
-    /// `0x59`'s low nibble and `0x5a`, so a straddler inside a byte array rather than
-    /// across two words. Positions are `0..=8`; the field's low two bits are unused and
-    /// are left as they are found.
+    /// Set the two bass drawbars of b3+bass preset 1, `0..=8`. The field's low two bits
+    /// are unused and left as found.
     pub fn set_b3_bass_drawbars(&mut self, bars: [u8; 2]) -> Result<(), FieldOverflow> {
         if let Some(&bad) = bars.iter().find(|&&b| b > 8) {
             return Err(FieldOverflow {
@@ -593,8 +469,8 @@ impl OrganPanel {
         BassBar1::checked_set(&mut field, bars[0])?;
         BassBar2::checked_set(&mut field, bars[1])?;
 
-        // Only the low nibble of 0x59 belongs to the field; its high nibble is bar 9 of
-        // the main block and bits 3/2 are vibrato and percussion.
+        // Only 0x59's low nibble belongs to the field: its high nibble is bar 9 and bits
+        // 3/2 are vibrato and percussion.
         BassHighNibble::checked_set(&mut self.raw[org(0x59)], (field >> 8) as u8)
             .expect("the field was assembled from a nibble, so bits 15..12 are clear");
         self.raw[org(0x5a)] = field as u8;
@@ -623,9 +499,7 @@ impl Default for OrganPanel {
     }
 }
 
-// 0x93..0x9f — the effects panel, which holds the format's two cross-word fields. Under
-// `#[bitpanel]` a straddle is just a placement with two halves; nothing at the call site,
-// in the struct, or in the conversion treats it specially.
+// 0x93..0x9f — the effects panel. Two of its fields span a word boundary.
 
 #[bitpanel(settings: u64, settings2: u32, settings3: u8)]
 #[derive(Default)]
@@ -661,13 +535,8 @@ pub struct EffectsPanel {
     pub fx4_moisture: Level,
     #[bits(settings, 19..=19)]
     pub fx4_ping_pong: bool,
-    /// EQ engaged. **Which part it applies to is not in this word** — see
+    /// EQ engaged. Which part it applies to lives in a different word — see
     /// [`Extra::equalizer_part`].
-    ///
-    /// This was previously decoded as a two-bit `equalizer_part_select`, which could
-    /// only ever answer 0 or 2: diffing the four named `equalizer/{0,1,2,3}_…`
-    /// specimens shows they are byte-identical across `0x93..0x9a` apart from this
-    /// single bit, and the lower/upper/both choice lives at `0xa1`.
     #[bits(settings, 18..=18)]
     pub equalizer_on: bool,
     #[bits(settings, 16..=10)]
@@ -675,7 +544,7 @@ pub struct EffectsPanel {
     #[bits(settings, 9..=3)]
     pub equalizer_treble: Level,
 
-    /// Split across two words: three bits at the bottom of 0x9a, four at the top of 0x9b.
+    /// Spans 0x9a and 0x9b.
     #[bits(settings, 2..=0, settings2, 31..=28)]
     pub equalizer_freq_gain: Level,
 
@@ -695,7 +564,7 @@ pub struct EffectsPanel {
     #[bits(settings2, 7..=5)]
     pub fx5_type: Fx5Type,
 
-    /// The other one: five bits at the bottom of 0x9e, two at the top of 0x9f.
+    /// Spans 0x9e and 0x9f.
     #[bits(settings2, 4..=0, settings3, 7..=6)]
     pub fx5_moisture: Level,
 
@@ -717,12 +586,8 @@ pub struct Extra {
     /// fx2 deep.
     #[bits(settings, 27..=27)]
     pub fx2_deep: bool,
-    /// Which part the equalizer applies to: `0` lower, `1` upper, `2` lower+upper.
-    ///
-    /// Whether the EQ is engaged at all is a separate bit,
-    /// [`EffectsPanel::equalizer_on`] — so `0` here means *lower*, not *off*. Located
-    /// by diffing the `equalizer/{0,1,2,3}_…` specimens, which differ only at `0xa1`
-    /// (and in the enable bit and CRC).
+    /// Which part the equalizer applies to. Whether it is engaged at all is a separate
+    /// bit, [`EffectsPanel::equalizer_on`].
     #[bits(settings, 26..=25)]
     pub equalizer_part: EqualizerPart,
 }

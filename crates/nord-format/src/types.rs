@@ -20,10 +20,7 @@ impl<const OFFSET: u8, const MIN: i8, const MAX: i8> RangedI8<OFFSET, MIN, MAX> 
     }
 }
 
-/// On disk a `RangedI8` is stored biased by `OFFSET`, so its widest encoding is
-/// `MAX + OFFSET` — 13 for an Electro 5 octave shift (`-6..=6` biased by 7), which needs
-/// four bits. Decoding validates the range, so an out-of-range slot is an error rather
-/// than a plausible-looking wrong number.
+/// Stored biased by `OFFSET`, so the widest encoding is `MAX + OFFSET`.
 impl<const OFFSET: u8, const MIN: i8, const MAX: i8> Packed for RangedI8<OFFSET, MIN, MAX> {
     const MAX_BITS: u32 = bits_for((MAX as i16 + OFFSET as i16) as u64);
     type Error = ParseError;
@@ -111,21 +108,12 @@ impl<const OFFSET: u8, const MIN: i8, const MAX: i8> PartialEq<i32> for RangedI8
 
 /// An unsigned value constrained to `0..=MAX`.
 ///
-/// The counterpart to [`RangedI8`] for the fields that are still just integers — knob
-/// positions, model slots, effect selectors. It exists so a packed field's *slot* can be
-/// expressed in the field's *type*: `RangedU8<127>` occupies seven bits, so
-/// [`crate::bits::Field`] can prove at compile time that it fits a seven-bit slot, and no
-/// value that would overrun the slot can be constructed in the first place.
+/// The counterpart to [`RangedI8`] for fields that are still plain integers — knob
+/// positions, model slots, selectors. Expressing the bound in the type means the value
+/// cannot be built too wide for its slot, so encoding it can never fail.
 ///
-/// That is what makes an encode infallible. Holding these as raw `u8` meant a legal
-/// assignment (`panel.gain = 200`) could only be caught when the bytes were written —
-/// mid-stream, with a partial file already emitted. Here the same mistake is refused at
-/// the point of construction, and writing cannot fail at all.
-///
-/// `MAX` is what the *slot* holds, not what the instrument uses. Tightening it to the
-/// domain (organ type is `0..=4`, not `0..=7`) would reject files this decoder currently
-/// accepts, so it needs evidence rather than inference — see the note in
-/// [[RFC-0001]]-adjacent discussion. Slot-width bounds introduce no such risk.
+/// `MAX` is what the *slot* holds, not what the instrument uses: tightening it to the
+/// real range would reject files this decoder currently accepts.
 #[derive(Copy, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RangedU8<const MAX: u8> {
     inner: u8,

@@ -201,12 +201,8 @@ pub fn write(path: PathBuf, at: Location, confirmed: bool) -> Result<(), String>
 
     // Show what is about to be destroyed before destroying it. Reading the slot
     // first costs one round trip and turns a silent overwrite into an informed one.
-    //
-    // An empty destination is not a failure. Status 1 from a slot-addressed read means
-    // the slot is vacant (see `explain`), so there is simply nothing to report — but
-    // propagating it aborted the whole command, which left `write` unable to fill an
-    // empty slot at all. The one case where an overwrite destroys nothing was the one
-    // case that did not work.
+    // An empty destination is not a failure: status 1 means the slot is vacant, so there
+    // is nothing to report.
     let existing = nord_usb::block_on(async {
         let mut s = Session::open(&mut t, ObjectClass::Program).await?;
         let r = usb_op::info(&mut s, at).await;

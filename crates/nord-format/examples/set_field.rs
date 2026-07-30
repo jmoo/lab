@@ -1,14 +1,10 @@
-//! Scratch: mutate a decoded panel field and write the program out.
-//!
-//! The fields exercised here live in `CenterPanel`'s `settings3` and `settings2`. On
-//! master, `settings3` had a `bw(ignore)` on every decoded field and a verbatim backing
-//! word, so a write to `transpose` was silently discarded; `settings2` had a `bw(calc)`
-//! and did land. Setting both at once discriminates between the two behaviours: if only
-//! `settings2` reaches the file, the transpose *light* comes on while the value stays
-//! where it was.
+//! Set a decoded panel field and write the program out.
 //!
 //!     cargo run -p nord-format --example set_field -- <in> <out> transpose <-6..6>
 //!     cargo run -p nord-format --example set_field -- <in> <out> organ <b3|vox|farfisa|pipe>
+//!
+//! Setting `transpose` also sets `transpose_enabled`, since the value has no visible
+//! effect without it.
 
 use nord_format::electro5::OrganType;
 use nord_format::{electro5, Entity};

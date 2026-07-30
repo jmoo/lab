@@ -1462,17 +1462,8 @@ fn test_ne5_backup_dependency_ids() {
     );
 }
 
-/// Write every panel back out untouched. The file must come out byte-identical.
-///
-/// Under the decoded-struct shape this is nearly free — decode and encode are inverse
-/// conversions and the write path always runs the encoder — but it is still the check
-/// that a `Field<T, HI, LO>` range is right, which the plain round-trip never was: on
-/// master each word was preserved verbatim and the decoded fields were `#[bw(ignore)]`,
-/// so a wrong mask changed nothing.
-///
-/// It also pins every bit no field names, which is what the private `words` copy on each
-/// panel exists for. Delete it and re-packing would zero `PianoPanel` 60..59, 53..49 and
-/// the rest.
+/// Re-encoding every panel untouched must reproduce the file byte for byte, including
+/// the bits no field claims.
 #[test]
 fn test_ne5_every_panel_re_encodes_to_the_same_bytes() {
     let paths = ne5p_files(&corpus_dir().join("programs"));
@@ -1497,11 +1488,8 @@ fn test_ne5_every_panel_re_encodes_to_the_same_bytes() {
     }
 }
 
-/// The RFC-0001 acceptance test, one field per panel: assign to it, write, read it back,
-/// see the change — and see that nothing outside that panel's own bytes moved.
-///
-/// Every one of these was silently discarded on master. Note the shape of the mutations:
-/// they are plain field assignments, which is the whole point of this branch.
+/// Assigning to a field reaches the bytes, reads back, and moves nothing outside that
+/// panel's own byte span.
 #[test]
 fn test_ne5_a_mutation_in_every_panel_reaches_the_bytes() {
     type Case = (
@@ -1599,8 +1587,7 @@ fn test_ne5_a_mutation_in_every_panel_reaches_the_bytes() {
     }
 }
 
-/// Drawbars: reading nine nibbles and writing them back is a no-op. The organ panel is
-/// held identical to the accessor branch, so this is the same test.
+/// Reading nine drawbar nibbles and writing them back is a no-op.
 #[test]
 fn test_ne5_organ_drawbars_survive_a_rewrite() {
     use electro5::OrganModel::*;
@@ -1631,19 +1618,11 @@ fn test_ne5_organ_drawbars_survive_a_rewrite() {
     }
 }
 
-/// No corpus program holds a value we cannot name.
+/// No specimen decodes to an `Unknown` in a sparse component.
 ///
-/// The decoder deliberately does *not* refuse an unrecognised value — 604 of 617
-/// programs carry an effect routing of `0`, whose meaning has never been recovered, so a
-/// strict decoder would reject 98% of the evidence. See the
-/// [`components`](nord_format::electro5::components) module docs for why that trade goes
-/// the way it does.
-///
-/// Preserving a value is not the same as being content with it, though. Every sparse
-/// component reports whether it decoded to `Unknown`, and this sweeps the corpus for any
-/// that did. It passes today, which says the recovered value sets are complete *for the
-/// specimens we have*. When it fails, a new specimen has produced a value nobody has
-/// named — which is a finding, not a bug: go name it, then this goes green again.
+/// The decoder preserves unrecognised values rather than refusing them, so this is where
+/// they get noticed. A failure means a specimen produced a value with no name yet — go
+/// name it.
 #[test]
 fn test_ne5_no_corpus_program_holds_an_unrecognised_value() {
     let mut paths = ne5p_files(&corpus_dir().join("programs"));

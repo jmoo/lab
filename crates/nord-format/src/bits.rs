@@ -1,41 +1,18 @@
-//! Typed bit fields over a private backing word.
+//! Typed bit fields over a packed word.
 //!
-//! This is the shared-component layer proposed as **option B+** in RFC-0001 (Bitfield
-//! Packing). A panel keeps its packed integer *private* and exposes each logical value
-//! through a [`Field`], which owns the field's position, its width, and both directions
-//! of the conversion. There is no way to mutate a decoded value into the void, because
-//! there is no public decoded value to mutate — only a setter that performs a
-//! read-modify-write on the word.
+//! A [`Field`] names an inclusive bit range and owns both directions of the conversion,
+//! so a field's position is written once. [`Straddle`] is the same thing for a value
+//! split across two words.
 //!
-//! Three properties are worth stating explicitly, because they are the reasons this
-//! layer exists:
-//!
-//! 1. **Position is authored once.** `Field<T, HI, LO>` names the inclusive bit range;
-//!    mask, shift and width are all derived from it. The old style spelled the same
-//!    position three times — as a `0b…` mask, as a `>> ((8*N)+M)` shift, and implicitly
-//!    as a width — and two shipped bugs came from those three disagreeing.
-//! 2. **Writes are symmetric with reads by construction.** `get` and `set` share `HI`
-//!    and `LO`, so a setter cannot land somewhere its getter does not look.
-//! 3. **A value cannot silently overrun its slot.** For a type whose every value
-//!    provably fits (`T::MAX_BITS <= WIDTH`) [`Field::set`] is infallible and the proof
-//!    is a compile-time assertion. For a raw integer in a narrower slot — a 7-bit `gain`
-//!    held as `u8` — `set` does not compile and [`Field::checked_set`] must be used,
-//!    which reports the overflow instead of corrupting the neighbouring field.
-//!
-//! Gap bits need no declaration. Whatever is not named by a `Field` stays untouched in
-//! the backing word and round-trips verbatim, which is what lets a panel migrate one
-//! field at a time.
+//! Bits are numbered from the least-significant bit of the word, so `HI`/`LO` read
+//! straight off a big-endian hex dump once you know the word's byte span. Bits no field
+//! names are left untouched.
 
 use std::convert::Infallible;
 use std::fmt::{self, Display, Formatter};
 use std::marker::PhantomData;
 
-/// An unsigned integer that can host packed bit fields.
-///
-/// Implemented for `u8`/`u16`/`u32`/`u64` — the backing words the Nord panels actually
-/// use. Bits are numbered from the least-significant bit of the whole word, so a field's
-/// `HI`/`LO` can be read straight off a big-endian hex dump once the word's byte span is
-/// known.
+/// A word that can host packed bit fields.
 pub trait Word: Copy {
     /// Width of the word in bits.
     const BITS: u32;
@@ -62,25 +39,22 @@ macro_rules! impl_word {
 
 impl_word!(u8, u16, u32, u64);
 
-/// A value that knows how to live inside a packed bit field.
+/// A value that can live inside a packed bit field.
 ///
-/// This is the reusable half of the "shared component" RFC-0001 asks for: the type owns
-/// its encoding, its validation and (via `Debug`/`Display`) its presentation, and knows
-/// nothing about which panel, word or offset it happens to be stored at. The same
-/// `impl` serves every model that packs the same value.
+/// Implementors own their encoding and validation and know nothing about which word or
+/// offset holds them, so the same impl serves every field with that value.
 pub trait Packed: Sized {
-    /// The widest field this type can ever need — the number of bits its largest
-    /// encoding occupies. Used to prove statically that a value fits its slot.
+    /// Bits the widest value of this type occupies. Used to check statically that it
+    /// fits its slot.
     const MAX_BITS: u32;
 
-    /// Why a raw bit pattern is not a valid value of this type. [`Infallible`] for
-    /// types that decode totally (`bool`, raw integers).
+    /// Why a bit pattern is not a valid value. [`Infallible`] when every pattern is.
     type Error;
 
-    /// Decode from the field's raw bits, already shifted down to bit 0 and masked.
+    /// Decode from the field's bits, already shifted down to bit 0 and masked.
     fn from_bits(bits: u64) -> Result<Self, Self::Error>;
 
-    /// Encode to the field's raw bits, in the same shifted-down form.
+    /// Encode to the field's bits, in the same shifted-down form.
     fn to_bits(&self) -> u64;
 }
 
@@ -121,12 +95,8 @@ macro_rules! impl_packed_uint {
 
 impl_packed_uint!(u8, u16, u32, u64);
 
-/// A value too wide for the field it was written to.
-///
-/// Nothing checked this before, because nothing wrote: panels kept their backing word
-/// verbatim and decoded fields were `#[bw(ignore)]`. Once writes are derived from
-/// decoded values, an over-wide value would silently overwrite the *neighbouring*
-/// field's bits, so it has to be an error.
+/// A value too wide for the field it was written to. Writing it anyway would overrun
+/// the neighbouring field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldOverflow {
     /// The encoded value that did not fit.
@@ -149,17 +119,13 @@ impl Display for FieldOverflow {
 
 impl std::error::Error for FieldOverflow {}
 
-/// One logical value packed into bits `LO..=HI` of a backing word.
+/// One value packed into bits `LO..=HI`, inclusive.
 ///
-/// `HI` and `LO` are inclusive and numbered from the word's least-significant bit, so
-/// `Field<Instrument, 15, 13>` is the top three bits of a `u16`. The type is never
-/// instantiated — it is a name for a position plus a conversion, used as
+/// Never instantiated — it names a position plus a conversion, used as
 /// `MyField::get(word)` / `MyField::set(&mut word, v)`.
 pub struct Field<T, const HI: u32, const LO: u32>(PhantomData<fn() -> T>);
 
-/// Proof that a field lies inside the word it is being applied to. Checked per
-/// `(word type, HI)` pair at monomorphisation, so a `Field<_, 33, 30>` read out of a
-/// `u32` fails to build rather than silently returning zero.
+/// Compile-time check that a field lies inside the word it is applied to.
 struct WordFits<W, const HI: u32>(PhantomData<fn() -> W>);
 
 impl<W: Word, const HI: u32> WordFits<W, HI> {
@@ -180,8 +146,7 @@ impl<T: Packed, const HI: u32, const LO: u32> Field<T, HI, LO> {
         (1u64 << Self::WIDTH) - 1
     };
 
-    /// Proof that every value of `T` fits this field. Forced by [`Self::set`], so a
-    /// type that can overflow its slot has to go through [`Self::checked_set`].
+    /// Compile-time check that every value of `T` fits. Forced by [`Self::set`].
     const FITS: () = assert!(
         T::MAX_BITS <= HI - LO + 1,
         "this type can hold values wider than the field; use `checked_set`",
@@ -193,18 +158,17 @@ impl<T: Packed, const HI: u32, const LO: u32> Field<T, HI, LO> {
         T::from_bits((word.to_u64() >> LO) & Self::MASK)
     }
 
-    /// Write `value` into the field, leaving every other bit of `word` — named,
-    /// unnamed or reserved — exactly as it was.
+    /// Write `value`, leaving every other bit of `word` as it was.
     ///
-    /// Infallible: the bound proves at compile time that no value of `T` can overrun
-    /// the field. A type that *can* (a `u8` in a 7-bit slot) will not compile here.
+    /// Only compiles when no value of `T` can overrun the field. A type that can — a
+    /// `u8` in a 7-bit slot — must use [`Self::checked_set`].
     pub fn set<W: Word>(word: &mut W, value: T) {
         let () = Self::FITS;
         Self::write(word, value.to_bits());
     }
 
-    /// Write `value` into the field, reporting an overflow rather than corrupting the
-    /// neighbouring bits. The escape hatch for raw integers held in a narrower slot.
+    /// Write `value`, reporting an overflow instead of corrupting the neighbouring
+    /// bits. For raw integers in a narrower slot.
     pub fn checked_set<W: Word>(word: &mut W, value: T) -> Result<(), FieldOverflow> {
         let bits = value.to_bits();
         if bits > Self::MASK {
@@ -224,9 +188,8 @@ impl<T: Packed, const HI: u32, const LO: u32> Field<T, HI, LO> {
     }
 }
 
-/// The untyped half of a [`Field`]: a position and a width, with no opinion about what
-/// the bits mean. Exists so a value can be composed out of two ranges in two different
-/// words — see [`Straddle`].
+/// A position and a width, with no opinion about what the bits mean. Lets [`Straddle`]
+/// compose a value out of two ranges.
 pub trait BitRange {
     /// Width of the range in bits.
     const WIDTH: u32;
@@ -265,16 +228,8 @@ const fn mask(width: u32) -> u64 {
     }
 }
 
-/// One value split across two backing words: `H` holds its high bits, `L` its low ones.
-///
-/// The Electro 5 program has exactly two of these — `equalizer_freq_gain` spans
-/// `settings`→`settings2` and `fx5_moisture` spans `settings2`→`settings3`, both inside
-/// `EffectsPanel`. RFC-0001 scored B+ as needing a "2-call compose" for them; composing
-/// the two ranges into one field type instead keeps them indistinguishable from any
-/// other field at the call site, and keeps the halves' widths in one place rather than
-/// spread across a hand-written `<<` and `+`.
-///
-/// The bit-order convention is the wire's: `value = (high << L::WIDTH) | low`.
+/// One value split across two words: `H` holds the high bits, `L` the low ones, so
+/// `value == (high << L::WIDTH) | low`.
 #[allow(clippy::type_complexity)]
 pub struct Straddle<T, H, L>(PhantomData<fn() -> (T, H, L)>);
 
@@ -293,7 +248,7 @@ impl<T: Packed, H: BitRange, L: BitRange> Straddle<T, H, L> {
         T::from_bits((H::raw(high) << L::WIDTH) | L::raw(low))
     }
 
-    /// Write the value across both words, disturbing nothing else in either.
+    /// Write across both words, disturbing nothing else in either.
     pub fn set<A: Word, B: Word>(high: &mut A, low: &mut B, value: T) {
         let () = Self::FITS;
         Self::write(high, low, value.to_bits());
@@ -323,7 +278,7 @@ impl<T: Packed, H: BitRange, L: BitRange> Straddle<T, H, L> {
 }
 
 impl<T: Packed<Error = Infallible>, H: BitRange, L: BitRange> Straddle<T, H, L> {
-    /// Decode, for types where every bit pattern is a valid value.
+    /// Decode, when every bit pattern is a valid value.
     pub fn read<A: Word, B: Word>(high: A, low: B) -> T {
         match Self::get(high, low) {
             Ok(value) => value,
@@ -333,7 +288,7 @@ impl<T: Packed<Error = Infallible>, H: BitRange, L: BitRange> Straddle<T, H, L> 
 }
 
 impl<T: Packed<Error = Infallible>, const HI: u32, const LO: u32> Field<T, HI, LO> {
-    /// Decode the field, for types where every bit pattern is a valid value.
+    /// Decode, when every bit pattern is a valid value.
     pub fn read<W: Word>(word: W) -> T {
         match Self::get(word) {
             Ok(value) => value,
@@ -364,8 +319,6 @@ mod tests {
         Nibble::checked_set(&mut word, 0x3).unwrap();
         assert_eq!(word, 0xa3cd);
 
-        // Including the bits no field names at all — the property that lets a panel
-        // migrate one field at a time while unknown bits keep round-tripping.
         let mut word = 0b1010_1010_u8;
         Flag::set(&mut word, true);
         assert_eq!(word, 0b1011_1010);

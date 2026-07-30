@@ -1,46 +1,28 @@
 //! `#[bitpanel]` — declare a bit-packed panel as an ordinary Rust struct.
 //!
-//! The panel is written the way it reads: `pub` fields with their real types and their
-//! real doc comments, each carrying the bit range it occupies. The macro derives the
-//! packed representation, both directions of the conversion, and a `Debug` that shows the
-//! decoded values.
-//!
 //! ```ignore
-//! #[bitpanel(settings: u16, settings2: u8, settings3: u32)]
+//! #[bitpanel(settings: u16, settings2: u8)]
 //! #[derive(Default)]
 //! pub struct CenterPanel {
-//!     /// Doc comments, attributes and types are all just Rust.
 //!     #[bits(settings, 15..=13)]
 //!     pub left_part: Instrument,
-//!
 //!     #[bits(settings3, 20..=14)]
 //!     pub gain: u8,
-//!
-//!     /// A value split across two words — one field here, as it should be.
+//!     /// A value split across two words.
 //!     #[bits(settings, 2..=0, settings2, 31..=28)]
 //!     pub equalizer_freq_gain: u8,
 //! }
 //! ```
 //!
-//! # Why the field's *type* decides how it is written
+//! Generates the packed `<Name>Words` struct, both directions of the conversion, and a
+//! `Debug` over the decoded fields. Bits no field claims are preserved.
 //!
-//! A proc macro sees tokens, not resolved types, so it cannot ask whether a value
-//! provably fits its slot. It does not have to: in this format the distinction is visible
-//! in the spelling. A field written as a raw `u8`/`u16`/`u32`/`u64` is an undecoded
-//! integer that may be wider than its slot, so it is written with `checked_set` and
-//! reports an overflow. Anything else is a domain type whose range is part of the type, so
-//! it is written with `set` — and `set` carries `Field`'s compile-time proof that every
-//! value of that type fits.
+//! A field spelled as a raw `u8`/`u16`/`u32`/`u64` may be wider than its slot, so it is
+//! written with a checked call and encoding is fallible; any other type carries its own
+//! range, so the write is unchecked and the fit is proven at compile time. When no field
+//! can overflow, the generated encode is `From` rather than `TryFrom`.
 //!
-//! That gives the accessor prototype's best property (a width mismatch on a typed field is
-//! a *compile* error) without an accessor in sight, and it costs one line of syntactic
-//! dispatch.
-//!
-//! # Scope
-//!
-//! Generated code refers to `crate::bits` and `crate::error`, so this macro only works
-//! inside `nord-format`. Making it portable means threading those paths through the
-//! attribute; there is no reason to until a second crate wants it.
+//! Only usable inside `nord-format`: generated code names `crate::bits` and `crate::error`.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -57,8 +39,7 @@ struct Placement {
     lo: u32,
 }
 
-/// The contents of a `#[bits(...)]` attribute: one placement, or two for a value split
-/// across two words.
+/// One placement, or two for a value split across words.
 struct Bits(Vec<Placement>);
 
 impl Parse for Bits {
@@ -120,7 +101,7 @@ fn literal(expr: Option<&Expr>, at: &ExprRange, what: &str) -> syn::Result<u32> 
     }
 }
 
-/// The width of a raw unsigned integer type, if that is what this is.
+/// Width of a raw unsigned integer type, if that is what this is.
 fn raw_integer_bits(ty: &Type) -> Option<u32> {
     let Type::Path(p) = ty else { return None };
     if p.qself.is_some() {
@@ -135,19 +116,13 @@ fn raw_integer_bits(ty: &Type) -> Option<u32> {
     }
 }
 
-/// Whether writing this field can overflow its slot.
-///
-/// A domain type carries its own range, so it never can — `Field::set` proves the fit at
-/// compile time. A raw integer can, *unless* the slot is as wide as the integer, in which
-/// case no value of the type can overrun it and the check would be dead code. Getting
-/// this right for the exact-fit case is what lets a panel's encode be infallible rather
-/// than merely never-failing-in-practice.
+/// Whether writing this field can overflow its slot: only a raw integer wider than the
+/// slot can.
 fn may_overflow(ty: &Type, width: u32) -> bool {
     raw_integer_bits(ty).is_some_and(|bits| bits > width)
 }
 
-/// Whether decoding is total. `bool` and the raw integers accept every bit pattern;
-/// everything else is a domain type with a fallible conversion.
+/// Whether every bit pattern is a valid value.
 fn decodes_totally(ty: &Type) -> bool {
     raw_integer_bits(ty).is_some()
         || matches!(ty, Type::Path(p) if p.qself.is_none()
@@ -194,17 +169,13 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         ));
     };
 
-    // ── the packed representation ───────────────────────────────────────────────
-    // Every Nord panel word is big-endian, so that is not worth making configurable.
+    // Every Nord panel word is big-endian.
     let word_defs = words.iter().map(|w| {
         let ident = &w.ident;
         let ty = &w.ty;
         quote! { #[brw(big)] pub(crate) #ident: #ty }
     });
 
-    // Whether any field can overrun its slot. If none can, the encode is *total* and
-    // the macro emits `From` rather than `TryFrom` — so `write` cannot fail, and the
-    // difference is visible in the type rather than left as a promise.
     let mut any_fallible = false;
 
     let mut decode = Vec::new();
@@ -228,7 +199,7 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
             })?;
         let Bits(places) = bits.parse_args()?;
 
-        // Keep the field verbatim apart from the placement, which has served its purpose.
+        // Keep everything but the placement, which has served its purpose.
         let kept: Vec<_> = field
             .attrs
             .iter()
@@ -284,9 +255,9 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         debug.push(quote! { .field(stringify!(#ident), &self.#ident) });
     }
 
-    // The encode direction: `From` when every field provably fits, `TryFrom` otherwise.
-    // Changing a field's type from a domain type to a raw integer therefore breaks
-    // `Schema`'s `#[bw(map)]` at compile time, which is the point.
+    // `From` when every field provably fits, `TryFrom` otherwise — so retyping a field
+    // to a raw integer breaks the caller's `#[bw(map)]` rather than silently going
+    // fallible.
     let encode_impl = if any_fallible {
         quote! {
             impl ::core::convert::TryFrom<&#name> for #words_name {
@@ -312,7 +283,7 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
     };
 
     Ok(quote! {
-        /// The panel's packed words, as they sit on disk. Generated by `#[bitpanel]`.
+        /// The panel's packed words, as they sit on disk.
         #[::binrw::binrw]
         #[derive(Clone, Copy, Debug, Default)]
         #vis struct #words_name {
@@ -321,8 +292,8 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
 
         #(#attrs)*
         #vis struct #name {
-            /// The words this panel was decoded from, kept so the bits no field names
-            /// survive a re-encode. Every named field is authoritative over it on write.
+            /// The words this panel was decoded from, so bits no field claims survive a
+            /// re-encode. Named fields take precedence on write.
             words: #words_name,
             #(#fields,)*
         }
@@ -337,9 +308,7 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
 
         #encode_impl
 
-        /// Shows the decoded values. The backing words are an implementation detail and
-        /// are deliberately not printed — a hand-written `Debug` on the equivalent
-        /// non-macro shape leaks them into `nord inspect --raw`.
+        /// The decoded values; the backing words are not printed.
         impl ::core::fmt::Debug for #name {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 f.debug_struct(stringify!(#name))
