@@ -216,7 +216,11 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             let compact: Vec<_> = cards.iter().map(compact_card).collect();
             Ok(serde_json::to_value(compact).unwrap())
         }
-        Cmd::Due { deck, by_deck, limit } => {
+        Cmd::Due {
+            deck,
+            by_deck,
+            limit,
+        } => {
             let query = scoped_query(&deck, "is:due");
             let ids = anki::find_cards(&query)?;
             if by_deck {
@@ -293,8 +297,7 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
         }
         Cmd::Subdecks { deck } => {
             let all_decks = anki::deck_names()?;
-            let all: Vec<String> =
-                serde_json::from_value(all_decks).map_err(|e| e.to_string())?;
+            let all: Vec<String> = serde_json::from_value(all_decks).map_err(|e| e.to_string())?;
             let prefix = format!("{deck}::");
             let mut matching: Vec<String> = all
                 .into_iter()
@@ -312,8 +315,7 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             let start_ms = now_ms - (days as i64 * 86400 * 1000);
 
             let all_decks = anki::deck_names()?;
-            let all: Vec<String> =
-                serde_json::from_value(all_decks).map_err(|e| e.to_string())?;
+            let all: Vec<String> = serde_json::from_value(all_decks).map_err(|e| e.to_string())?;
             let target_decks: Vec<&String> = match &deck {
                 Some(d) => {
                     let prefix = format!("{d}::");
@@ -333,7 +335,10 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
                 }
             }
 
-            let days: Vec<_> = by_day.into_iter().map(|(date, count)| json!([date, count])).collect();
+            let days: Vec<_> = by_day
+                .into_iter()
+                .map(|(date, count)| json!([date, count]))
+                .collect();
             Ok(json!({
                 "days": days,
                 "total": days.iter().map(|d| d[1].as_u64().unwrap_or(0)).sum::<u64>(),
@@ -344,8 +349,7 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
 
             // Get all decks matching the filter
             let all_decks = anki::deck_names()?;
-            let all: Vec<String> =
-                serde_json::from_value(all_decks).map_err(|e| e.to_string())?;
+            let all: Vec<String> = serde_json::from_value(all_decks).map_err(|e| e.to_string())?;
             let target_decks: Vec<&String> = match &deck {
                 Some(d) => {
                     let prefix = format!("{d}::");
@@ -392,7 +396,9 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             let mut victories = Vec::new();
 
             for (&card_id, eases) in &card_eases {
-                let Some(card) = card_map.get(&card_id) else { continue };
+                let Some(card) = card_map.get(&card_id) else {
+                    continue;
+                };
                 let worst_ease = *eases.iter().min().unwrap();
 
                 match worst_ease {
@@ -440,8 +446,7 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
         }
         Cmd::Progress { deck } => {
             let all_decks = anki::deck_names()?;
-            let all: Vec<String> =
-                serde_json::from_value(all_decks).map_err(|e| e.to_string())?;
+            let all: Vec<String> = serde_json::from_value(all_decks).map_err(|e| e.to_string())?;
             let prefix = format!("{deck}::");
             let matching: Vec<String> = all
                 .into_iter()
@@ -464,7 +469,9 @@ fn run(cmd: Cmd) -> Result<serde_json::Value, String> {
             // Per-subdeck breakdown (only direct children)
             let mut subdeck_stats: Vec<serde_json::Value> = Vec::new();
             for s in &stats {
-                if s.name == deck || (s.name.starts_with(&prefix) && !s.name[prefix.len()..].contains("::")) {
+                if s.name == deck
+                    || (s.name.starts_with(&prefix) && !s.name[prefix.len()..].contains("::"))
+                {
                     let sq = format!("\"deck:{}\"", s.name);
                     let sm = anki::find_cards(&format!("{sq} prop:ivl>=21"))?.len();
                     let sy = anki::find_cards(&format!("{sq} -is:new -prop:ivl>=21"))?.len();
@@ -564,9 +571,9 @@ fn resolve_lens(by: Lens, scheduler: anki::Scheduler) -> Result<Lens, String> {
     match (by, scheduler) {
         (Lens::Auto, anki::Scheduler::Fsrs) => Ok(Lens::Retrievability),
         (Lens::Auto, anki::Scheduler::Sm2) => Ok(Lens::Recent),
-        (Lens::Retrievability, anki::Scheduler::Sm2) => {
-            Err("retrievability lens requires FSRS; this collection is SM-2 (try --by recent)".into())
-        }
+        (Lens::Retrievability, anki::Scheduler::Sm2) => Err(
+            "retrievability lens requires FSRS; this collection is SM-2 (try --by recent)".into(),
+        ),
         (other, _) => Ok(other),
     }
 }
@@ -598,7 +605,10 @@ fn hard(
         Lens::Recent => recent_struggles(deck, days)?
             .into_iter()
             .map(|(id, again, total)| {
-                annotations.insert(id, json!({ "recent_again": again, "recent_reviews": total }));
+                annotations.insert(
+                    id,
+                    json!({ "recent_again": again, "recent_reviews": total }),
+                );
                 id
             })
             .collect(),
