@@ -4,24 +4,17 @@
 //!
 //! # The shape of the command tree
 //!
-//! **The noun set is the protocol's object-class set.** Sessions on the wire are scoped
-//! to a class and every operation is a primitive parameterised by it, so `nord program`
-//! and `nord setlist` are the same code with the class fixed, and they share one verb
-//! vocabulary — learning one class teaches the rest. `nord raw --class N` is that
-//! parameter exposed; it is hidden because an untyped, class-numeric spelling is an
-//! escape hatch, not a front door. Hidden is not deprecated: it stays supported and
-//! tested, and it is the only way to reach a class with no noun yet.
+//! **The noun set is the protocol's object-class set.** `nord program` and `nord setlist`
+//! are the same code with the class fixed, sharing one verb vocabulary; `nord raw
+//! --class N` is that parameter exposed. `nord device` is the instrument itself, and
+//! `inspect`/`verify` are top level because they dispatch on the CBIN format tag rather
+//! than on a class.
 //!
-//! **`nord device` means the instrument itself** — what is on the bus and what it holds
-//! — not everything device-scoped.
-//!
-//! **`inspect` and `verify` are top level** because they are class-agnostic: they
-//! dispatch on the CBIN format tag and print whatever they find.
-//!
-//! Pianos (class 1) and samples (class 3) have **no noun yet**. No operation has ever
-//! been run directly against either, and a `nord piano get` would look verified because
-//! its siblings are. They arrive when the class has been exercised on hardware; until
-//! then `nord raw --class 1` is the honest spelling.
+//! ⚠️ **`raw` is hidden, not deprecated.** It must stay supported and tested: it is the
+//! only way to reach a class that has no noun. Pianos (class 1) and samples (class 3)
+//! have none, because no operation has ever run directly against either and a
+//! `nord piano get` would look verified because its siblings are. A noun arrives when the
+//! class has been exercised on hardware.
 
 mod device;
 mod edit;

@@ -6,10 +6,10 @@
 //! write direction — a field becomes settable by being declared, so a CLI cannot fall
 //! behind the library.
 //!
-//! Both halves of [`FieldValue`] matter. `raw` is the field's bits with no type applied,
-//! so it pins the placement — move a range by one bit and it changes on nearly every
-//! specimen. `value` is the decoded rendering, so it pins the interpretation. A change to
-//! either is visible, and they fail in different places.
+//! Both halves of the snapshot's view of a [`FieldValue`] matter. `raw` is the field's
+//! bits with no type applied, so it pins the placement — move a range by one bit and it
+//! changes on nearly every specimen. `value` is the decoded rendering, so it pins the
+//! interpretation. A change to either is visible, and they fail in different places.
 
 use std::fmt::{self, Debug, Display, Formatter};
 
