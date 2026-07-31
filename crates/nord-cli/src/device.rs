@@ -1,11 +1,12 @@
-//! `nord device` and `nord program` — talk to an attached instrument over USB.
+//! The operations that talk to an attached instrument.
 //!
-//! `nord program` is a program-scoped facade over the same operations: no `--class`,
-//! `BANK:SLOT` slots, and `get` defaults to a readable summary instead of a file. The
-//! generic `nord device` forms remain for the other object classes.
+//! Every one of these is a **primitive parameterised by object class** — the same code
+//! drives a program and a set list, differing only in the class the session opened. The
+//! command tree is the typed spelling of that: `nord program`/`nord setlist` fix the
+//! class, and the hidden `nord raw` exposes the parameter.
 //!
-//! Read-only queries (`status`, `read`, `deps`) and the non-destructive `select` need
-//! no confirmation; the mutating actions (`write`, `move`, `delete`, `rename`,
+//! Read-only queries (`status`, `get`, `info`, `deps`) and the non-destructive `select`
+//! need no confirmation; the mutating actions (`put`, `move`, `delete`, `rename`,
 //! `duplicate`) each describe what they will touch and then refuse to proceed without
 //! `--yes`. `status` is the gentlest end-to-end check: it sends one query per object
 //! class and reads counters back, changing nothing on the instrument.
@@ -17,6 +18,9 @@ use nord_usb::transport::Transport;
 use nord_usb::wire::{Location, Status};
 use nord_usb::{op as usb_op, ObjectClass, Session};
 
+use crate::slot::shown;
+use crate::ui::Ui;
+
 /// Where to get the exchange from.
 pub enum Source {
     /// A real instrument over USB.
@@ -26,7 +30,7 @@ pub enum Source {
     Replay(PathBuf),
 }
 
-pub fn run(source: Source, json: bool) -> Result<(), String> {
+pub fn status(ui: &Ui, source: Source, json: bool) -> Result<(), String> {
     let report = match source {
         Source::Usb => {
             let mut transport =
@@ -44,9 +48,52 @@ pub fn run(source: Source, json: bool) -> Result<(), String> {
     };
 
     if json {
-        print_json(&report);
+        print_json(ui, &report);
     } else {
-        print_table(&report);
+        print_table(ui, &report);
+    }
+    Ok(())
+}
+
+/// Report the attached instrument itself: what is on the bus, not what is stored on it.
+///
+/// Answered entirely from the USB descriptors, so it works before any transaction is
+/// opened and is the right first thing to run when nothing else responds.
+pub fn info(ui: &Ui) -> Result<(), String> {
+    let devices = nord_usb::transport::usb::list().map_err(|e| e.to_string())?;
+    if devices.is_empty() {
+        return Err("no Clavia device found".into());
+    }
+    for (i, d) in devices.iter().enumerate() {
+        if i > 0 {
+            ui.out("");
+        }
+        ui.out(format!(
+            "  product:   {}",
+            d.product_string().unwrap_or("(none reported)")
+        ));
+        ui.out(format!(
+            "  vendor:    {} ({:#06x})",
+            d.manufacturer_string().unwrap_or("(none reported)"),
+            d.vendor_id(),
+        ));
+        ui.out(format!("  product id: {:#06x}", d.product_id()));
+        ui.out(format!(
+            "  serial:    {}",
+            d.serial_number().unwrap_or("(none reported)")
+        ));
+        // The vendor-specific interface is the one this protocol rides. Without it the
+        // device is a Clavia but not one this tool can drive, and saying so here saves a
+        // confusing failure inside the first transaction.
+        let vendor_iface = d.interfaces().any(|i| i.class() == 0xff);
+        ui.out(format!(
+            "  protocol:  {}",
+            if vendor_iface {
+                "vendor interface present"
+            } else {
+                "no vendor interface — this tool cannot drive it"
+            }
+        ));
     }
     Ok(())
 }
@@ -55,12 +102,15 @@ fn collect<T: Transport>(transport: &mut T) -> Result<Vec<Status>, String> {
     nord_usb::block_on(op::inventory(transport)).map_err(|e| e.to_string())
 }
 
-fn print_table(report: &[Status]) {
+fn print_table(ui: &Ui, report: &[Status]) {
     if report.is_empty() {
-        println!("no classes answered");
+        ui.out("no classes answered");
         return;
     }
-    println!("{:<10} {:>20} {:>7}  {}", "class", "used", "full", "of");
+    ui.out(format!(
+        "{:<10} {:>20} {:>7}  {}",
+        "class", "used", "full", "of"
+    ));
     let mut any_variable = false;
     for s in report {
         // Fixed-size classes are far clearer as slots than as raw blocks: programs
@@ -78,25 +128,26 @@ fn print_table(report: &[Status]) {
                 )
             }
         };
-        println!(
+        ui.out(format!(
             "{:<10} {:>20} {:>6.1}%  {}",
             s.class.label(),
             used,
             s.used_percent(),
             of
-        );
+        ));
     }
     if any_variable {
         // Only worth saying for the classes where the number is genuinely opaque.
-        println!("\n(blocks are a device-internal unit, not bytes)");
+        ui.note("");
+        ui.note("(blocks are a device-internal unit, not bytes)");
     }
 }
 
-fn print_json(report: &[Status]) {
-    println!("[");
+fn print_json(ui: &Ui, report: &[Status]) {
+    ui.out("[");
     for (i, s) in report.iter().enumerate() {
         let comma = if i + 1 == report.len() { "" } else { "," };
-        println!(
+        ui.out(format!(
             "  {{\"class\": \"{}\", \"code\": {}, \"items\": {}, \"used\": {}, \"free\": {}, \"capacity\": {}}}{comma}",
             s.class.label(),
             s.class.to_raw(),
@@ -104,9 +155,9 @@ fn print_json(report: &[Status]) {
             s.used,
             s.free,
             s.total(),
-        );
+        ));
     }
-    println!("]");
+    ui.out("]");
 }
 
 /// Combine an operation's result with its session close, keeping the operation's error
@@ -141,41 +192,33 @@ fn explain(e: nord_usb::Error, at: Location) -> String {
     }
 }
 
-/// Parse a slot the way the instrument displays it: `8:14` is bank 8, slot 14.
-///
-/// `:` is the canonical separator — it is what the Electro 5's own display and Nord
-/// Sound Manager use. `-` is also accepted because the older `nord device` subcommands
-/// documented it, and silently rejecting a form this CLI itself once told people to use
-/// would be gratuitous.
-pub fn parse_location(s: &str) -> Result<Location, String> {
-    let (b, l) = s
-        .split_once([':', '-'])
-        .ok_or_else(|| format!("expected BANK:SLOT (e.g. 7:4), got {s:?}"))?;
-    let bank: u32 = b.trim().parse().map_err(|_| format!("bad bank {b:?}"))?;
-    let slot: u32 = l.trim().parse().map_err(|_| format!("bad slot {l:?}"))?;
-    if bank == 0 || slot == 0 {
-        return Err("banks and slots are numbered from 1, as shown on the instrument".into());
-    }
-    Ok(Location::from_user(bank, slot))
-}
-
 fn open_usb() -> Result<nord_usb::transport::UsbTransport, String> {
     nord_usb::transport::UsbTransport::open_first().map_err(|e| e.to_string())
 }
 
-/// Read one entity off the instrument. Read-only.
+/// Read one object off the instrument. Read-only.
 ///
-/// `class` selects the object type (4 programs, 5 set lists, …). `raw` writes the wire
-/// body verbatim instead of wrapping it in a CBIN header — essential for formats whose
-/// header layout is not yet known, where wrapping would fabricate a wrong file.
-pub fn read(at: Location, out: Option<PathBuf>, class: u32, raw: bool) -> Result<(), String> {
-    let class = ObjectClass::from_raw(class);
+/// With `out` set, writes the file; otherwise decodes and prints a summary. The summary
+/// is the default because that is what you usually want when poking at an instrument:
+/// `nord program get 7:4` should tell you what is in 7:4, not leave a file in the working
+/// directory. `--out` is the deliberate act.
+///
+/// `body` writes the wire body verbatim instead of wrapping it in a CBIN header —
+/// essential for classes whose header layout is not yet known, where wrapping would
+/// fabricate a wrong file. It is only reachable through `nord raw`, for that reason.
+pub fn get(
+    ui: &Ui,
+    at: Location,
+    out: Option<PathBuf>,
+    class: ObjectClass,
+    body: bool,
+) -> Result<(), String> {
     let mut t = open_usb()?;
     let (info, file) = nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class).await?;
         let r = async {
             let info = usb_op::info(&mut s, at).await?;
-            let file = if raw {
+            let file = if body {
                 usb_op::read_body(&mut s, at).await?
             } else {
                 usb_op::read_program(&mut s, at).await?
@@ -186,42 +229,73 @@ pub fn read(at: Location, out: Option<PathBuf>, class: u32, raw: bool) -> Result
         let closed = s.commit().await;
         finish(r, closed)
     })
-    .map_err(|e| e.to_string())?;
-    eprintln!(
-        "  class={:?} format={:?} body_len={}",
-        class, info.format, info.body_len
-    );
+    .map_err(|e| explain(e, at))?;
 
-    let path = out.unwrap_or_else(|| {
-        // Default to the slot name, which is what the corpus convention keys on.
-        let stem = if info.name.is_empty() {
-            "entity".into()
-        } else {
-            info.name.clone()
-        };
-        let ext = if raw {
-            "body".to_string()
-        } else {
-            info.format.clone()
-        };
-        PathBuf::from(format!("{stem}.{ext}"))
-    });
-    std::fs::write(&path, &file).map_err(|e| format!("{}: {e}", path.display()))?;
-    eprintln!(
-        "read {} ({} bytes) -> {}",
+    if let Some(path) = out {
+        std::fs::write(&path, &file).map_err(|e| format!("{}: {e}", path.display()))?;
+        ui.note(format!(
+            "read {:?} ({} bytes) from {} -> {}",
+            info.name,
+            file.len(),
+            shown(at),
+            path.display(),
+        ));
+        return Ok(());
+    }
+
+    if body {
+        return Err("--body writes a file; give -o a path".into());
+    }
+
+    // Parse the bytes we just built rather than reporting the wire fields directly:
+    // that exercises the same path `nord inspect` uses, so a decode regression shows up
+    // here too instead of only in file-land.
+    let entity = nord_format::from_stream(&mut std::io::Cursor::new(&file)).map_err(|e| {
+        format!(
+            "{} decoded off the device but did not parse: {e}",
+            shown(at)
+        )
+    })?;
+
+    ui.out(format!(
+        "{} {} {:?}  ({}, version {})",
+        shown(at),
+        ui.dash(),
         info.name,
-        file.len(),
-        path.display()
-    );
+        info.format,
+        info.version
+    ));
+    crate::summary::print(ui, &entity);
     Ok(())
 }
 
-/// Write a `.ne5p` into a slot, overwriting it.
-pub fn write(path: PathBuf, at: Location, confirmed: bool) -> Result<(), String> {
+/// Write a file into a slot, overwriting it.
+pub fn put(
+    ui: &Ui,
+    path: PathBuf,
+    at: Location,
+    class: ObjectClass,
+    confirmed: bool,
+) -> Result<(), String> {
     let file = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     // Fail before touching the device if the file is not what it claims to be.
     nord_usb::envelope::unwrap(&file).map_err(|e| e.to_string())?;
+    send(ui, &file, at, class, confirmed, &path.display().to_string())
+}
 
+/// Send an already-validated file into a slot, describing the target first.
+///
+/// Shared with `edit`, which arrives with bytes rather than a path: the pre-flight read
+/// and the confirmation are the same in both cases, and duplicating them is how one of
+/// them ends up missing a guard.
+pub fn send(
+    ui: &Ui,
+    file: &[u8],
+    at: Location,
+    class: ObjectClass,
+    confirmed: bool,
+    what: &str,
+) -> Result<(), String> {
     let mut t = open_usb()?;
 
     // Show what is about to be destroyed before destroying it. Reading the slot
@@ -229,7 +303,7 @@ pub fn write(path: PathBuf, at: Location, confirmed: bool) -> Result<(), String>
     // An empty destination is not a failure: status 1 means the slot is vacant, so there
     // is nothing to report.
     let existing = nord_usb::block_on(async {
-        let mut s = Session::open(&mut t, ObjectClass::Program).await?;
+        let mut s = Session::open(&mut t, class).await?;
         let r = usb_op::info(&mut s, at).await;
         let closed = s.commit().await;
         finish(r, closed)
@@ -242,17 +316,15 @@ pub fn write(path: PathBuf, at: Location, confirmed: bool) -> Result<(), String>
     };
 
     match &existing {
-        Some(info) => eprintln!(
-            "about to overwrite {} (currently {:?}) with {}",
+        Some(info) => ui.note(format!(
+            "about to {} {} (currently {:?}) with {what}",
+            ui.danger("overwrite"),
             shown(at),
             info.name,
-            path.display()
-        ),
-        None => eprintln!("{} is empty; writing {}", shown(at), path.display()),
+        )),
+        None => ui.note(format!("{} is empty; writing {what}", shown(at))),
     }
-    if !confirmed {
-        return Err("refusing to write without --yes (back up first: `nord device read`)".into());
-    }
+    ui.confirm(confirmed)?;
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -260,10 +332,10 @@ pub fn write(path: PathBuf, at: Location, confirmed: bool) -> Result<(), String>
         .unwrap_or(0);
 
     nord_usb::block_on(async {
-        let mut s = Session::open(&mut t, ObjectClass::Program)
+        let mut s = Session::open(&mut t, class)
             .await?
             .allow_destructive_writes();
-        let r = usb_op::write_program(&mut s, at, &file, timestamp).await;
+        let r = usb_op::write_program(&mut s, at, file, timestamp).await;
         // Close the transaction either way; leaving it half-open is worse than the
         // original error.
         let closed = s.commit().await;
@@ -271,22 +343,12 @@ pub fn write(path: PathBuf, at: Location, confirmed: bool) -> Result<(), String>
     })
     .map_err(|e| e.to_string())?;
 
-    eprintln!(
-        "wrote {} -> bank {} slot {}",
-        path.display(),
-        at.bank + 1,
-        at.slot + 1
-    );
+    ui.note(format!("wrote {what} -> {}", shown(at)));
     Ok(())
 }
 
-/// One-indexed `bank N slot M`, matching the instrument's own labels.
-fn shown(at: Location) -> String {
-    format!("bank {} slot {}", at.bank + 1, at.slot + 1)
-}
-
-/// Read one slot's name/format in a throwaway read-only session — used to show what a
-/// mutation is about to affect before it happens.
+/// Read one slot's name in a throwaway read-only session — used to show what a mutation
+/// is about to affect before it happens.
 fn peek(
     t: &mut nord_usb::transport::UsbTransport,
     class: ObjectClass,
@@ -309,47 +371,37 @@ fn peek(
 /// it is free would be absurd. A real transport fault surfaces on the operation itself a
 /// moment later.
 fn peek_dest(
+    ui: &Ui,
     t: &mut nord_usb::transport::UsbTransport,
     class: ObjectClass,
     at: Location,
 ) -> String {
     match peek(t, class, at) {
-        Ok(name) => format!("OVERWRITING {name:?}"),
+        Ok(name) => format!("{} {name:?}", ui.danger("OVERWRITING")),
         Err(_) => "destination reads as empty".into(),
     }
 }
 
-/// Refuse a destructive op unless `--yes` was given, after describing what it touches.
-fn require_yes(confirmed: bool) -> Result<(), String> {
-    if confirmed {
-        Ok(())
-    } else {
-        Err(
-            "refusing to modify the device without --yes (back up first: `nord device read`)"
-                .into(),
-        )
-    }
-}
-
-/// Move an object from one slot to another. Destructive; requires `--yes`.
+/// Move an object from one slot to another. Destructive; requires confirmation.
 pub fn move_object(
+    ui: &Ui,
     from: Location,
     to: Location,
-    class: u32,
+    class: ObjectClass,
     confirmed: bool,
 ) -> Result<(), String> {
-    let class = ObjectClass::from_raw(class);
     let mut t = open_usb()?;
     let name = peek(&mut t, class, from)?;
-    let dest = peek_dest(&mut t, class, to);
-    eprintln!(
-        "moving {:?} from {} to {} — {}",
+    let dest = peek_dest(ui, &mut t, class, to);
+    ui.note(format!(
+        "moving {:?} from {} to {} {} {}",
         name,
         shown(from),
         shown(to),
+        ui.dash(),
         dest
-    );
-    require_yes(confirmed)?;
+    ));
+    ui.confirm(confirmed)?;
     nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class)
             .await?
@@ -358,20 +410,29 @@ pub fn move_object(
         r.and(s.commit().await)
     })
     .map_err(|e| e.to_string())?;
-    eprintln!("moved {} -> {}", shown(from), shown(to));
+    ui.note(format!("moved {} -> {}", shown(from), shown(to)));
     Ok(())
 }
 
-/// Delete one or more slots. Destructive; requires `--yes`. All items run in one
+/// Delete one or more slots. Destructive; requires confirmation. All items run in one
 /// session, exactly as NSM batches a multi-delete.
-pub fn delete(slots: &[Location], class: u32, confirmed: bool) -> Result<(), String> {
-    let class = ObjectClass::from_raw(class);
+pub fn delete(
+    ui: &Ui,
+    slots: &[Location],
+    class: ObjectClass,
+    confirmed: bool,
+) -> Result<(), String> {
     let mut t = open_usb()?;
     for &at in slots {
         let name = peek(&mut t, class, at)?;
-        eprintln!("deleting {:?} at {}", name, shown(at));
+        ui.note(format!(
+            "{} {:?} at {}",
+            ui.danger("deleting"),
+            name,
+            shown(at)
+        ));
     }
-    require_yes(confirmed)?;
+    ui.confirm(confirmed)?;
     nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class)
             .await?
@@ -386,17 +447,27 @@ pub fn delete(slots: &[Location], class: u32, confirmed: bool) -> Result<(), Str
         r.and(s.commit().await)
     })
     .map_err(|e| e.to_string())?;
-    eprintln!("deleted {} item(s)", slots.len());
+    ui.note(format!("deleted {} item(s)", slots.len()));
     Ok(())
 }
 
-/// Rename the object in a slot. Destructive; requires `--yes`.
-pub fn rename(at: Location, name: String, class: u32, confirmed: bool) -> Result<(), String> {
-    let class = ObjectClass::from_raw(class);
+/// Rename the object in a slot. Destructive; requires confirmation.
+pub fn rename(
+    ui: &Ui,
+    at: Location,
+    name: String,
+    class: ObjectClass,
+    confirmed: bool,
+) -> Result<(), String> {
     let mut t = open_usb()?;
     let old = peek(&mut t, class, at)?;
-    eprintln!("renaming {} from {:?} to {:?}", shown(at), old, name);
-    require_yes(confirmed)?;
+    ui.note(format!(
+        "renaming {} from {:?} to {:?}",
+        shown(at),
+        old,
+        name
+    ));
+    ui.confirm(confirmed)?;
     nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class)
             .await?
@@ -405,25 +476,31 @@ pub fn rename(at: Location, name: String, class: u32, confirmed: bool) -> Result
         r.and(s.commit().await)
     })
     .map_err(|e| e.to_string())?;
-    eprintln!("renamed {} -> {:?}", shown(at), name);
+    ui.note(format!("renamed {} -> {:?}", shown(at), name));
     Ok(())
 }
 
 /// Duplicate an object into another slot (a device-internal deep copy). Destructive;
-/// requires `--yes`.
-pub fn duplicate(from: Location, to: Location, class: u32, confirmed: bool) -> Result<(), String> {
-    let class = ObjectClass::from_raw(class);
+/// requires confirmation.
+pub fn duplicate(
+    ui: &Ui,
+    from: Location,
+    to: Location,
+    class: ObjectClass,
+    confirmed: bool,
+) -> Result<(), String> {
     let mut t = open_usb()?;
     let name = peek(&mut t, class, from)?;
-    let dest = peek_dest(&mut t, class, to);
-    eprintln!(
-        "duplicating {:?} from {} to {} — {}",
+    let dest = peek_dest(ui, &mut t, class, to);
+    ui.note(format!(
+        "duplicating {:?} from {} to {} {} {}",
         name,
         shown(from),
         shown(to),
+        ui.dash(),
         dest
-    );
-    require_yes(confirmed)?;
+    ));
+    ui.confirm(confirmed)?;
     nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class)
             .await?
@@ -432,14 +509,13 @@ pub fn duplicate(from: Location, to: Location, class: u32, confirmed: bool) -> R
         r.and(s.commit().await)
     })
     .map_err(|e| e.to_string())?;
-    eprintln!("duplicated {} -> {}", shown(from), shown(to));
+    ui.note(format!("duplicated {} -> {}", shown(from), shown(to)));
     Ok(())
 }
 
 /// Load an object live on the instrument (double-click in NSM). Non-destructive, so no
 /// confirmation is needed.
-pub fn select(at: Location, class: u32) -> Result<(), String> {
-    let class = ObjectClass::from_raw(class);
+pub fn select(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
     let mut t = open_usb()?;
     nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class).await?;
@@ -448,13 +524,12 @@ pub fn select(at: Location, class: u32) -> Result<(), String> {
         r.and(closed)
     })
     .map_err(|e| e.to_string())?;
-    eprintln!("selected {} on the instrument", shown(at));
+    ui.note(format!("selected {} on the instrument", shown(at)));
     Ok(())
 }
 
 /// List the piano/sample library objects an entity depends on. Read-only.
-pub fn deps(at: Location, class: u32) -> Result<(), String> {
-    let class = ObjectClass::from_raw(class);
+pub fn deps(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
     let mut t = open_usb()?;
     let deps = nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class).await?;
@@ -465,13 +540,19 @@ pub fn deps(at: Location, class: u32) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
 
     if deps.is_empty() {
-        println!("{} has no dependencies", shown(at));
+        ui.note(format!("{} has no dependencies", shown(at)));
         return Ok(());
     }
-    println!("{:<8} {:<10} name", "class", "id");
+    ui.out(format!("{:<8} {:<10} name", "class", "id"));
     for d in &deps {
         let loc = d.location.map(shown).unwrap_or_default();
-        println!("{:<8} {:08x}   {} {}", d.class.label(), d.id, d.name, loc);
+        ui.out(format!(
+            "{:<8} {:08x}   {} {}",
+            d.class.label(),
+            d.id,
+            d.name,
+            loc
+        ));
     }
     Ok(())
 }
@@ -481,10 +562,9 @@ pub fn deps(at: Location, class: u32) -> Result<(), String> {
 /// This is `0x1e`, the richest single response on the wire: it carries the body length,
 /// format tag, version, name and CRC-32 — i.e. every field of the CBIN header, which is
 /// never itself transmitted, plus the name, which no `.ne5p`/`.ne5t` file stores at all.
-/// So this is the one command that shows what a `nord device read` would reconstruct,
-/// without reading the body.
-pub fn info(at: Location, class: u32) -> Result<(), String> {
-    let class = ObjectClass::from_raw(class);
+/// So this is the one command that shows what a `get` would reconstruct, without reading
+/// the body.
+pub fn slot_info(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
     let mut t = open_usb()?;
     let info = nord_usb::block_on(async {
         let mut s = Session::open(&mut t, class).await?;
@@ -494,108 +574,28 @@ pub fn info(at: Location, class: u32) -> Result<(), String> {
     })
     .map_err(|e| explain(e, at))?;
 
-    println!("  location:  {}", shown(info.location));
-    println!("  name:      {:?}", info.name);
-    println!("  format:    {}", info.format);
-    println!("  version:   {}", info.version);
-    println!("  body:      {} bytes", info.body_len);
+    ui.out(format!("  location:  {}", shown(info.location)));
+    ui.out(format!("  name:      {:?}", info.name));
+    ui.out(format!("  format:    {}", info.format));
+    ui.out(format!("  version:   {}", info.version));
+    ui.out(format!("  body:      {} bytes", info.body_len));
     match info.crc32 {
         // Library content (pianos, samples) reports 0xffffffff: no checksum is kept for
         // objects this large.
-        Some(crc) => println!("  crc32:     {crc:#010x}"),
-        None => println!("  crc32:     none (not checksummed for this class)"),
+        Some(crc) => ui.out(format!("  crc32:     {crc:#010x}")),
+        None => ui.out("  crc32:     none (not checksummed for this class)"),
     }
     Ok(())
 }
 
-/// Read a program and either print a readable summary or save the `.ne5p`. Read-only.
-///
-/// Summary is the default because that is what you usually want when poking at an
-/// instrument: `nord program get 7:4` should tell you what is in 7:4, not leave a file
-/// in the working directory. `--out` is the deliberate act.
-pub fn program_get(at: Location, out: Option<PathBuf>) -> Result<(), String> {
+/// Read one object's bytes with no printing, for `edit`'s read-modify-write.
+pub fn fetch(at: Location, class: ObjectClass) -> Result<Vec<u8>, String> {
     let mut t = open_usb()?;
-    let (info, file) = nord_usb::block_on(async {
-        let mut s = Session::open(&mut t, ObjectClass::Program).await?;
-        let r = async {
-            let info = usb_op::info(&mut s, at).await?;
-            let file = usb_op::read_program(&mut s, at).await?;
-            Ok::<_, nord_usb::Error>((info, file))
-        }
-        .await;
+    nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, class).await?;
+        let r = usb_op::read_program(&mut s, at).await;
         let closed = s.commit().await;
         finish(r, closed)
     })
-    .map_err(|e| explain(e, at))?;
-
-    if let Some(path) = out {
-        std::fs::write(&path, &file).map_err(|e| format!("{}: {e}", path.display()))?;
-        eprintln!(
-            "read {:?} from {} -> {}",
-            info.name,
-            shown(at),
-            path.display()
-        );
-        return Ok(());
-    }
-
-    // Parse the bytes we just built rather than reporting the wire fields directly:
-    // that exercises the same path `nord inspect` uses, so a decode regression shows up
-    // here too instead of only in file-land.
-    let entity = nord_format::from_stream(&mut std::io::Cursor::new(&file)).map_err(|e| {
-        format!(
-            "{} decoded off the device but did not parse: {e}",
-            shown(at)
-        )
-    })?;
-
-    println!(
-        "{} — {:?}  ({}, version {})",
-        shown(at),
-        info.name,
-        info.format,
-        info.version
-    );
-    crate::print_summary(&entity);
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_location;
-
-    /// `:` is the canonical separator; `-` stays accepted for the older `nord device`
-    /// spellings. Both must land on the same zero-indexed wire location.
-    #[test]
-    fn both_slot_separators_parse_to_the_same_place() {
-        let colon = parse_location("7:4").unwrap();
-        let dash = parse_location("7-4").unwrap();
-        assert_eq!(colon, dash);
-        // The UI is one-indexed, the wire is zero-indexed.
-        assert_eq!((colon.bank, colon.slot), (6, 3));
-    }
-
-    #[test]
-    fn whitespace_around_the_numbers_is_tolerated() {
-        assert_eq!(
-            parse_location(" 8 : 14 ").unwrap(),
-            parse_location("8:14").unwrap()
-        );
-    }
-
-    /// Zero is the giveaway that someone passed a wire index instead of a panel label.
-    #[test]
-    fn zero_is_rejected_because_the_panel_counts_from_one() {
-        for bad in ["0:1", "1:0", "0:0"] {
-            let err = parse_location(bad).unwrap_err();
-            assert!(err.contains("numbered from 1"), "{bad}: {err}");
-        }
-    }
-
-    #[test]
-    fn malformed_slots_say_what_was_expected() {
-        assert!(parse_location("74").unwrap_err().contains("BANK:SLOT"));
-        assert!(parse_location("7:x").unwrap_err().contains("bad slot"));
-        assert!(parse_location("x:4").unwrap_err().contains("bad bank"));
-    }
+    .map_err(|e| explain(e, at))
 }
