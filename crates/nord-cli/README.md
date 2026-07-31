@@ -23,12 +23,50 @@ Expect large changes to this tool over time while I develop the libraries.
 |---|---|
 | `inspect` | Decode file(s) and print a readable summary |
 | `verify` | Re-encode file(s) and check the bytes come back identical |
-| `program` | Work with programs on an attached instrument |
-| `device` | Lower-level device access, any object class |
+| `device` | The instrument itself — what is on the bus, and what it holds |
+| `program` | Programs on the instrument (object class 4) |
+| `setlist` | Set lists on the instrument (object class 5) |
+| `raw` | Hidden: the same verbs, addressed by class number |
+
+**The noun set is the protocol's object-class set.** Sessions on the wire are
+scoped to a class and every operation is a primitive parameterised by it, so
+`program` and `setlist` are the same code with the class fixed and they share one
+verb vocabulary — learning one class teaches the rest:
+
+```
+get put            transfer
+move rename duplicate delete select   organisation
+info deps          interrogation
+edit               content (programs only, for now)
+```
+
+`nord raw --class N` is that class parameter exposed. It is hidden because an
+untyped, class-numeric spelling is an escape hatch rather than a front door —
+but hidden is not deprecated: it stays supported and tested, and it is the only
+way to reach a class that has no noun yet.
+
+**Pianos (class 1) and samples (class 3) have no noun.** No operation has ever
+run directly against either, and a `nord piano get` would look verified because
+its siblings are. They arrive when the class has been exercised on hardware;
+until then `nord raw --class 1 info 1:1` is the honest spelling.
+
+`inspect` and `verify` sit at the top level because they are class-agnostic —
+they dispatch on the CBIN format tag and print whatever they find.
 
 Slots are written **`BANK:SLOT`**, the way the instrument and Nord Sound Manager
 show them — `7:4` is bank 7, slot 4, both counted from 1. (`7-4` also parses,
-which is what the older `device` help documented.)
+which is what earlier help documented.)
+
+### Output and interaction
+
+- **Data on stdout, everything else on stderr.** `nord program get 7:4 | grep
+  transpose` sees the summary and nothing else.
+- **Colour and unicode only on a terminal.** `--color=auto|always|never`, and
+  `NO_COLOR` in the environment forces it off. Piped output is plain ASCII, which
+  is what keeps the Wine/Linux byte-identical check meaningful.
+- **A pipe is non-interactive.** On a terminal a destructive command asks; off
+  one, the absence of `--yes` stays a hard error rather than a read from a stdin
+  nobody is attached to.
 
 ## Working with files
 
@@ -65,7 +103,7 @@ LA Grand.ne5p
 ```
 
 `depends:` is the piano and sample the program references. Those ids are the same
-values the instrument reports for that program over USB, so `nord device deps` on
+values the instrument reports for that program over USB, so `nord program deps` on
 the same slot will name them — which is the only way to resolve an id, since the
 file itself stores no names.
 
@@ -108,38 +146,44 @@ Close Nord Sound Manager first — it claims the vendor interface exclusively, a
 `nord` cannot attach alongside it.
 
 ```sh
+nord device status                      # inventory per class; --json for machines
+nord device info                        # what is attached, from the USB descriptors
+
 nord program get 7:4                    # summary to stdout
 nord program get 7:4 -o patch.ne5p      # write the .ne5p instead
 nord program put patch.ne5p 7:4 --yes
 nord program move 8:13 7:16 --yes
 nord program delete 7:50 7:49 --yes
+nord program info 7:4                   # size, format, version, name, crc32
+nord program deps 7:4                   # piano/sample dependencies, with names
+nord program select 2:12                # load live on the instrument
+nord program rename 6:13 "foo" --yes
+nord program duplicate 7:2 7:3 --yes
 ```
 
-`nord device` reaches the other object classes through `--class` (4 programs, the
-default; 5 set lists; 1 pianos; 3 samples) and adds a few operations:
+Every one of those verbs reads identically on `nord setlist`, and on `nord raw`
+with an explicit class:
 
 ```sh
-nord device status                      # inventory per class; --json for machines
-nord device info 1:1 --class 1          # size, format, version, name, crc32
-nord device deps 7:4                    # piano/sample dependencies, with names
-nord device select 2:12                 # load live on the instrument
-nord device read 1:1 --class 5 --raw    # wire body verbatim, no CBIN header
-nord device rename 6:13 "foo" --yes
-nord device duplicate 7:2 7:3 --yes
+nord setlist get 1:1
+nord raw --class 1 info 1:1             # a piano; no typed noun yet
+nord raw --class 5 get 1:1 --body -o setlist.body
 ```
 
-`--raw` matters for formats whose header layout is not known: wrapping the body
-in a fabricated header would produce a plausible-looking file that is wrong.
+`--body` matters for classes whose header layout is not known: wrapping the wire
+body in a fabricated CBIN header would produce a plausible-looking file that is
+wrong.
 
 ### Safety
 
 Every mutating command **reads the slot first, says what it will touch, then
-refuses without `--yes`**. Running it without the flag is a real dry run:
+refuses without `--yes`**. Off a terminal, running it without the flag is a real
+dry run:
 
 ```
 $ nord program move 7:2 7:3
 moving "Africa Split" from bank 7 slot 2 to bank 7 slot 3 — OVERWRITING "Squabble B"
-error: refusing to modify the device without --yes (back up first: `nord device read`)
+error: refusing to proceed without --yes
 ```
 
 `move` and `duplicate` name the *destination's* current occupant, not just the
@@ -151,6 +195,66 @@ Two other guards worth knowing about:
 - Every command closes its transaction **even when it fails**. An abandoned
   session leaves the instrument stuck on a progress screen with no way out but a
   power cycle.
+
+`--yes` means *don't ask me*. There is deliberately no `--force`: that would mean
+*proceed even though a check failed*, and no such check exists yet. Collapsing the
+two would make the dangerous case unexpressible later.
+
+## Editing a program
+
+`nord program edit` is the only verb that changes what is *inside* an object. Its
+field paths are `nord-format`'s own names, generated from the panel declarations,
+so `--fields` cannot fall behind the library:
+
+```sh
+nord program edit --fields                       # what is settable, and what it takes
+nord program edit patch.ne5p --set center_panel.gain=96 -o out.ne5p
+nord program edit patch.ne5p --set effects_panel.fx1_rate=96 --yes     # in place
+nord program edit 7:4 --set center_panel.split=true --dry-run
+nord program edit --set center_panel.gain=64 -o blank.ne5p             # a fresh program
+```
+
+A file and a slot are the same command; the slot form is a read-modify-write over
+USB and obeys the same rule every mutation does. Editing a file in place takes the
+same guard — `-o` is how you avoid the question.
+
+**What a value may be is the component's business, not the CLI's.** A field is
+parsed out of the way it prints, so `--fields` and `nord inspect` and `--set` all
+speak one vocabulary, and a value the type cannot hold fails before anything is
+written:
+
+```
+$ nord program edit patch.ne5p --set center_panel.gain=200 --dry-run
+error: "200" is not a value of gain (accepts 0 .. 127)
+```
+
+That also settles a small question by construction: a sparse enum renders an
+unrecognised stored value as `Unknown(9)`, so a bare `9` matches nothing and
+`--set …=Unknown(9)` is the only spelling. An unexplained value can be written,
+but only by naming it as unexplained.
+
+`--dry-run` prints the byte diff, which is worth more to reverse-engineering than
+to a user:
+
+```
+$ nord program edit patch.ne5p --set center_panel.transpose=-5 \
+    --set center_panel.transpose_enabled=true --dry-run
+center_panel.transpose_enabled           false -> true
+center_panel.transpose                   0 -> -5
+  byte 0x0018  0x01 -> 0xad  (body crc32)
+  byte 0x0019  0xe8 -> 0x13  (body crc32)
+  byte 0x001a  0x1d -> 0x5e  (body crc32)
+  byte 0x001b  0xe7 -> 0x05  (body crc32)
+  byte 0x0030  0x00 -> 0x01
+  byte 0x0031  0x60 -> 0x10
+```
+
+> [!WARNING]
+> **A field is not always a control.** Transpose is the worked example: the stored
+> value means nothing while `transpose_enabled` is clear, the instrument never
+> clears that bit once set, and an untouched program holds `+1` rather than `0`.
+> Setting one half alone earns a warning, not a refusal — doing it deliberately is
+> legitimate, and filling in the other half would be the tool inventing intent.
 
 ## Status
 
