@@ -378,7 +378,14 @@ fn a_large_body_is_read_in_chunks() {
         r
     });
 
-    assert_eq!(got.len(), body_len as usize, "reassembled body is the wrong length");
-    assert_eq!(got, body, "reassembled body differs from what the device sent");
+    assert_eq!(
+        got.len(),
+        body_len as usize,
+        "reassembled body is the wrong length"
+    );
+    assert_eq!(
+        got, body,
+        "reassembled body differs from what the device sent"
+    );
     assert!(t.is_exhausted(), "did not consume the whole exchange");
 }

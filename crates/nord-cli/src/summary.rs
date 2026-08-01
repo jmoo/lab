@@ -342,47 +342,44 @@ pub fn print(ui: &Ui, entity: &Entity) {
                         // In b3+bass, preset 1 is the bass manual: two drawbars, kept
                         // outside the nine-nibble block. The nine nibbles are stale
                         // there, so printing them would be actively misleading.
-                        let bars =
-                            if selected.is_b3_bass() && model == OrganModel::B3 && preset == 1 {
-                                // Only two of the nine positions exist on the bass manual;
-                                // dots for the rest so it lines up with the other rows and
-                                // cannot be misread as a nine-drawbar registration.
-                                let b = o.b3_bass_drawbars();
-                                let plain = format!("{}{}.......", b[0], b[1]);
-                                if ui.unicode() {
-                                    format!(
-                                        "{}{}·······  {}",
-                                        level(b[0]),
-                                        level(b[1]),
-                                        ui.dim(plain)
-                                    )
-                                } else {
-                                    plain
-                                }
-                            } else if model == OrganModel::Farfisa {
-                                // Farfisa's drawbars are on/off tabs on the panel, but the
-                                // file still stores nine positions and the low bits of each
-                                // vary independently of the on/off threshold. Show both, or
-                                // the display silently discards them.
-                                let (on, off) = if ui.unicode() {
-                                    ('█', '·')
-                                } else {
-                                    ('|', '.')
-                                };
-                                let tabs: String = o
-                                    .farfisa_tabs(preset)
-                                    .iter()
-                                    .map(|t| if *t { on } else { off })
-                                    .collect();
-                                let pos = digits(&o.drawbars(model, preset)[..]);
-                                if ui.unicode() {
-                                    format!("{tabs}  {}", ui.dim(format!("({pos})")))
-                                } else {
-                                    format!("{tabs} ({pos})")
-                                }
+                        let bars = if selected.is_b3_bass()
+                            && model == OrganModel::B3
+                            && preset == 1
+                        {
+                            // Only two of the nine positions exist on the bass manual;
+                            // dots for the rest so it lines up with the other rows and
+                            // cannot be misread as a nine-drawbar registration.
+                            let b = o.b3_bass_drawbars();
+                            let plain = format!("{}{}.......", b[0], b[1]);
+                            if ui.unicode() {
+                                format!("{}{}·······  {}", level(b[0]), level(b[1]), ui.dim(plain))
                             } else {
-                                drawbars(ui, &o.drawbars(model, preset)[..])
+                                plain
+                            }
+                        } else if model == OrganModel::Farfisa {
+                            // Farfisa's drawbars are on/off tabs on the panel, but the
+                            // file still stores nine positions and the low bits of each
+                            // vary independently of the on/off threshold. Show both, or
+                            // the display silently discards them.
+                            let (on, off) = if ui.unicode() {
+                                ('█', '·')
+                            } else {
+                                ('|', '.')
                             };
+                            let tabs: String = o
+                                .farfisa_tabs(preset)
+                                .iter()
+                                .map(|t| if *t { on } else { off })
+                                .collect();
+                            let pos = digits(&o.drawbars(model, preset)[..]);
+                            if ui.unicode() {
+                                format!("{tabs}  {}", ui.dim(format!("({pos})")))
+                            } else {
+                                format!("{tabs} ({pos})")
+                            }
+                        } else {
+                            drawbars(ui, &o.drawbars(model, preset)[..])
+                        };
 
                         let vib = match o.vib_type(model) {
                             Some(v) if o.vib_on(model, preset) => format!("  vib {v:?}"),
