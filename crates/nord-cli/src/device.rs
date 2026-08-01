@@ -283,11 +283,35 @@ pub fn put(
     send(ui, &file, at, class, confirmed, &path.display().to_string())
 }
 
+/// Run one mutating operation in its own session, committing either way — an abandoned
+/// session leaves the instrument mid-transaction with its progress label still painted.
+///
+/// A macro rather than a function because the operation borrows the session it is handed,
+/// and a closure returning a future that borrows its own argument cannot be written with
+/// the higher-ranked bound that would need.
+macro_rules! one_shot {
+    ($t:expr, $class:expr, |$s:ident| $body:expr) => {
+        nord_usb::block_on(async {
+            let mut $s = Session::open($t, $class).await?.allow_destructive_writes();
+            let r = $body.await;
+            let closed = $s.commit().await;
+            r.and(closed)
+        })
+    };
+}
+
 /// Send an already-validated file into a slot, describing the target first.
 ///
 /// Shared with `edit`, which arrives with bytes rather than a path: the pre-flight read
 /// and the confirmation are the same in both cases, and duplicating them is how one of
 /// them ends up missing a guard.
+///
+/// **An occupied destination is replaced, not overwritten.** The instrument refuses a
+/// write aimed at a slot that already holds something (status 4), so this reads the
+/// occupant, deletes it, writes, and puts the occupant back if the write fails.
+/// `nord-usb` has no opinion about any of that by design — it offers the primitives and
+/// reports the refusal. Composing them, and holding a copy across the moment the slot is
+/// empty, is this layer's business.
 pub fn send(
     ui: &Ui,
     file: &[u8],
@@ -316,35 +340,126 @@ pub fn send(
     };
 
     match &existing {
-        Some(info) => ui.note(format!(
-            "about to {} {} (currently {:?}) with {what}",
-            ui.danger("overwrite"),
-            shown(at),
-            info.name,
-        )),
+        Some(info) => {
+            ui.note(format!(
+                "about to {} {} (currently {:?}) with {what}",
+                ui.danger("overwrite"),
+                shown(at),
+                info.name,
+            ));
+            // The instrument answers status 4 to a write aimed at an occupied slot, so a
+            // replace is delete-then-write. Say that before asking, because the operator
+            // is consenting to the slot being empty for a moment, not just to a write.
+            ui.note(format!(
+                "  {} the instrument will not overwrite in place, so {} is deleted first. \
+                 Its {} bytes are read back beforehand and put back if the write fails.",
+                ui.danger("note:"),
+                shown(at),
+                info.body_len,
+            ));
+        }
         None => ui.note(format!("{} is empty; writing {what}", shown(at))),
     }
     ui.confirm(confirmed)?;
+
+    // After consent, not before: for a piano this read is minutes long, and nobody should
+    // sit through it only to be asked whether they meant it.
+    let backup = match &existing {
+        Some(_) => Some(
+            nord_usb::block_on(async {
+                let mut s = Session::open(&mut t, class).await?;
+                let r = usb_op::read_program(&mut s, at).await;
+                let closed = s.commit().await;
+                finish(r, closed)
+            })
+            // Nothing is deleted until the backup is in hand.
+            .map_err(|e| {
+                format!(
+                    "could not read {} back before replacing it, so it was left alone: {}",
+                    shown(at),
+                    explain(e, at)
+                )
+            })?,
+        ),
+        None => None,
+    };
+
+    if existing.is_some() {
+        ui.note(format!("deleting {} to make room", shown(at)));
+        one_shot!(&mut t, class, |s| usb_op::delete(&mut s, at))
+            .map_err(|e| format!("deleting {}: {}", shown(at), explain(e, at)))?;
+    }
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as u32)
         .unwrap_or(0);
 
-    nord_usb::block_on(async {
-        let mut s = Session::open(&mut t, class)
-            .await?
-            .allow_destructive_writes();
-        let r = usb_op::write_program(&mut s, at, file, timestamp).await;
-        // Close the transaction either way; leaving it half-open is worse than the
-        // original error.
-        let closed = s.commit().await;
-        r.and(closed)
-    })
-    .map_err(|e| e.to_string())?;
+    let written = one_shot!(&mut t, class, |s| usb_op::write_program(
+        &mut s, at, file, timestamp
+    ));
 
-    ui.note(format!("wrote {what} -> {}", shown(at)));
-    Ok(())
+    match (written, backup) {
+        (Ok(()), _) => {
+            ui.note(format!("wrote {what} -> {}", shown(at)));
+            Ok(())
+        }
+        (Err(e), None) => Err(e.to_string()),
+        // The slot is empty and the only copy of what used to be there is in this
+        // process. Getting it back is more important than reporting the original error.
+        (Err(e), Some(backup)) => {
+            ui.warn(format!(
+                "the write failed and {} is now empty; putting the original back",
+                shown(at)
+            ));
+            match one_shot!(&mut t, class, |s| usb_op::write_program(
+                &mut s, at, &backup, timestamp
+            )) {
+                Ok(()) => {
+                    ui.note(format!("restored {}", shown(at)));
+                    Err(format!(
+                        "{e} ({} was restored, and is unchanged)",
+                        shown(at)
+                    ))
+                }
+                Err(restore) => Err(rescue(
+                    ui,
+                    at,
+                    &backup,
+                    &e.to_string(),
+                    &restore.to_string(),
+                )),
+            }
+        }
+    }
+}
+
+/// Last resort: the write failed, the restore failed, and the slot's former contents
+/// exist only in memory. Spill them next to the operator rather than exiting with them.
+fn rescue(ui: &Ui, at: Location, backup: &[u8], write: &str, restore: &str) -> String {
+    let path = std::env::current_dir()
+        .unwrap_or_default()
+        .join(rescue_name(at, backup));
+    match std::fs::write(&path, backup) {
+        Ok(()) => {
+            ui.warn(format!(
+                "restore failed too; wrote the original to {}",
+                path.display()
+            ));
+            format!(
+                "{write} (restoring failed as well: {restore}) {} is empty; \
+                 its former contents were saved to {} — put it back with `nord put`",
+                shown(at),
+                path.display(),
+            )
+        }
+        Err(io) => format!(
+            "{write} (restoring failed as well: {restore}) {} is EMPTY and its former \
+             contents could not be saved either ({io}); {} bytes are lost",
+            shown(at),
+            backup.len(),
+        ),
+    }
 }
 
 /// Read one slot's name in a throwaway read-only session — used to show what a mutation
@@ -648,4 +763,55 @@ pub fn fetch(at: Location, class: ObjectClass) -> Result<Vec<u8>, String> {
         finish(r, closed)
     })
     .map_err(|e| explain(e, at))
+}
+
+/// Filename for a rescued slot: the location as the instrument labels it, and the
+/// object's own format tag so the file can be handed straight back to `put`.
+fn rescue_name(at: Location, backup: &[u8]) -> String {
+    // Read the tag out of the header rather than going through `envelope::unwrap`, which
+    // also verifies the checksum. This runs because something has already gone wrong; a
+    // backup that fails its CRC is exactly when the extension matters most, and refusing
+    // to name it would be the wrong way round.
+    let format = backup
+        .get(8..12)
+        .filter(|tag| tag.iter().all(|b| b.is_ascii_alphanumeric()))
+        .map(|tag| String::from_utf8_lossy(tag).into_owned())
+        .unwrap_or_else(|| "bin".to_string());
+    format!("nord-rescued-{}-{}.{format}", at.bank + 1, at.slot + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rescue file is the last copy of a program that no longer exists on the
+    /// instrument, so it has to be named something a person can act on.
+    #[test]
+    fn a_rescued_slot_is_named_for_its_location_and_format() {
+        // A minimal CBIN: magic, header type, tag. The checksum is deliberately left
+        // wrong — naming must not depend on the backup being intact.
+        let mut file = vec![0u8; 45];
+        file[0..4].copy_from_slice(b"CBIN");
+        file[4..8].copy_from_slice(&1u32.to_le_bytes());
+        file[8..12].copy_from_slice(b"ne5p");
+        let at = Location { bank: 6, slot: 49 };
+        // Wire is zero-indexed, the instrument's labels are not.
+        assert_eq!(rescue_name(at, &file), "nord-rescued-7-50.ne5p");
+    }
+
+    /// A set list must not land with a program's extension.
+    #[test]
+    fn the_format_tag_comes_from_the_bytes() {
+        let mut file = vec![0u8; 45];
+        file[8..12].copy_from_slice(b"ne5t");
+        let at = Location { bank: 0, slot: 3 };
+        assert_eq!(rescue_name(at, &file), "nord-rescued-1-4.ne5t");
+    }
+
+    /// Bytes that do not parse are still the only copy, so they must still get a name.
+    #[test]
+    fn unparseable_bytes_still_get_rescued() {
+        let at = Location { bank: 0, slot: 0 };
+        assert_eq!(rescue_name(at, b"nonsense"), "nord-rescued-1-1.bin");
+    }
 }
