@@ -107,10 +107,10 @@ fn print_table(ui: &Ui, report: &[Status]) {
         ui.out("no classes answered");
         return;
     }
-    ui.out(format!(
+    ui.out(ui.dim(format!(
         "{:<10} {:>20} {:>7}  {}",
         "class", "used", "full", "of"
-    ));
+    )));
     let mut any_variable = false;
     for s in report {
         // Fixed-size classes are far clearer as slots than as raw blocks: programs
@@ -133,7 +133,7 @@ fn print_table(ui: &Ui, report: &[Status]) {
             s.class.label(),
             used,
             s.used_percent(),
-            of
+            ui.dim(of),
         ));
     }
     if any_variable {
@@ -528,6 +528,34 @@ pub fn select(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
     Ok(())
 }
 
+/// Thousands separators. A nine-digit byte count is otherwise counted by eye.
+fn grouped(n: u32) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Rounded binary size, or `None` below a kibibyte where the byte count already reads.
+fn human_size(n: u32) -> Option<String> {
+    const UNITS: [&str; 3] = ["KiB", "MiB", "GiB"];
+    if n < 1024 {
+        return None;
+    }
+    let mut value = n as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    Some(format!("{value:.1} {}", UNITS[unit]))
+}
+
 /// List the piano/sample library objects an entity depends on. Read-only.
 pub fn deps(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
     let mut t = open_usb()?;
@@ -543,15 +571,19 @@ pub fn deps(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
         ui.note(format!("{} has no dependencies", shown(at)));
         return Ok(());
     }
-    ui.out(format!("{:<8} {:<10} name", "class", "id"));
+    ui.out(ui.dim(format!("{:<8} {:<10} name", "class", "id")));
     for d in &deps {
-        let loc = d.location.map(shown).unwrap_or_default();
+        // Library objects report no slot, so the location is empty for most rows —
+        // appending it unconditionally left every one of them with a trailing space.
+        let loc = match d.location.map(shown) {
+            Some(at) => format!("  {}", ui.dim(at)),
+            None => String::new(),
+        };
         ui.out(format!(
-            "{:<8} {:08x}   {} {}",
+            "{:<8} {:08x}   {}{loc}",
             d.class.label(),
             d.id,
-            d.name,
-            loc
+            d.name.trim_end(),
         ));
     }
     Ok(())
@@ -574,16 +606,34 @@ pub fn slot_info(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String
     })
     .map_err(|e| explain(e, at))?;
 
-    ui.out(format!("  location:  {}", shown(info.location)));
-    ui.out(format!("  name:      {:?}", info.name));
-    ui.out(format!("  format:    {}", info.format));
-    ui.out(format!("  version:   {}", info.version));
-    ui.out(format!("  body:      {} bytes", info.body_len));
+    let row = |label: &str, value: String| {
+        ui.out(format!("  {}{value}", ui.dim(format!("{label:<11}"))));
+    };
+    row("location:", shown(info.location));
+    row("name:", format!("{:?}", info.name));
+    row("format:", info.format.clone());
+    row("version:", info.version.to_string());
+    row(
+        "body:",
+        format!(
+            "{} bytes{}",
+            grouped(info.body_len),
+            // A piano is nine digits of bytes; the rounded size is what tells you it is
+            // a 200MB object rather than a 20MB one.
+            match human_size(info.body_len) {
+                Some(h) => format!("  {}", ui.dim(format!("({h})"))),
+                None => String::new(),
+            }
+        ),
+    );
     match info.crc32 {
         // Library content (pianos, samples) reports 0xffffffff: no checksum is kept for
         // objects this large.
-        Some(crc) => ui.out(format!("  crc32:     {crc:#010x}")),
-        None => ui.out("  crc32:     none (not checksummed for this class)"),
+        Some(crc) => row("crc32:", format!("{crc:#010x}")),
+        None => row(
+            "crc32:",
+            format!("none {}", ui.dim("(not checksummed for this class)")),
+        ),
     }
     Ok(())
 }

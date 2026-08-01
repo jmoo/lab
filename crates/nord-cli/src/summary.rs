@@ -31,6 +31,55 @@ fn dep_id(id: u32) -> String {
     }
 }
 
+/// Column the values line up in, counting the two-space indent.
+const LABEL_WIDTH: usize = 11;
+/// Same, for the effect-name column, whose longest entry is `reverb`.
+const FX_WIDTH: usize = 7;
+
+/// `label:     value`, label dimmed so the eye runs down the values. `indent` is 2 for
+/// the file's own identity and 4 for anything sitting under a section heading.
+fn field(ui: &Ui, indent: usize, label: &str, value: impl std::fmt::Display) -> String {
+    let label = format!("{label}:");
+    format!(
+        "{:indent$}{}{value}",
+        "",
+        ui.dim(format!("{label:<LABEL_WIDTH$}"))
+    )
+}
+
+/// Start a group. The blank line does as much of the work as the heading does.
+fn section(ui: &Ui, name: &str) {
+    ui.out("");
+    ui.out(format!("  {}", ui.heading(name)));
+}
+
+/// A drawbar position as a block whose height is how far the bar is pulled out.
+///
+/// `0` is a dot rather than the shortest block: a registration is read by which bars are
+/// *out*, and an eighth-block reads as a small value instead of none.
+fn level(position: u8) -> char {
+    const LEVELS: [char; 9] = ['·', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    LEVELS[(position as usize).min(8)]
+}
+
+fn digits(positions: &[u8]) -> String {
+    positions.iter().map(u8::to_string).collect()
+}
+
+/// Nine drawbars as a chart, with the digits kept alongside because they are the data —
+/// the chart only makes a registration legible at a glance.
+///
+/// ⚠️ Without unicode this must return exactly the digits and nothing else: a pipe has
+/// always carried them in that form.
+fn drawbars(ui: &Ui, positions: &[u8]) -> String {
+    let digits = digits(positions);
+    if !ui.unicode() {
+        return digits;
+    }
+    let chart: String = positions.iter().map(|&p| level(p)).collect();
+    format!("{chart}  {}", ui.dim(digits))
+}
+
 pub fn print(ui: &Ui, entity: &Entity) {
     match entity {
         Entity::Program(Program::Electro5(p)) => {
@@ -40,100 +89,184 @@ pub fn print(ui: &Ui, entity: &Entity) {
             } else {
                 "no".to_string()
             };
-            ui.out("  type:      Electro 5 program (ne5p)");
-            ui.out(format!("  location:  {}", location(l.x(), l.y())));
-            ui.out(format!(
-                "  lower:     {:?}  octave {:+}  sustain {}  control {}",
-                p.schema.center_panel.lower_part,
-                p.schema.center_panel.lower_octave_shift.inner(),
-                yn(p.schema.center_panel.lower_sustain),
-                yn(p.schema.center_panel.lower_control),
-            ));
-            ui.out(format!(
-                "  upper:     {:?}  octave {:+}  sustain {}  control {}",
-                p.schema.center_panel.upper_part,
-                p.schema.center_panel.upper_octave_shift.inner(),
-                yn(p.schema.center_panel.upper_sustain),
-                yn(p.schema.center_panel.upper_control),
-            ));
-            ui.out(format!("  split:     {split}"));
-            ui.out(format!(
-                "  transpose: {:+}  ({})",
-                p.schema.center_panel.transpose.inner(),
-                yn(p.schema.center_panel.transpose_enabled),
-            ));
-            ui.out(format!(
-                "  part mix:  {} (lower/upper %)",
-                p.schema.center_panel.part_mix.as_string()
-            ));
-            ui.out(format!("  gain:      {}", p.schema.center_panel.gain));
+            ui.out(field(ui, 2, "type", "Electro 5 program (ne5p)"));
+            ui.out(field(ui, 2, "location", location(l.x(), l.y())));
 
-            let (piano, sample) = (&p.schema.piano_panel, &p.schema.sample_panel);
-            ui.out(format!(
-                "  piano:     category {}  model {}  clav {}  acoustics {}  touch {}  mono {}",
-                piano.category,
-                piano.piano_model.as_u8(),
-                piano.clav_model.as_u8(),
-                piano.acoustics.as_u8(),
-                piano.touch.as_u8(),
-                yn(piano.mono),
+            section(ui, "Keyboard");
+            for (name, part, octave, sustain, control) in [
+                (
+                    "lower",
+                    p.schema.center_panel.lower_part,
+                    p.schema.center_panel.lower_octave_shift.inner(),
+                    p.schema.center_panel.lower_sustain,
+                    p.schema.center_panel.lower_control,
+                ),
+                (
+                    "upper",
+                    p.schema.center_panel.upper_part,
+                    p.schema.center_panel.upper_octave_shift.inner(),
+                    p.schema.center_panel.upper_sustain,
+                    p.schema.center_panel.upper_control,
+                ),
+            ] {
+                ui.out(field(
+                    ui,
+                    4,
+                    name,
+                    format!(
+                        "{part:?}  {} {octave:+}  {} {}  {} {}",
+                        ui.dim("octave"),
+                        ui.dim("sustain"),
+                        yn(sustain),
+                        ui.dim("control"),
+                        yn(control),
+                    ),
+                ));
+            }
+            ui.out(field(ui, 4, "split", split));
+            // The enable is a separate field from the value, so it is shown as the panel
+            // shows it — a light that is on or off, not a yes/no answer to "transpose".
+            let transpose = format!("{:+}", p.schema.center_panel.transpose.inner());
+            ui.out(field(
+                ui,
+                4,
+                "transpose",
+                if p.schema.center_panel.transpose_enabled {
+                    format!("{transpose}  {}", ui.dim("(on)"))
+                } else {
+                    ui.dim(format!("{transpose}  (off)"))
+                },
             ));
-            ui.out(format!(
-                "  sample:    number {}  attack {}  decay/rel {}  dynamics {}  filter {}",
-                sample.number,
-                sample.attack,
-                sample.decay_release,
-                sample.dynamics.as_u8(),
-                yn(sample.filter),
+            ui.out(field(
+                ui,
+                4,
+                "part mix",
+                format!(
+                    "{} {}",
+                    p.schema.center_panel.part_mix.as_string(),
+                    ui.dim("(lower/upper %)")
+                ),
+            ));
+            ui.out(field(ui, 4, "gain", p.schema.center_panel.gain));
+
+            section(ui, "Voices");
+            let (piano, sample) = (&p.schema.piano_panel, &p.schema.sample_panel);
+            ui.out(field(
+                ui,
+                4,
+                "piano",
+                format!(
+                    "{}  {} {}  {} {}  {} {}  {} {}  {} {}",
+                    piano.category,
+                    ui.dim("model"),
+                    piano.piano_model.as_u8(),
+                    ui.dim("clav"),
+                    piano.clav_model.as_u8(),
+                    ui.dim("acoustics"),
+                    piano.acoustics.as_u8(),
+                    ui.dim("touch"),
+                    piano.touch.as_u8(),
+                    ui.dim("mono"),
+                    yn(piano.mono),
+                ),
+            ));
+            ui.out(field(
+                ui,
+                4,
+                "sample",
+                format!(
+                    "{} {}  {} {}  {} {}  {} {}  {} {}",
+                    ui.dim("number"),
+                    sample.number,
+                    ui.dim("attack"),
+                    sample.attack,
+                    ui.dim("decay/rel"),
+                    sample.decay_release,
+                    ui.dim("dynamics"),
+                    sample.dynamics.as_u8(),
+                    ui.dim("filter"),
+                    yn(sample.filter),
+                ),
             ));
             // The two library references. `nord program deps` reports these same ids
             // for this program with the piano's and sample's *names* attached — the
             // file itself stores only the id, so that is the only way to resolve them.
-            ui.out(format!(
-                "  depends:   piano {}  sample {}",
-                dep_id(piano.id),
-                dep_id(sample.id),
+            ui.out(field(
+                ui,
+                4,
+                "depends",
+                format!(
+                    "{} {}  {} {}",
+                    ui.dim("piano"),
+                    dep_id(piano.id),
+                    ui.dim("sample"),
+                    dep_id(sample.id),
+                ),
             ));
 
             // Effects. Values are printed as stored (0..127); the panel shows most of
             // them on a 0..10 scale, and the two do not map linearly for delay tempo,
             // so rescaling here would invent precision the file does not carry.
             let fx = &p.schema.effects_panel;
-            ui.out("  fx:        stored value, with the panel's 0-10 reading where it applies");
+            section(ui, "Effects");
+            ui.out(format!(
+                "    {}",
+                ui.dim("stored value, with the panel's 0-10 reading where it applies")
+            ));
+            // An off effect is still worth printing — a program is read by what it does
+            // *not* engage as much as by what it does — but it should not compete with
+            // the ones that are on.
+            let off = |name: &str, value: &dyn std::fmt::Display| {
+                ui.out(ui.dim(format!("    {name:<FX_WIDTH$}{value}")))
+            };
             match fx.fx1.part() {
                 Some(part) => ui.out(format!(
-                    "    fx1   {part:<5}  {:<9}  rate {}  control {}",
+                    "    {:<FX_WIDTH$}{part:<5}  {:<9}  {} {}  {} {}",
+                    "fx1",
                     fx.fx1_type,
+                    ui.dim("rate"),
                     fx.fx1_rate,
+                    ui.dim("control"),
                     yn(fx.fx1_control),
                 )),
-                None => ui.out(format!("    fx1   {}", fx.fx1)),
+                None => off("fx1", &fx.fx1),
             }
             match fx.fx2.part() {
                 Some(part) => ui.out(format!(
-                    "    fx2   {part:<5}  {:<9}  rate {}  deep {}",
+                    "    {:<FX_WIDTH$}{part:<5}  {:<9}  {} {}  {} {}",
+                    "fx2",
                     fx.fx2_type,
+                    ui.dim("rate"),
                     fx.fx2_rate.as_u8(),
+                    ui.dim("deep"),
                     yn(fx.fx2_deep),
                 )),
-                None => ui.out(format!("    fx2   {}", fx.fx2)),
+                None => off("fx2", &fx.fx2),
             }
             match fx.fx3.part() {
                 Some(part) => ui.out(format!(
-                    "    fx3   {part:<5}  {:<9}  compression {}",
-                    fx.fx3_type, fx.fx3_compression,
+                    "    {:<FX_WIDTH$}{part:<5}  {:<9}  {} {}",
+                    "fx3",
+                    fx.fx3_type,
+                    ui.dim("compression"),
+                    fx.fx3_compression,
                 )),
-                None => ui.out(format!("    fx3   {}", fx.fx3)),
+                None => off("fx3", &fx.fx3),
             }
             match fx.fx4.part() {
                 Some(part) => ui.out(format!(
-                    "    delay {part:<5}  feedback {}  tempo {}  wet {}  ping-pong {}",
+                    "    {:<FX_WIDTH$}{part:<5}  {} {}  {} {}  {} {}  {} {}",
+                    "delay",
+                    ui.dim("feedback"),
                     fx.fx4_feedback.as_u8(),
+                    ui.dim("tempo"),
                     fx.fx4_tempo.as_u8(),
+                    ui.dim("wet"),
                     fx.fx4_moisture,
+                    ui.dim("ping-pong"),
                     yn(fx.fx4_ping_pong),
                 )),
-                None => ui.out(format!("    delay {}", fx.fx4)),
+                None => off("delay", &fx.fx4),
             }
             // ⚠️ The reverb enable bit reads `true` in every `fx5_1xx` specimen, and the
             // corpus README's "0: on, 1: off" would make all of them captures of a
@@ -142,29 +275,40 @@ pub fn print(ui: &Ui, entity: &Entity) {
             // against the panel.
             if fx.fx5 {
                 ui.out(format!(
-                    "    reverb {:<9}  wet {}",
-                    fx.fx5_type, fx.fx5_moisture,
+                    "    {:<FX_WIDTH$}{:<15}  {} {}",
+                    "reverb",
+                    fx.fx5_type,
+                    ui.dim("wet"),
+                    fx.fx5_moisture,
                 ));
             } else {
-                ui.out("    reverb off");
+                off("reverb", &"off");
             }
             // `0` for the EQ routing means *lower*, not off, so the enable has to be
             // checked first.
             if fx.equalizer_on {
                 let part = fx.equalizer_part;
                 ui.out(format!(
-                    "    eq    {part:<11}  bass {}  freq {}  gain {}  treble {}",
+                    "    {:<FX_WIDTH$}{part:<11}  {} {}  {} {}  {} {}  {} {}",
+                    "eq",
+                    ui.dim("bass"),
                     fx.equalizer_bass.as_u8(),
+                    ui.dim("freq"),
                     fx.equalizer_freq.as_u8(),
+                    ui.dim("gain"),
                     fx.equalizer_freq_gain.as_u8(),
+                    ui.dim("treble"),
                     fx.equalizer_treble.as_u8(),
                 ));
             } else {
-                ui.out("    eq    off");
+                off("eq", &"off");
             }
             ui.out(format!(
-                "    rotary speed {}  stop {}",
+                "    {:<FX_WIDTH$}{} {}  {} {}",
+                "rotary",
+                ui.dim("speed"),
                 if fx.rotary_speed { "fast" } else { "slow" },
+                ui.dim("stop"),
                 if fx.rotary_stop { "on" } else { "off" },
             ));
 
@@ -178,8 +322,12 @@ pub fn print(ui: &Ui, entity: &Entity) {
                 let selected = p.schema.center_panel.organ_type;
                 // b3+bass shares the B3's storage, so it marks the B3 rows.
                 let sel_model = selected.storage();
+                section(ui, "Organ");
                 ui.out(format!(
-                    "  organ:     {selected} selected (*), drawbar positions 0-8"
+                    "    {}",
+                    ui.dim(format!(
+                        "{selected} selected (*), active preset (<), drawbar positions 0-8"
+                    ))
                 ));
                 for (model, label) in [
                     (OrganModel::B3, "b3"),
@@ -200,28 +348,40 @@ pub fn print(ui: &Ui, entity: &Entity) {
                                 // dots for the rest so it lines up with the other rows and
                                 // cannot be misread as a nine-drawbar registration.
                                 let b = o.b3_bass_drawbars();
-                                format!("{}{}.......", b[0], b[1])
+                                let plain = format!("{}{}.......", b[0], b[1]);
+                                if ui.unicode() {
+                                    format!(
+                                        "{}{}·······  {}",
+                                        level(b[0]),
+                                        level(b[1]),
+                                        ui.dim(plain)
+                                    )
+                                } else {
+                                    plain
+                                }
                             } else if model == OrganModel::Farfisa {
                                 // Farfisa's drawbars are on/off tabs on the panel, but the
                                 // file still stores nine positions and the low bits of each
                                 // vary independently of the on/off threshold. Show both, or
                                 // the display silently discards them.
+                                let (on, off) = if ui.unicode() {
+                                    ('█', '·')
+                                } else {
+                                    ('|', '.')
+                                };
                                 let tabs: String = o
                                     .farfisa_tabs(preset)
                                     .iter()
-                                    .map(|on| if *on { '|' } else { '.' })
+                                    .map(|t| if *t { on } else { off })
                                     .collect();
-                                let pos: String = o
-                                    .drawbars(model, preset)
-                                    .iter()
-                                    .map(u8::to_string)
-                                    .collect();
-                                format!("{tabs} ({pos})")
+                                let pos = digits(&o.drawbars(model, preset)[..]);
+                                if ui.unicode() {
+                                    format!("{tabs}  {}", ui.dim(format!("({pos})")))
+                                } else {
+                                    format!("{tabs} ({pos})")
+                                }
                             } else {
-                                o.drawbars(model, preset)
-                                    .iter()
-                                    .map(u8::to_string)
-                                    .collect()
+                                drawbars(ui, &o.drawbars(model, preset)[..])
                             };
 
                         let vib = match o.vib_type(model) {
@@ -239,56 +399,80 @@ pub fn print(ui: &Ui, entity: &Entity) {
                         } else {
                             String::new()
                         };
-                        ui.out(format!(
-                            "   {mark}{label:<5} p{preset}{live} {bars}{vib}{perc}"
-                        ));
+                        // Padded before styling: an escape sequence inside a width spec
+                        // is counted as characters and the column stops lining up.
+                        let name = format!("{label:<5}");
+                        let name = if Some(model) == sel_model {
+                            ui.bold(name)
+                        } else {
+                            name
+                        };
+                        ui.out(format!("   {mark}{name} p{preset}{live} {bars}{vib}{perc}"));
                     }
                 }
-                ui.out("   (* = selected model, < = its active preset)");
             }
         }
         Entity::Song(Song::Electro5(s)) => {
             let l = s.location();
-            ui.out("  type:      Electro 5 song / set (ne5t)");
-            ui.out(format!("  location:  {}", location(l.x(), l.y())));
+            ui.out(field(ui, 2, "type", "Electro 5 song / set (ne5t)"));
+            ui.out(field(ui, 2, "location", location(l.x(), l.y())));
+            section(ui, "Programs");
             for slot in 0..4u16 {
                 let p = s.get(slot);
-                ui.out(format!(
-                    "    slot {}:  program {}",
-                    slot + 1,
-                    location(p.x(), p.y())
+                ui.out(field(
+                    ui,
+                    4,
+                    &format!("slot {}", slot + 1),
+                    location(p.x(), p.y()),
                 ));
             }
         }
         Entity::Settings(Settings::Electro5(s)) => {
-            ui.out("  type:      Electro 5 settings (ne5s)");
-            ui.out("  note:      field decode pending specimens; raw body below");
-            let hex: String = s
-                .raw()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            ui.out(format!("  body:      {hex}"));
+            ui.out(field(ui, 2, "type", "Electro 5 settings (ne5s)"));
+            ui.out(field(
+                ui,
+                2,
+                "note",
+                ui.dim("field decode pending specimens; raw body below"),
+            ));
+            // Sixteen bytes to a line: an undecoded body is read by looking for
+            // structure in it, and a single run-on line hides every column.
+            for (i, chunk) in s.raw().chunks(16).enumerate() {
+                let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
+                ui.out(format!(
+                    "  {}{}",
+                    ui.dim(format!("{:04x}  ", i * 16)),
+                    hex.join(" ")
+                ));
+            }
         }
         Entity::Piano(_) => {
-            ui.out(format!(
-                "  type:      piano (npno) {} header/reference only",
-                ui.dash()
+            ui.out(field(
+                ui,
+                2,
+                "type",
+                format!("piano (npno) {} header/reference only", ui.dash()),
             ));
         }
         Entity::Sample(_) => {
-            ui.out(format!(
-                "  type:      sample (nsmp) {} header/reference only",
-                ui.dash()
+            ui.out(field(
+                ui,
+                2,
+                "type",
+                format!("sample (nsmp) {} header/reference only", ui.dash()),
             ));
         }
         Entity::Bundle(nord_format::Bundle::Electro5(b)) => {
-            ui.out("  type:      backup bundle (zip)");
+            ui.out(field(ui, 2, "type", "backup bundle (zip)"));
             if let Some(name) = b.name() {
-                ui.out(format!("  name:      {name}"));
+                ui.out(field(ui, 2, "name", name));
             }
-            ui.out("  note:      use --raw to list contained programs/songs");
+            ui.out(field(
+                ui,
+                2,
+                "note",
+                ui.dim("use --raw to list contained programs/songs"),
+            ));
             let _ = (b.programs(), b.songs()); // decoded; shown via --raw
         }
     }

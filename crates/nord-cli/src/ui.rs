@@ -92,6 +92,27 @@ impl Ui {
         }
     }
 
+    /// Whether box-drawing and block glyphs may be used. Callers that substitute a glyph
+    /// for data must keep the plain form byte-identical, so a pipe stays as informative
+    /// as it was.
+    pub fn unicode(&self) -> bool {
+        self.unicode
+    }
+
+    /// A section heading inside a summary. Red, for the obvious reason.
+    ///
+    /// Colour carries exactly three meanings in this CLI and no more: a heading here, a
+    /// dimmed label or inactive value, and [`Ui::danger`] for something about to be
+    /// destroyed. Adding a fourth is how output stops reading as a system.
+    ///
+    /// ⚠️ A heading and a danger are both red, separated only by weight. They stay
+    /// distinguishable because they never share a stream — headings are data on stdout,
+    /// dangers are chatter on stderr immediately above a prompt. Putting a heading on
+    /// stderr, or a danger inside a summary, collapses that distinction.
+    pub fn heading(&self, s: impl Display) -> String {
+        self.style(s, BOLD_RED)
+    }
+
     pub fn bold(&self, s: impl Display) -> String {
         self.style(s, BOLD)
     }
@@ -145,6 +166,7 @@ impl Ui {
 }
 
 const BOLD: &str = "1";
+const BOLD_RED: &str = "1;31";
 const DIM: &str = "2";
 const RED: &str = "31";
 const YELLOW: &str = "33";
@@ -163,7 +185,10 @@ mod tests {
         };
         assert_eq!(ui.bold("x"), "x");
         assert_eq!(ui.danger("x"), "x");
+        assert_eq!(ui.heading("x"), "x");
+        assert_eq!(ui.dim("x"), "x");
         assert_eq!(ui.dash(), "-");
+        assert!(!ui.unicode());
     }
 
     #[test]
@@ -174,7 +199,9 @@ mod tests {
             interactive: false,
         };
         assert_eq!(ui.bold("x"), "\x1b[1mx\x1b[0m");
+        assert_eq!(ui.heading("x"), "\x1b[1;31mx\x1b[0m");
         assert_eq!(ui.dash(), "—");
+        assert!(ui.unicode());
     }
 
     /// The non-interactive refusal is the whole safety story for scripts, so it must not
