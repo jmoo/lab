@@ -89,7 +89,7 @@ pub async fn read_program<T: Transport, C>(
 ) -> Result<Vec<u8>> {
     let (meta, body) = transfer_out(session, at).await?;
 
-    let file = envelope::wrap(&meta.format, at, &body)?;
+    let file = envelope::wrap(&meta.format, at, meta.version, &body)?;
     if let Some(expected) = meta.crc32 {
         let (_, _, wrapped) = envelope::unwrap(&file)?;
         let actual = crc32_of(wrapped);
