@@ -125,8 +125,8 @@ const READ_CHUNK: u32 = 32720;
 
 /// The shared read sequence NSM uses, reproduced byte-for-byte: `INFO` to learn the
 /// body length, the `"Uploading..."` progress label the instrument paints, `BEGIN_READ`,
-/// one `READ` per [`READ_CHUNK`], the 100% bar, then `END_TRANSFER`. Returns the metadata
-/// and the reassembled body.
+/// one `READ` per [`READ_CHUNK`] with the bar advancing as they arrive, then
+/// `END_TRANSFER`. Returns the metadata and the reassembled body.
 ///
 /// ("Uploading" is NSM's own — and backwards — word for keyboard → host.)
 async fn transfer_out<T: Transport, C>(
@@ -144,6 +144,7 @@ async fn transfer_out<T: Transport, C>(
         .await?;
 
     let mut body = Vec::with_capacity(meta.body_len as usize);
+    let mut painted = None;
     while (body.len() as u32) < meta.body_len {
         let offset = body.len() as u32;
         let want = READ_CHUNK.min(meta.body_len - offset);
@@ -170,9 +171,22 @@ async fn transfer_out<T: Transport, C>(
             )));
         }
         body.extend_from_slice(chunk);
+
+        // The bar is bytes transferred over bytes expected, and only moves on a whole
+        // percent — one message per step, the way NSM drives it. A body inside one chunk
+        // therefore still produces exactly one `100`.
+        let pct = (body.len() as u64 * 100 / (meta.body_len.max(1)) as u64) as u16;
+        if painted != Some(pct) {
+            session.notify(&ui::percent(pct)).await?;
+            painted = Some(pct);
+        }
     }
 
-    session.notify(&ui::percent(100)).await?;
+    // A zero-length body never enters the loop, so the bar would otherwise never be
+    // cleared off the instrument's display.
+    if painted != Some(100) {
+        session.notify(&ui::percent(100)).await?;
+    }
     session
         .request(Service::Program, 10, cmd::END_TRANSFER, &args)
         .await?;

@@ -322,7 +322,14 @@ fn a_large_body_is_read_in_chunks() {
         ),
     ];
 
-    for (offset, want) in [(0, CHUNK), (CHUNK, CHUNK), (CHUNK * 2, TAIL)] {
+    // The bar after each chunk: 32720/66217 = 49.4%, 65440/66217 = 98.8%, then done.
+    // Written out rather than recomputed, so a wrong formula fails instead of agreeing
+    // with itself.
+    for (offset, want, pct) in [
+        (0, CHUNK, 49u16),
+        (CHUNK, CHUNK, 98),
+        (CHUNK * 2, TAIL, 100),
+    ] {
         let mut req = Vec::new();
         loc(&mut req);
         req.extend_from_slice(&offset.to_be_bytes());
@@ -338,10 +345,13 @@ fn a_large_body_is_read_in_chunks() {
             direction: In,
             bytes: response(cmd::READ + 1, &resp),
         });
+        script.push(Step {
+            direction: Out,
+            bytes: nord_usb::wire::ui::percent(pct).encode(),
+        });
     }
 
     script.extend([
-        step(Out, "0000001600000006000000010000000700010064927b"),
         step(Out, "0000001a0000000c0000000a0000000e000000070000000d95f6"),
         step(
             In,
