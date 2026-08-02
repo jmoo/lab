@@ -109,6 +109,55 @@ fn a_failed_commit_reports_rather_than_panicking() {
     );
 }
 
+/// A `SESSION_OPEN` the device refuses must still release the UI session the preceding
+/// `HELLO` opened.
+///
+/// Left half-open the instrument keeps answering and reports every slot in every class as
+/// empty — a wrong answer that looks like a right one, surviving reopening and clearing
+/// only on a power cycle. The script ends with the `GOODBYE` exchange, so `is_exhausted`
+/// is the assertion that it was sent.
+#[test]
+fn a_refused_open_still_says_goodbye() {
+    use Direction::{In, Out};
+    let mut t = ReplayTransport::new(vec![
+        step(Out, "0000001200000006000000010000000006a1"),
+        step(In, "000000160000000600000001000000010000000044ec"),
+        step(Out, "000000160000000c0000000a0000000400000004a218"),
+        // SESSION_OPEN answered with device status 5 instead of success.
+        Step {
+            direction: In,
+            bytes: nord_usb::Message::new(
+                nord_usb::Service::Program,
+                10,
+                0x05,
+                5u32.to_be_bytes().to_vec(),
+            )
+            .encode(),
+        },
+        step(Out, "0000001200000006000000010000000226e3"),
+        step(In, "0000001600000006000000010000000300000000006f"),
+    ]);
+    // `Session` is deliberately not `Debug`, so this is `expect_err` by hand. The `abort`
+    // keeps the failing case from panicking a second time inside `Drop` during unwind.
+    let err = block_on(async {
+        match Session::open(&mut t, ObjectClass::Program).await {
+            Ok(s) => {
+                s.abort();
+                panic!("the device refused the open, but it was reported as success");
+            }
+            Err(e) => e,
+        }
+    });
+    assert!(
+        matches!(err, nord_usb::Error::DeviceStatus(5)),
+        "wrong error: {err}"
+    );
+    assert!(
+        t.is_exhausted(),
+        "the refused open did not send GOODBYE, leaving the device half-open"
+    );
+}
+
 /// `move_prog_8-13_to_7-16`: a single MOVE with two addresses in one small op.
 #[test]
 fn move_reproduces_the_capture() {

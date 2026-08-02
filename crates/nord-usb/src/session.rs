@@ -54,30 +54,44 @@ impl<'t, T: Transport> Session<'t, T, ReadOnly> {
             _capability: PhantomData,
         };
 
-        // The UI/session-service handshake, then the class-scoped open.
+        // The UI/session-service handshake, then the class-scoped open. The two are
+        // separate awaits because a failure between them is not the same as a failure
+        // before them: the first leaves state on the device, the second does not.
         //
-        // Errors are caught rather than propagated with `?` so the half-built session
-        // can be marked closed first. Otherwise a failed open drops a session that was
-        // never established, and the Drop assertion fires on what is really just a
-        // failed connection — the assertion is there to catch *forgotten* commits.
-        let result = async {
-            s.request(Service::Ui, ui::SUBSYSTEM, ui::HELLO, &[])
-                .await?;
-            s.request(
+        // Errors are caught rather than propagated with `?` so the half-built session can
+        // be marked closed first. Otherwise a failed open drops a session that was never
+        // established, and the Drop assertion fires on what is really just a failed
+        // connection — the assertion is there to catch *forgotten* commits.
+        if let Err(e) = s.request(Service::Ui, ui::SUBSYSTEM, ui::HELLO, &[]).await {
+            s.closed = true; // the UI side never opened, so there is nothing to release
+            return Err(e);
+        }
+
+        let opened = s
+            .request(
                 Service::Program,
                 10,
                 cmd::SESSION_OPEN,
                 &class.to_raw().to_be_bytes(),
             )
-            .await?;
-            Ok(())
-        }
-        .await;
+            .await;
 
-        match result {
-            Ok(()) => Ok(s),
+        match opened {
+            Ok(_) => Ok(s),
             Err(e) => {
-                s.closed = true; // nothing was opened, so there is nothing to close
+                // ⚠️ The `HELLO` landed, so the device is holding a UI session that only
+                // `GOODBYE` releases. Left half-open it does not hang or refuse: it keeps
+                // answering, and reports device status 0x1 ("empty") for every slot in
+                // every object class. That survives reopening the session and clears only
+                // on a power cycle. Confirmed on hardware.
+                //
+                // Closed before the await, not after: this is the transaction's one close
+                // attempt, and the caller is owed the original error rather than this
+                // one, so a failure here is deliberately dropped.
+                s.closed = true;
+                let _ = s
+                    .request(Service::Ui, ui::SUBSYSTEM, ui::GOODBYE, &[])
+                    .await;
                 Err(e)
             }
         }
