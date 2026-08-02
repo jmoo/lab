@@ -183,8 +183,8 @@ pub struct ProgramInfo {
     /// Schema/content version, the same field the CBIN header carries at `0x14` and
     /// the one NSM prints in its "Version" column.
     ///
-    /// Per format tag, not a per-item counter: `ne5p` reports 4 and `ne5t` reports 0 or
-    /// 1. For library content it is the version in the object's own *name*, ×100 —
+    /// Per format tag, not a per-item counter: `ne5p` reports 4 and `ne5t` reports 0
+    /// or 1. For library content it is the version in the object's own *name*, ×100 —
     /// `Royal Grand 3D YaS6 XL 5.4` reports `540`.
     pub version: u32,
     /// CRC-32 of the body, as the device reports it. Lets a read be verified
@@ -579,13 +579,13 @@ impl Status {
     /// the content really does differ per item — do not divide evenly and yield
     /// `None`.
     pub fn blocks_per_item(&self) -> Option<u32> {
-        if self.count == 0 || self.used == 0 || self.used % self.count != 0 {
+        if self.count == 0 || self.used == 0 || !self.used.is_multiple_of(self.count) {
             return None;
         }
         let per = self.used / self.count;
         // Only trust it if the class capacity is also a whole number of items;
         // otherwise the division is a coincidence.
-        (per != 0 && self.total() % per == 0).then_some(per)
+        (per != 0 && self.total().is_multiple_of(per)).then_some(per)
     }
 
     /// Total item slots, for classes where items are fixed-size.

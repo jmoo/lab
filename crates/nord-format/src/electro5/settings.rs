@@ -73,7 +73,7 @@ impl Settings {
     pub fn read_from(reader: &mut impl BinReaderExt) -> Result<Settings, std::io::Error> {
         let schema = match Schema::read_be(reader) {
             Ok(schema) => schema,
-            Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+            Err(e) => return Err(io::Error::other(e.to_string())),
         };
 
         if !KNOWN_VERSIONS.contains(&schema.version) {
@@ -91,9 +91,9 @@ impl Settings {
     }
 
     pub fn write_to(&mut self, writer: &mut impl BinWriterExt) -> Result<(), std::io::Error> {
-        match writer.write_be(&mut self.schema) {
+        match writer.write_be(&self.schema) {
             Ok(_) => Ok(()),
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+            Err(e) => Err(io::Error::other(e.to_string())),
         }
     }
 
@@ -110,8 +110,6 @@ impl Default for Settings {
         Self::new()
     }
 }
-
-impl common::settings::Settings for Settings {}
 
 #[cfg(test)]
 mod tests {
