@@ -57,7 +57,12 @@ pub async fn inventory<T: Transport>(transport: &mut T) -> Result<Vec<Status>> {
                 session.commit().await?;
                 out.push(s);
             }
-            Err(_) => session.abort(),
+            // The class is skipped, but the transaction still gets its closing
+            // exchanges — an abandoned session strands the instrument on its progress
+            // screen. A close that fails too is genuinely unrecoverable here.
+            Err(_) => {
+                let _ = session.commit().await;
+            }
         }
     }
     Ok(out)
@@ -143,7 +148,10 @@ async fn transfer_out<T: Transport, C>(
         .request(Service::Program, 10, cmd::BEGIN_READ, &args)
         .await?;
 
-    let mut body = Vec::with_capacity(meta.body_len as usize);
+    // Capacity is clamped: `body_len` is device-supplied, and a corrupt or hostile
+    // value must not become a gigabyte allocation up front. Real bodies larger than the
+    // clamp (pianos) just grow the vector as chunks arrive.
+    let mut body = Vec::with_capacity((meta.body_len as usize).min(1 << 20));
     let mut painted = None;
     while (body.len() as u32) < meta.body_len {
         let offset = body.len() as u32;
