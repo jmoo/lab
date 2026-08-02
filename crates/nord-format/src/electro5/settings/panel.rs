@@ -142,59 +142,14 @@ impl Menu {
     }
 }
 
-/// Which menu each decoded field belongs to, in the order the menu lists them.
-///
-/// The names are spelled by hand, which a test holds to the panel's own field list — a
-/// field added to [`SettingsPanel`] and not placed in a menu fails there.
-pub const MENUS: [(Menu, &[&str]); 3] = [
-    (
-        Menu::System,
-        &[
-            "rotary_ctrl_type",
-            "rotary_pedal_mode",
-            "sustain_pedal_mode",
-            "sustain_pedal_type",
-            "ctrl_pedal_type",
-            "ctrl_pedal_gain",
-            "b3_trig_mode",
-            "output_routing",
-            "global_transpose",
-            "fine_tune",
-        ],
-    ),
-    (
-        Menu::Midi,
-        &[
-            "global_channel",
-            "lower_receive_channel",
-            "upper_receive_channel",
-            "upper_split_channel",
-            "control_change_mode",
-            "program_change_mode",
-            "transpose_at",
-        ],
-    ),
-    (
-        Menu::Sound,
-        &[
-            "piano_string_resonance",
-            "b3_tonewheel_mode",
-            "b3_key_click_level",
-            "b3_key_bounce",
-            "b3_perc_db9_mute",
-            "b3_perc_decay_fast",
-            "b3_perc_decay_slow",
-            "b3_perc_volume_normal",
-            "b3_perc_volume_soft",
-            "rotary_speaker_type",
-            "rotary_balance",
-            "rotary_horn_speed",
-            "rotary_horn_acceleration",
-            "rotary_rotor_speed",
-            "rotary_rotor_acceleration",
-        ],
-    ),
-];
+/// One setting as the instrument's menu presents it.
+pub struct Setting {
+    /// The field's name, as [`crate::panel::Panel`] declares it.
+    pub name: &'static str,
+    /// The value spelled the way the instrument spells it — `yamaha fc-7`, not the
+    /// variant name the bits decode to.
+    pub value: String,
+}
 
 /// Every field decodes from zeroed bytes, so this is the decode rather than a second
 /// statement of each field's default.
@@ -204,27 +159,91 @@ impl Default for SettingsPanel {
     }
 }
 
+/// An on/off setting, as its menu entry names the two states.
+fn on_off(on: bool) -> String {
+    if on { "on" } else { "off" }.to_string()
+}
+
 impl SettingsPanel {
     /// The panel's fields grouped by the menu the instrument shows them under, in menu
-    /// order — which is not the order they sit in the file.
-    pub fn by_menu(&self) -> Vec<(Menu, Vec<crate::panel::FieldValue>)> {
-        let values = crate::panel::Panel::field_values(self);
-        MENUS
-            .iter()
-            .map(|(menu, names)| {
-                let group = names
-                    .iter()
-                    .map(|name| {
-                        values
-                            .iter()
-                            .find(|v| v.name == *name)
-                            .cloned()
-                            .expect("MENUS names a field the panel does not declare")
-                    })
-                    .collect();
-                (*menu, group)
-            })
-            .collect()
+    /// order — which is neither declaration order nor the order they sit in the file.
+    ///
+    /// ⚠️ These renderings are for reading, not for feeding back: `Display` is the panel's
+    /// wording, while [`crate::panel::Panel::set_field`] parses a field's `Debug`. A test
+    /// holds the list to the panel's own field names, so a field added to
+    /// [`SettingsPanel`] and not placed in a menu fails there.
+    pub fn by_menu(&self) -> Vec<(Menu, Vec<Setting>)> {
+        let at = |name, value: String| Setting { name, value };
+        vec![
+            (
+                Menu::System,
+                vec![
+                    at("rotary_ctrl_type", self.rotary_ctrl_type.to_string()),
+                    at("rotary_pedal_mode", self.rotary_pedal_mode.to_string()),
+                    at("sustain_pedal_mode", self.sustain_pedal_mode.to_string()),
+                    at("sustain_pedal_type", self.sustain_pedal_type.to_string()),
+                    at("ctrl_pedal_type", self.ctrl_pedal_type.to_string()),
+                    at("ctrl_pedal_gain", self.ctrl_pedal_gain.to_string()),
+                    at("b3_trig_mode", self.b3_trig_mode.to_string()),
+                    at("output_routing", self.output_routing.to_string()),
+                    at(
+                        "global_transpose",
+                        format!("{:+}", self.global_transpose.inner()),
+                    ),
+                    at("fine_tune", format!("{:+} cent", self.fine_tune.inner())),
+                ],
+            ),
+            (
+                Menu::Midi,
+                vec![
+                    at("global_channel", self.global_channel.to_string()),
+                    at(
+                        "lower_receive_channel",
+                        self.lower_receive_channel.to_string(),
+                    ),
+                    at(
+                        "upper_receive_channel",
+                        self.upper_receive_channel.to_string(),
+                    ),
+                    at("upper_split_channel", self.upper_split_channel.to_string()),
+                    at("control_change_mode", self.control_change_mode.to_string()),
+                    at("program_change_mode", self.program_change_mode.to_string()),
+                    at("transpose_at", self.transpose_at.to_string()),
+                ],
+            ),
+            (
+                Menu::Sound,
+                vec![
+                    at(
+                        "piano_string_resonance",
+                        format!("{:+} dB", self.piano_string_resonance.inner()),
+                    ),
+                    at("b3_tonewheel_mode", self.b3_tonewheel_mode.to_string()),
+                    at("b3_key_click_level", self.b3_key_click_level.to_string()),
+                    at("b3_key_bounce", on_off(self.b3_key_bounce)),
+                    at("b3_perc_db9_mute", on_off(self.b3_perc_db9_mute)),
+                    at("b3_perc_decay_fast", self.b3_perc_decay_fast.to_string()),
+                    at("b3_perc_decay_slow", self.b3_perc_decay_slow.to_string()),
+                    at(
+                        "b3_perc_volume_normal",
+                        self.b3_perc_volume_normal.to_string(),
+                    ),
+                    at("b3_perc_volume_soft", self.b3_perc_volume_soft.to_string()),
+                    at("rotary_speaker_type", self.rotary_speaker_type.to_string()),
+                    at("rotary_balance", self.rotary_balance.to_string()),
+                    at("rotary_horn_speed", self.rotary_horn_speed.to_string()),
+                    at(
+                        "rotary_horn_acceleration",
+                        self.rotary_horn_acceleration.to_string(),
+                    ),
+                    at("rotary_rotor_speed", self.rotary_rotor_speed.to_string()),
+                    at(
+                        "rotary_rotor_acceleration",
+                        self.rotary_rotor_acceleration.to_string(),
+                    ),
+                ],
+            ),
+        ]
     }
 }
 
@@ -518,7 +537,7 @@ mod tests {
     use super::*;
     use crate::bits::Packed;
     use crate::panel::Panel;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     /// Body-relative index of the byte at absolute Electro 5 file offset `abs`.
     const fn body(abs: usize) -> usize {
@@ -544,18 +563,92 @@ mod tests {
             .collect();
 
         let mut grouped: BTreeSet<&str> = BTreeSet::new();
-        for (menu, names) in MENUS {
-            for name in names {
+        for (menu, settings) in SettingsPanel::default().by_menu() {
+            for setting in settings {
                 assert!(
-                    declared.contains(name),
-                    "{} lists {name}, which the panel does not declare",
+                    declared.contains(setting.name),
+                    "{} lists {}, which the panel does not declare",
                     menu.title(),
+                    setting.name,
                 );
-                assert!(grouped.insert(name), "{name} is listed under two menus");
+                assert!(
+                    grouped.insert(setting.name),
+                    "{} is listed under two menus",
+                    setting.name,
+                );
             }
         }
         let missing: Vec<_> = declared.difference(&grouped).collect();
         assert!(missing.is_empty(), "fields with no menu: {missing:?}");
+    }
+
+    /// A menu renders what the instrument's display says, not what the bits decode to.
+    ///
+    /// ⚠️ These spellings are read-only. `set_field` parses a field's `Debug`, so
+    /// `yamaha fc-7` is not a value anything accepts back.
+    #[test]
+    fn a_menu_renders_the_panels_own_wording() {
+        // The sweep's reference capture, rebuilt from the bytes it holds at 0x2c..=0x3d.
+        let p = panel(&[
+            (0x2e, 0x13),
+            (0x2f, 0x24),
+            (0x30, 0x03),
+            (0x31, 0xc1),
+            (0x32, 0x06),
+            (0x33, 0xdc),
+            (0x34, 0x66),
+            (0x35, 0x00),
+            (0x36, 0x09),
+            (0x37, 0x25),
+            (0x38, 0x12),
+            (0x39, 0x49),
+            (0x3a, 0x2d),
+            (0x3b, 0x61),
+            (0x3c, 0x06),
+            (0x3d, 0x24),
+        ]);
+        let rendered: BTreeMap<&str, String> = p
+            .by_menu()
+            .into_iter()
+            .flat_map(|(_, settings)| settings)
+            .map(|s| (s.name, s.value))
+            .collect();
+
+        for (field, want) in [
+            ("ctrl_pedal_type", "yamaha fc-7"),
+            ("ctrl_pedal_gain", "10"),
+            ("sustain_pedal_mode", "sustain + rotor toggle"),
+            ("output_routing", "stereo"),
+            ("global_transpose", "+0"),
+            ("fine_tune", "+5 cent"),
+            ("global_channel", "1"),
+            ("control_change_mode", "send/receive"),
+            ("transpose_at", "midi in"),
+            ("piano_string_resonance", "+0 dB"),
+            ("b3_tonewheel_mode", "vintage 1"),
+            ("b3_key_bounce", "on"),
+            ("b3_perc_db9_mute", "off"),
+            ("rotary_speaker_type", "122"),
+            ("rotary_balance", "50/50"),
+            ("rotary_rotor_acceleration", "normal"),
+        ] {
+            assert_eq!(rendered[field], want, "{field}");
+        }
+    }
+
+    /// An unnamed value says so rather than being rendered as a neighbour.
+    #[test]
+    fn a_menu_names_an_unrecognised_value_as_unknown() {
+        // 0b111 is not a rotary speaker type; bits 79..=81 straddle 0x35 and 0x36.
+        let p = panel(&[(0x35, 0x01), (0x36, 0xc0)]);
+        let shown = p
+            .by_menu()
+            .into_iter()
+            .flat_map(|(_, settings)| settings)
+            .find(|s| s.name == "rotary_speaker_type")
+            .expect("declared")
+            .value;
+        assert_eq!(shown, "unknown (7)");
     }
 
     /// The two signed fields are stored biased, so their endpoints are the cases worth

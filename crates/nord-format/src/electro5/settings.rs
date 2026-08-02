@@ -8,8 +8,8 @@ pub mod panel;
 pub use panel::{
     B3TrigMode, CtrlPedalGain, CtrlPedalType, FineTune, GlobalTranspose, KeyClickLevel, Menu,
     MidiChannel, MidiMessageMode, OutputRouting, PercDecay, PercVolume, ResonanceLevel,
-    RotaryBalance, RotaryCtrlType, RotaryPedalMode, RotaryRate, RotarySpeakerType, SettingsPanel,
-    SustainPedalMode, SustainPedalType, TonewheelMode, TransposeAt,
+    RotaryBalance, RotaryCtrlType, RotaryPedalMode, RotaryRate, RotarySpeakerType, Setting,
+    SettingsPanel, SustainPedalMode, SustainPedalType, TonewheelMode, TransposeAt,
 };
 
 use crate::common;
