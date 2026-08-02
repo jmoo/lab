@@ -45,13 +45,15 @@ pub fn status(ui: &Ui, source: Source, json: bool) -> Result<(), String> {
         }
     };
 
-    // Not merely an empty inventory: every class is queried, so nothing coming back means
-    // no class answered at all. Reporting that as success made a wedged instrument look
-    // like a working one with nothing on it.
+    // Not merely an empty inventory: every class is queried, so nothing coming back
+    // means no class answered at all. Reporting that as success would make a wedged
+    // instrument look like a working one with nothing on it — but a connection failing
+    // mid-run produces the same empty report, so the message cannot assert the wedge.
     if report.is_empty() {
         return Err(
-            "no object class answered — the instrument is not in a usable session \
-                    state. A power cycle clears it."
+            "no object class answered — either the instrument is not in a usable \
+             session state (a power cycle clears it), or the connection failed. \
+             `nord device info` shows what is on the bus."
                 .into(),
         );
     }
