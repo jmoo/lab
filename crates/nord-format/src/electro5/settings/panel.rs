@@ -1,9 +1,13 @@
 //! The global settings panel, `0x2c..=0x4d`.
 //!
-//! 34 bytes holding the instrument's System, MIDI and Sound menus. Fields are packed
-//! shoulder to shoulder from bit 38 to bit 141 in no particular menu order — the MIDI
-//! channels sit between two System settings — so the declaration below is grouped the way
-//! the instrument's menus are and the placements do the reordering.
+//! 34 bytes holding the instrument's System, MIDI and Sound menus. Fields run from bit 38
+//! to bit 141 in no particular menu order — the MIDI channels sit between two System
+//! settings — so the declaration below is grouped the way the instrument's menus are and
+//! the placements do the reordering.
+//!
+//! Every placement is confirmed on hardware: a capture that changed one setting on the
+//! panel moves exactly the bits that setting's field claims, and nothing else. Where a
+//! field's *range* runs past the values the captures reach, the field says so.
 //!
 //! **Bits 0..=37 are unexplained.** They are not constant: three settings files captured
 //! outside the change-one-setting sweep disagree across bits 16, 19, 25, 27, 29, 31, 32
@@ -80,9 +84,9 @@ pub struct SettingsPanel {
     pub transpose_at: TransposeAt,
 
     // ── Sound ──────────────────────────────────────────────────────────────────
-    /// Only `-6`, `0` and `+6` dB appear in the sweep, so the four bits hold values the
-    /// corpus has never shown. The bias matches [`GlobalTranspose`], whose odd values the
-    /// sweep does reach.
+    /// Only `-6`, `0` and `+6` dB appear in the sweep, so every odd value is inferred
+    /// from specimens; not confirmed on hardware. The bias matches [`GlobalTranspose`],
+    /// whose odd values the sweep does reach.
     #[bits(64..=67)]
     pub piano_string_resonance: ResonanceLevel,
     #[bits(109..=111)]
