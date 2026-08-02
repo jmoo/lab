@@ -1,10 +1,13 @@
 //! Browser transport, via WebUSB (`navigator.usb`). Chrome/Edge only — Firefox and
 //! Safari have declined the spec.
 //!
-//! ⚠️ **Not confirmed on hardware.** Nothing on this path has been run against an
-//! instrument. Everything below about how the device or the browser behaves is
-//! inferred from the WebUSB spec and from the `nusb` backend, which *is* confirmed;
-//! treat a disagreement between the two as this file being wrong.
+//! **Confirmed on hardware** (Chrome on macOS, a real Electro 5) for the read-only
+//! path: open, claim-by-class, both transfer directions across whole transactions
+//! (session open, STATUS, INFO, close), the masked endpoint numbering, and
+//! release/close handing the interface back to other hosts. **Still not confirmed:**
+//! the `select_configuration` branch (it only runs when the OS left the device
+//! unconfigured, which macOS does not), multi-chunk bulk reads, any write, and the
+//! zero-length-packet edge on `read` — each is marked where it lives.
 //!
 //! # Enumeration is not here
 //!
@@ -107,7 +110,8 @@ impl WebUsbTransport {
         // A device the OS has not configured reports `configuration == null`, and its
         // interfaces cannot be listed until one is selected. Value 1 is the first
         // configuration on every USB device that has only one; not confirmed on
-        // hardware for this instrument.
+        // hardware for this instrument — on the confirmed macOS run the OS had already
+        // configured the device, so this branch did not execute.
         if device.configuration().is_none() {
             JsFuture::from(device.select_configuration(1))
                 .await
@@ -198,10 +202,11 @@ impl Transport for WebUsbTransport {
 
     async fn read(&mut self, max: usize) -> Result<Vec<u8>> {
         // ⚠️ One transfer must return one whole protocol message, which holds only
-        // because a bulk IN completes at the first short packet. A device message whose
-        // length is an exact multiple of the 64-byte Full Speed packet size, sent
-        // without a terminating zero-length packet, would leave this transfer waiting —
-        // and WebUSB has no timeout to break it. Not observed, and the same shape of
+        // because a bulk IN completes at the first short packet. Confirmed on hardware
+        // for the small session/STATUS/INFO replies; a device message whose length is
+        // an exact multiple of the 64-byte Full Speed packet size, sent without a
+        // terminating zero-length packet, would leave this transfer waiting — and
+        // WebUSB has no timeout to break it. Not observed, and the same shape of
         // assumption the `nusb` backend already runs on.
         //
         // `max` is [`super::READ_BUFFER`] (49152 = 64 × 768) in practice. Keeping it a

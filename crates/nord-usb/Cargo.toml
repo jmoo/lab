@@ -20,9 +20,9 @@ default = ["nusb"]
 # Desktop backend: macOS (IOKit), Linux (usbfs), Windows (WinUSB). Pure Rust, so
 # no C toolchain and no cross-compilation grief.
 nusb = ["dep:nusb"]
-# Browser backend, over WebUSB. A POC: it compiles for wasm32 and the wasm32 check
-# proves the API and deps stay wasm-compatible, but it has never been run against an
-# instrument. Chrome/Edge only -- Firefox and Safari have declined WebUSB.
+# Browser backend, over WebUSB. Hardware-verified for the read-only path (Chrome on
+# macOS: inventory, object info); writes and multi-chunk bulk reads not yet exercised.
+# Chrome/Edge only -- Firefox and Safari have declined WebUSB.
 web = ["dep:web-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys"]
 # Drive the protocol from committed corpus captures, with no hardware. Used by
 # the golden-shape tests; platform-independent, so it runs on wasm32 too.

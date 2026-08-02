@@ -88,7 +88,7 @@ carries a `Drop` assertion to catch the mistake in debug builds.
 | Feature | Default | What it gives you |
 |---|:--:|---|
 | `nusb` | ✅ | Desktop backend — macOS (IOKit), Linux (usbfs), Windows (WinUSB). Pure Rust. |
-| `web` | | Browser backend over WebUSB. **A POC: it compiles for wasm32 and has never been run against an instrument.** Chrome/Edge only — Firefox and Safari declined the spec. |
+| `web` | | Browser backend over WebUSB. **Hardware-verified for the read-only path** (Chrome/macOS: inventory, object info); writes and bulk reads not yet exercised. Chrome/Edge only — Firefox and Safari declined the spec. |
 | `replay` | | Drive the protocol from committed captures, no hardware. Used by the golden tests. |
 | `blocking` | | Block on the async API from synchronous callers (the CLI). Tiny; not a runtime. |
 | `corpus` | | Corpus-backed tests (`NORD_CORPUS_DIR`), implies `replay`. |
@@ -135,10 +135,13 @@ The wire protocol is decoded and validated. Implemented and hardware-verified on
 macOS: inventory, object info, dependencies, program read/write, and the slot
 organisation set (move, delete, rename, duplicate, select).
 
+The WebUSB backend is hardware-verified for the read-only path (Chrome on macOS:
+inventory and object info, via `nord-web-demo`); its writes and multi-chunk bulk
+reads have not been exercised.
+
 Not implemented: bundle and backup transfer, firmware update, and the piano/sample
 library as first-class objects. Linux and Windows build and pass the replay tests
-but have not been run against hardware. Neither has the WebUSB backend, on any
-platform.
+but have not been run against hardware.
 
 ## Disclaimer
 
