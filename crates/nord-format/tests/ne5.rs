@@ -177,6 +177,25 @@ fn test_ne5_read_settings() {
 }
 
 #[test]
+fn test_ne5_write_settings() {
+    let test_file = corpus_dir().join("settings.ne5s");
+
+    let settings = nord_format::from_path(&test_file).unwrap();
+    let contents = read(&test_file).unwrap();
+
+    match settings {
+        Entity::Settings(nord_format::Settings::Electro5(mut settings)) => {
+            let mut output: Vec<u8> = Vec::new();
+
+            settings.write_to(&mut Cursor::new(&mut output)).unwrap();
+
+            assert_eq!(contents.as_slice(), output.as_slice());
+        }
+        _ => panic!("expected electro5 settings"),
+    }
+}
+
+#[test]
 fn test_ne5_program_read_write_center_panel() {
     let test_files = corpus_dir().join("programs/center_panel");
 

@@ -206,3 +206,42 @@ impl<'a, W: Write + Seek> Seek for CrcWriter<'a, W> {
         self.inner.seek(pos)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// ⚠️ The second argument to `new` is the *last byte index* of the region minus the
+    /// first — an inclusive span, not a byte count. `ne5s` passed the end-exclusive
+    /// form and its writer never flushed; this pins the convention.
+    ///
+    /// The layout mirrors every `Schema` writer: the checksum field precedes the body,
+    /// so `checksum()` is called ahead of the region and writes buffer until the region
+    /// completes. The region here ends at the last byte of the stream — nothing follows
+    /// to push the position past it — so the flush must fire when the region is
+    /// complete, not only once something is written beyond it.
+    #[test]
+    fn a_region_ending_at_eof_still_flushes() {
+        // 8 bytes ahead, crc at 8..12, body at 12..=15 — the file ends with the region.
+        let (first, last) = (12u64, 15u64);
+        let mut inner = Cursor::new(Vec::new());
+        {
+            let mut w = CrcWriter::new(first, last - first)(&mut inner);
+            w.write_all(&[0u8; 8]).unwrap();
+            let placeholder = w.checksum().unwrap();
+            assert_eq!(placeholder, 0xFFFFFFFF, "not yet computable: a placeholder");
+            w.write_all(&placeholder.to_le_bytes()).unwrap();
+            w.write_all(&[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
+        }
+
+        let out = inner.into_inner();
+        assert_eq!(out.len(), 16, "the buffered body was never flushed");
+        assert_eq!(&out[12..], &[0xaa, 0xbb, 0xcc, 0xdd]);
+
+        // The checksum written at 8..12 is the checksum of the region.
+        let mut crc = MultipartCrc32::new(first, last - first);
+        crc.update(0, &out);
+        assert_eq!(&out[8..12], &crc.checksum().to_le_bytes());
+    }
+}
