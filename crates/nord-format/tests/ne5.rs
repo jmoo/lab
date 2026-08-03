@@ -637,7 +637,15 @@ fn test_ne5_no_corpus_settings_hold_an_unrecognized_value() {
     let mut unknowns: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
 
     for path in ne5s_files(&corpus_dir()) {
-        for value in read_settings(&path).schema.panel.field_values() {
+        let schema = read_settings(&path).schema;
+        // Both panels over the body — the selection's `live_slot` can hold an
+        // unrecognized value too.
+        let values = schema
+            .panel
+            .field_values()
+            .into_iter()
+            .chain(schema.selection.field_values());
+        for value in values {
             if value.value.starts_with("unknown") {
                 unknowns
                     .entry(value.name.to_string())
