@@ -52,9 +52,15 @@ lib'.composeManyExtensions [
 
     # Private repository of clavia nord files to test nord-format against
     nord-corpus = builtins.fetchGit {
-      rev = "d9626c366ea0143ef498c9d00b30e4bd01ee4252";
+      rev = final.nord-corpus-rev;
       url = "git+ssh://git@github.com/jmoo/nord-corpus.git";
     };
+
+    # Kept beside the fetch rather than inside it so `checks.corpus-rev-agrees` can read
+    # it without pulling the private repo. It must equal
+    # `crates/nord-format/tests/corpus_rev.txt`, which the suite blesses its specimen
+    # expectations against — that check is what holds the two together.
+    nord-corpus-rev = "d9626c366ea0143ef498c9d00b30e4bd01ee4252";
 
     nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 

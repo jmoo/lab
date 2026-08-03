@@ -15,6 +15,9 @@
 //! (`datatest-stable` / `libtest-mimic`) so each specimen is its own reported
 //! test case — see `Projects/Nord Utils.md`.
 
+mod common;
+
+use common::corpus_dir;
 use nord_format::common::bank::Item;
 use nord_format::common::sample::Sample;
 use nord_format::electro5::settings::LiveSlot;
@@ -30,15 +33,6 @@ use std::fs::read;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::str::FromStr;
-
-/// Root of the Electro 5 specimen corpus, taken from `NORD_CORPUS_DIR` (point it
-/// at a `nord-corpus/ne5` checkout). Since these tests only compile under the
-/// `corpus` feature, a missing `NORD_CORPUS_DIR` is a hard error, not a skip.
-fn corpus_dir() -> PathBuf {
-    std::env::var_os("NORD_CORPUS_DIR")
-        .map(PathBuf::from)
-        .expect("set NORD_CORPUS_DIR to a nord-corpus/ne5 checkout for --features corpus")
-}
 
 #[test]
 fn test_ne5_read_song_macro() {

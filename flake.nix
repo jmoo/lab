@@ -55,18 +55,37 @@
       }
       {
         perSystem =
-          { pkgs, ... }:
+          { lib, pkgs, ... }:
           {
-            # Test nord-format against real clavia nord files.
-            # This requires access to a private repository (jmoo/nord-corpus)
-            checks.nord-format-corpus = pkgs.nord-format.overrideAttrs (old: {
-              NORD_CORPUS_DIR = "${pkgs.nord-corpus}/ne5";
-              cargoTestFlags = old.cargoTestFlags ++ [
-                "--features"
-                "corpus"
-              ];
-              doCheck = true;
-            });
+            checks = {
+              # The specimen expectations are only pinned if the specimens are: the
+              # corpus revision the suite is blessed against has to be the one the
+              # overlay fetches, or a green Nix check and a green local run are checking
+              # different files.
+              corpus-rev-agrees =
+                let
+                  blessed = lib.trim (builtins.readFile ./crates/nord-format/tests/corpus_rev.txt);
+                in
+                pkgs.runCommand "corpus-rev-agrees" { } ''
+                  if [ "${blessed}" != "${pkgs.nord-corpus-rev}" ]; then
+                    echo "overlay.nix pins nord-corpus at ${pkgs.nord-corpus-rev}," >&2
+                    echo "but tests/corpus_rev.txt blesses ${blessed} — move one to the other." >&2
+                    exit 1
+                  fi
+                  touch $out
+                '';
+
+              # Test nord-format against real clavia nord files.
+              # This requires access to a private repository (jmoo/nord-corpus)
+              nord-format-corpus = pkgs.nord-format.overrideAttrs (old: {
+                NORD_CORPUS_DIR = "${pkgs.nord-corpus}/ne5";
+                cargoTestFlags = old.cargoTestFlags ++ [
+                  "--features"
+                  "corpus"
+                ];
+                doCheck = true;
+              });
+            };
 
             packages = {
               inherit (pkgs)
