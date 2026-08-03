@@ -85,6 +85,17 @@
                 ];
                 doCheck = true;
               });
+
+              # Test nord-usb's wire, session and envelope layers against the captured
+              # NSM exchange shapes. Same private corpus as nord-format-corpus.
+              nord-usb-corpus = pkgs.nord-usb.overrideAttrs (old: {
+                NORD_CORPUS_DIR = "${pkgs.nord-corpus}/ne5";
+                cargoTestFlags = old.cargoTestFlags ++ [
+                  "--features"
+                  "corpus"
+                ];
+                doCheck = true;
+              });
             };
 
             packages = {

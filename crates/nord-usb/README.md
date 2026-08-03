@@ -91,7 +91,7 @@ carries a `Drop` assertion to catch the mistake in debug builds.
 | `web` | | Browser backend over WebUSB. **Hardware-verified for the read-only path** (Chrome/macOS: inventory, object info); writes and bulk reads not yet exercised. Chrome/Edge only — Firefox and Safari declined the spec. |
 | `replay` | | Drive the protocol from committed captures, no hardware. Used by the golden tests. |
 | `blocking` | | Block on the async API from synchronous callers (the CLI). Tiny; not a runtime. |
-| `corpus` | | Corpus-backed tests (`NORD_CORPUS_DIR`), implies `replay`. |
+| `corpus` | | Exchange-shape tests over the capture corpus (`NORD_CORPUS_DIR`), implies `replay`. |
 
 ### Portability
 
@@ -115,12 +115,24 @@ The golden tests replay real captures through the whole stack and assert the
 bytes this crate emits are **the bytes NSM sent** — not merely self-consistent
 with its own encoder. No hardware, no platform dependency.
 
+`tests/corpus_shapes.rs` adds the other 30 captures, which the corpus commits as
+**exchange shapes** — the payload size of every frame, not its bytes. Driving the
+operations NSM performed through this crate's own `Session`/`op` primitives has to
+emit exactly the frame sizes the capture holds. That checks framing and structure,
+never argument values; values are the golden replays' job.
+
 ```sh
 cargo test -p nord-usb --features replay
+
+NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+  cargo test -p nord-usb --features corpus
 
 # Everything both crates have, which is what a change should be run against:
 NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
   cargo test --workspace --features nord-usb/replay,nord-format/corpus
+
+# With nix
+nix build .#checks.<system>.nord-usb-corpus
 ```
 
 ⚠️ `replay` is not a default feature, so a bare `cargo test -p nord-usb` compiles

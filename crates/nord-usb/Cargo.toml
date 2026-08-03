@@ -34,7 +34,8 @@ web = [
 replay = []
 # Block on the async API from synchronous callers (the CLI). Tiny; not a runtime.
 blocking = ["dep:pollster"]
-# Corpus-backed golden shape tests (NORD_CORPUS_DIR), mirroring nord-format.
+# Corpus-backed exchange-shape tests (NORD_CORPUS_DIR), mirroring nord-format.
+# Implies `replay` so a corpus run also carries the golden byte-level replays.
 corpus = ["replay"]
 
 [dependencies]
@@ -58,3 +59,12 @@ web-sys = { version = "0.3", optional = true, features = [
   "UsbOutTransferResult",
   "UsbTransferStatus",
 ] }
+
+[dev-dependencies]
+libtest-mimic = "0.8"
+
+# One reported case per capture. Needs its own `main`, hence `harness = false`;
+# without `--features corpus` that `main` does nothing.
+[[test]]
+name = "corpus_shapes"
+harness = false
