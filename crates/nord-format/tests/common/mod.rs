@@ -278,12 +278,30 @@ pub fn read_program(path: &Path) -> Program {
     }
 }
 
+pub fn read_settings(path: &Path) -> electro5::Settings {
+    match nord_format::from_path(path)
+        .unwrap_or_else(|e| panic!("{} failed to parse: {e}", path.display()))
+    {
+        Entity::Settings(nord_format::Settings::Electro5(s)) => s,
+        other => panic!("{} is not Electro 5 settings: {other:?}", path.display()),
+    }
+}
+
+pub fn read_sample(path: &Path) -> nord_format::common::sample::Sample {
+    match nord_format::from_path(path)
+        .unwrap_or_else(|e| panic!("{} failed to parse: {e}", path.display()))
+    {
+        Entity::Sample(s) => s,
+        other => panic!("{} is not a sample: {other:?}", path.display()),
+    }
+}
+
 /// `pending/` is a staging area of untracked local files, not corpus content — a sweep
 /// would otherwise take in whatever happened to be sitting in one checkout.
 const UNTRACKED: &str = "pending";
 
-/// Every `.ne5p` the corpus ships, in a stable order.
-pub fn all_programs(root: &Path) -> Vec<PathBuf> {
+/// Every file under `root` with extension `ext`, recursively, in a stable order.
+pub fn files_with(root: &Path, ext: &str) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -293,12 +311,18 @@ pub fn all_programs(root: &Path) -> Vec<PathBuf> {
                 if path.file_name().is_some_and(|n| n != UNTRACKED) {
                     stack.push(path);
                 }
-            } else if path.extension().is_some_and(|e| e == "ne5p") {
+            } else if path.extension().is_some_and(|e| e == ext) {
                 found.push(path);
             }
         }
     }
     found.sort();
+    found
+}
+
+/// Every `.ne5p` the corpus ships, in a stable order.
+pub fn all_programs(root: &Path) -> Vec<PathBuf> {
+    let found = files_with(root, "ne5p");
     assert!(
         found.len() > 100,
         "found only {} programs under {} — is this a nord-corpus/ne5 checkout?",
@@ -306,4 +330,22 @@ pub fn all_programs(root: &Path) -> Vec<PathBuf> {
         root.display()
     );
     found
+}
+
+/// A specimen the corpus marks as not-yet-explainable, by the `.skip.` in its name.
+///
+/// The convention has to stay visible: a sweep that quietly `continue`s past one loses
+/// the specimen without saying so.
+pub fn is_skipped(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|n| n.to_string_lossy().contains(".skip."))
+}
+
+/// A specimen's path as a trial names it: relative to the corpus root, so a failure
+/// names a file the reader can open.
+pub fn rel(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
 }

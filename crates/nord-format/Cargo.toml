@@ -14,8 +14,8 @@ default = []
 # bundle`. Off by default so parse-only consumers (and the corpus round-trip
 # tests, which never touch bundles) stay lean.
 bundle = ["dep:zip"]
-# The corpus-backed round-trip/decode tests (tests/ne5.rs) need the private
-# specimen corpus (NORD_CORPUS_DIR). Off by default so the open minimal suite
+# The corpus-backed round-trip/decode tests (tests/corpus_cases.rs, ne5.rs) need
+# the specimen corpus (NORD_CORPUS_DIR). Off by default so the open minimal suite
 # runs anywhere; the Nix `nord-format-corpus` check enables it. Test-only.
 corpus = []
 
@@ -29,4 +29,12 @@ zip = { version = "2", optional = true, default-features = false, features = [
 ] }
 
 [dev-dependencies]
+libtest-mimic = "0.8"
 regex = "1"
+
+# One reported case per specimen instead of one per sweep, so a failure names the
+# file and the first one does not hide the rest. Needs its own `main`, hence
+# `harness = false`; without `--features corpus` that `main` does nothing.
+[[test]]
+name = "corpus_cases"
+harness = false

@@ -59,7 +59,7 @@ refinement — never a risk to the write path.
 - **`bundle`** — ZIP-based backup bundles (pulls in the `zip` stack). Off by
   default so parse-only consumers stay lean; enable with `--features bundle`.
 - **`corpus`** — *test-only*. Gates the corpus-backed integration tests
-  (`tests/ne5.rs`); see below.
+  (`tests/corpus_cases.rs` and friends); see below.
 
 ## Tests
 
@@ -70,9 +70,13 @@ parse / round-trip / checksum suite with no corpus at all. Their filenames are t
 oracle, and `cargo test -p nord-format --test fixtures -- --ignored bless` rewrites
 the bytes from the generator.
 
-The **corpus integration suite** (`tests/ne5.rs`) is gated behind the `corpus`
-feature because it needs the specimen corpus, which lives in a separate private repo
-(`jmoo/nord-corpus`)
+The **corpus integration suite** is gated behind the `corpus` feature because it needs
+the specimen corpus, which lives in a separate private repo (`jmoo/nord-corpus`).
+`tests/corpus_cases.rs` is a `libtest-mimic` harness reporting one case per specimen
+(`<check>/<path under the corpus root>`), so a failure names the file, all failures
+surface in one run, and a `.skip.` specimen shows up as an ignored case. `tests/ne5.rs`
+holds what a per-specimen harness cannot express — a named specimen read field by
+field, and the assertions that span the whole corpus.
 
 ```sh
 cargo test -p nord-format                       # minimal suite (inline unit tests)
