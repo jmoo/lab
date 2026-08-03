@@ -9,7 +9,7 @@
 //! path fragment:
 //!
 //! ```sh
-//! NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+//! NORD_CORPUS_DIR=/path/to/nord-corpus \
 //!   cargo test -p nord-format --features corpus --test corpus_cases -- programs/organ
 //! ```
 //!
@@ -37,10 +37,11 @@ mod common;
 #[cfg(feature = "corpus")]
 mod cases {
     use super::common::{
-        all_programs, corpus_dir, files_with, is_skipped, read_program, read_sample, read_settings,
-        rel,
+        all_programs, files_with, is_factory, is_skipped, ne5_dir, read_program, read_sample,
+        read_settings, rel,
     };
     use libtest_mimic::{Arguments, Trial};
+    use nord_format::common::container;
     use nord_format::electro5::settings::LiveSlot;
     use nord_format::electro5::{
         EqualizerPart, Fx1Type, Fx2Type, Fx3Type, Fx5Type, Instrument, PianoCategory, Routing,
@@ -60,13 +61,17 @@ mod cases {
 
     pub fn run() -> ! {
         let args = Arguments::from_args();
-        let root = corpus_dir();
+        let root = ne5_dir();
         let mut trials = Vec::new();
 
         let programs = all_programs(&root);
+        // The oracle sweep: `programs/<panel>/` is where the change-one-knob specimens
+        // live, and `is_factory` is the corpus-wide rule that keeps vendor material —
+        // whose names are program names, not settings — out of a check that reads the
+        // filename as ground truth.
         let sweep: Vec<PathBuf> = programs
             .iter()
-            .filter(|p| p.starts_with(root.join("programs")))
+            .filter(|p| p.starts_with(root.join("programs")) && !is_factory(p))
             .cloned()
             .collect();
 
@@ -103,6 +108,25 @@ mod cases {
         for path in files_with(&root.join("samples"), "nsmp") {
             trials.push(trial("strokes", &root, path.clone(), strokes));
             trials.push(trial("zone_ranges", &root, path, zone_ranges));
+        }
+
+        // The rule the oracle sweeps rest on, asserted rather than described: a
+        // `factory/` path has no filename oracle, so one reaching `decode` would be
+        // asserting a program name against a knob setting.
+        {
+            let oracled = sweep.clone();
+            let at = root.clone();
+            trials.push(aggregate("no_factory_in_the_oracle_sweep", move || {
+                let leaked: Vec<String> = oracled
+                    .iter()
+                    .filter(|p| is_factory(p))
+                    .map(|p| rel(&at, p))
+                    .collect();
+                assert!(
+                    leaked.is_empty(),
+                    "factory material reached the filename-oracle sweep: {leaked:?}",
+                );
+            }));
         }
 
         trials.extend(coverage(&root));
@@ -1156,10 +1180,13 @@ mod cases {
             panic!("expected an electro5 live slot in {name}")
         };
 
-        // The tag is the whole difference: the CRC covers `0x2c..` and never sees the
-        // header, so retagging in place leaves a valid file.
-        let mut bytes = read(path).unwrap();
-        bytes[0x08..0x0c].copy_from_slice(electro5::program::FORMAT.as_bytes());
+        // The tag is the whole difference. Retagged on the widened image and narrowed
+        // back, so the file is re-checksummed in whichever generation it came in:
+        // ⚠️ a type-1 crc32 covers `0x2c..` and never sees the tag, but a type-0 crc16
+        // covers the whole file, header included, so retagging one in place corrupts it.
+        let mut image = container::widen(&read(path).unwrap()).unwrap();
+        image[0x08..0x0c].copy_from_slice(electro5::program::FORMAT.as_bytes());
+        let bytes = container::narrow(&image);
 
         let Entity::Program(nord_format::Program::Electro5(program)) =
             nord_format::from_stream(&mut Cursor::new(&bytes)).unwrap()

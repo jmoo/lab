@@ -16,13 +16,13 @@
 //! same change that explains it.
 //!
 //! ```sh
-//! NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+//! NORD_CORPUS_DIR=/path/to/nord-corpus \
 //!   cargo test -p nord-format --features corpus --test mutation -- --nocapture
 //! ```
 
 mod common;
 
-use common::{all_programs, corpus_dir, read_program, rows};
+use common::{all_programs, ne5_dir, read_program, rows};
 use nord_format::crc::MultipartCrc32;
 use nord_format::electro5::program::FILE_LEN;
 use std::collections::{BTreeMap, BTreeSet};
@@ -106,7 +106,7 @@ fn render(row: &common::Row) -> String {
 /// A bit no specimen ever moves is not evidence of a hole — it may be a constant the
 /// instrument always writes — so the blind-spot count is scoped to these.
 fn varying_bits() -> BTreeSet<usize> {
-    let programs = all_programs(&corpus_dir());
+    let programs = all_programs(&ne5_dir());
     let mut zero = vec![false; BODY_BITS];
     let mut one = vec![false; BODY_BITS];
 
@@ -129,7 +129,7 @@ fn varying_bits() -> BTreeSet<usize> {
 fn every_body_bit_is_accounted_for() {
     assert_eq!(BODY_BITS, 968, "the body changed size");
 
-    let root = corpus_dir();
+    let root = ne5_dir();
     let varying = varying_bits();
 
     // Bit -> the fields some base saw move, so the number's membership is inspectable

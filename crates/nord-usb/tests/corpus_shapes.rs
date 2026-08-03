@@ -42,7 +42,7 @@
 //!   They are still covered by `grammar`.
 //!
 //! ```sh
-//! NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+//! NORD_CORPUS_DIR=/path/to/nord-corpus \
 //!   cargo test -p nord-usb --features corpus --test corpus_shapes
 //! ```
 
@@ -71,7 +71,7 @@ mod shapes {
 
     pub fn run() -> ! {
         let args = Arguments::from_args();
-        let root = corpus_dir();
+        let root = ne5_dir();
         let mut trials = Vec::new();
 
         for path in shape_files(&root) {
@@ -133,15 +133,19 @@ mod shapes {
         })
     }
 
-    /// Root of the Electro 5 specimen corpus, taken from `NORD_CORPUS_DIR`. Since this
-    /// target only compiles under the `corpus` feature, a missing one is a hard error.
-    fn corpus_dir() -> PathBuf {
+    /// The Electro 5 model directory of the specimen corpus.
+    ///
+    /// `NORD_CORPUS_DIR` names the corpus root — the directory holding every model —
+    /// and the captures are the Electro 5's, so this joins its way in. Since this target
+    /// only compiles under the `corpus` feature, a missing variable is a hard error.
+    fn ne5_dir() -> PathBuf {
         let dir: PathBuf = std::env::var_os("NORD_CORPUS_DIR")
-            .expect("set NORD_CORPUS_DIR to a nord-corpus/ne5 checkout for --features corpus")
+            .expect("set NORD_CORPUS_DIR to a nord-corpus checkout root for --features corpus")
             .into();
 
         // A directory git cannot answer for is passed: that is the Nix store copy, whose
-        // revision is the pin itself.
+        // revision is the pin itself. A worktree root does answer, so it is held to the
+        // pin like any other checkout.
         let head = std::process::Command::new("git")
             .arg("-C")
             .arg(&dir)
@@ -158,7 +162,7 @@ mod shapes {
                 BLESSED_REV.trim(),
             );
         }
-        dir
+        dir.join("ne5")
     }
 
     fn shape_files(root: &Path) -> Vec<PathBuf> {
@@ -179,7 +183,7 @@ mod shapes {
         found.sort();
         assert!(
             found.len() >= 30,
-            "found only {} shape files under {}/usb — is this a nord-corpus/ne5 checkout?",
+            "found only {} shape files under {}/usb — is this the ne5 tree of a nord-corpus checkout?",
             found.len(),
             root.display(),
         );

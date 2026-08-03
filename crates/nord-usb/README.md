@@ -124,11 +124,11 @@ never argument values; values are the golden replays' job.
 ```sh
 cargo test -p nord-usb --features replay
 
-NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+NORD_CORPUS_DIR=/path/to/nord-corpus \
   cargo test -p nord-usb --features corpus
 
 # Everything both crates have, which is what a change should be run against:
-NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+NORD_CORPUS_DIR=/path/to/nord-corpus \
   cargo test --workspace --features nord-usb/replay,nord-format/corpus
 
 # With nix

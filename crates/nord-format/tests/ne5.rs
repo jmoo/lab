@@ -14,13 +14,13 @@
 //! check enables the feature and sets `NORD_CORPUS_DIR`.
 //!
 //! ```sh
-//! NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+//! NORD_CORPUS_DIR=/path/to/nord-corpus \
 //!   cargo test --workspace --features nord-usb/replay,nord-format/corpus
 //! ```
 
 mod common;
 
-use common::{corpus_dir, files_with, read_program, read_sample, read_settings};
+use common::{files_with, ne5_dir, read_program, read_sample, read_settings};
 use nord_format::common::bank::Item;
 use nord_format::electro5::{Instrument, PianoCategory, SplitPoint};
 use nord_format::{electro5, Entity};
@@ -40,7 +40,7 @@ fn read_song(path: &std::path::Path) -> electro5::Song {
 /// are the whole body.
 #[test]
 fn test_ne5_read_song() {
-    let song = read_song(&corpus_dir().join("song.ne5t"));
+    let song = read_song(&ne5_dir().join("song.ne5t"));
 
     assert_eq!(song.location(), (0, 2));
     assert_eq!(song.get(0), (5, 9));
@@ -54,7 +54,7 @@ fn test_ne5_read_song() {
 #[test]
 fn test_ne5_read_program() {
     let program =
-        read_program(&corpus_dir().join("programs/center_panel/o00_1_p000_0_1_0_50_50.ne5p"));
+        read_program(&ne5_dir().join("programs/center_panel/o00_1_p000_0_1_0_50_50.ne5p"));
     let center = &program.schema.center_panel;
 
     assert_eq!(program.location(), (7, 3));
@@ -76,7 +76,7 @@ fn test_ne5_read_program() {
 /// specimens that do move it are what pin it.
 #[test]
 fn test_ne5_settings_set_list_song_decodes() {
-    let root = corpus_dir();
+    let root = ne5_dir();
     // Captured before the sweep, in set list mode.
     let early = read_settings(&root.join("settings.ne5s")).schema.selection;
     assert!(early.set_list_mode);
@@ -124,7 +124,7 @@ const PIANO_CATEGORIES: [(PianoCategory, &str); 6] = [
 
 #[test]
 fn test_ne5_backup_dependency_ids() {
-    let backup = corpus_dir().join("usb/backup/full_backup");
+    let backup = ne5_dir().join("usb/backup/full_backup");
 
     // The backup's member list: what the instrument actually shipped. The blobs
     // themselves are private-tier and absent here, but the listing tells us how many
@@ -232,7 +232,7 @@ fn test_ne5_backup_dependency_ids() {
 fn test_ne5_live_occupies_three_slots_of_one_bank() {
     let mut seen: BTreeSet<(u16, u16)> = BTreeSet::new();
 
-    for path in files_with(&corpus_dir(), "ne5l") {
+    for path in files_with(&ne5_dir(), "ne5l") {
         let name = path.display().to_string();
         let Entity::Live(nord_format::Live::Electro5(live)) =
             nord_format::from_path(&path).unwrap()
@@ -256,7 +256,7 @@ fn test_ne5_live_occupies_three_slots_of_one_bank() {
 // ---------------------------------------------------------------------------
 
 fn samples_dir() -> PathBuf {
-    corpus_dir().join("samples")
+    ne5_dir().join("samples")
 }
 
 /// The named multi-zone specimens, decoded field by field. The filename is the oracle.

@@ -81,12 +81,12 @@ field, and the assertions that span the whole corpus.
 ```sh
 cargo test -p nord-format                       # minimal suite (inline unit tests)
 
-# Full corpus sweep — point NORD_CORPUS_DIR at a nord-corpus/ne5 checkout:
-NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+# Full corpus sweep — point NORD_CORPUS_DIR at a nord-corpus checkout root:
+NORD_CORPUS_DIR=/path/to/nord-corpus \
   cargo test -p nord-format --features corpus
 
 # Everything both crates have, which is what a change should be run against:
-NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+NORD_CORPUS_DIR=/path/to/nord-corpus \
   cargo test --workspace --features nord-usb/replay,nord-format/corpus
 
 # With nix

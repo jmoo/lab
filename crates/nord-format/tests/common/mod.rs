@@ -20,21 +20,34 @@ use std::path::{Path, PathBuf};
 /// to it.
 const BLESSED_REV: &str = include_str!("../corpus_rev.txt");
 
-/// Root of the Electro 5 specimen corpus, taken from `NORD_CORPUS_DIR` (point it at a
-/// `nord-corpus/ne5` checkout). Since these tests only compile under the `corpus`
-/// feature, a missing `NORD_CORPUS_DIR` is a hard error, not a skip.
+/// Root of the specimen corpus, taken from `NORD_CORPUS_DIR` — **the whole corpus**,
+/// the directory holding `ne5/`, `ne6/`, … and `library/`, not one model.
+///
+/// Since these tests only compile under the `corpus` feature, a missing
+/// `NORD_CORPUS_DIR` is a hard error, not a skip.
 pub fn corpus_dir() -> PathBuf {
     let dir: PathBuf = std::env::var_os("NORD_CORPUS_DIR")
-        .expect("set NORD_CORPUS_DIR to a nord-corpus/ne5 checkout for --features corpus")
+        .expect("set NORD_CORPUS_DIR to a nord-corpus checkout root for --features corpus")
         .into();
     check_revision(&dir);
     dir
 }
 
+/// The Electro 5 model directory.
+///
+/// Everything with a filename oracle is Electro 5, so the oracle suites join this rather
+/// than treating the corpus root as a model root. A suite that walks every model takes
+/// [`corpus_dir`] instead.
+pub fn ne5_dir() -> PathBuf {
+    corpus_dir().join("ne5")
+}
+
 /// Refuse a checkout that is not at [`BLESSED_REV`], naming which way it is skewed.
 ///
 /// A directory git cannot answer for is passed: that is the Nix store copy, whose
-/// revision is the pin itself.
+/// revision is the pin itself, and it has no `.git` at all. A **worktree** root does
+/// answer — its `.git` is a file rather than a directory, which `git -C` resolves the
+/// same way — so a worktree of the corpus is held to the pin like any other checkout.
 fn check_revision(dir: &Path) {
     let blessed = BLESSED_REV.trim();
     let Some(head) = git(dir, &["rev-parse", "HEAD"]) else {
@@ -325,11 +338,25 @@ pub fn all_programs(root: &Path) -> Vec<PathBuf> {
     let found = files_with(root, "ne5p");
     assert!(
         found.len() > 100,
-        "found only {} programs under {} — is this a nord-corpus/ne5 checkout?",
+        "found only {} programs under {} — is this the ne5 tree of a nord-corpus \
+         checkout?",
         found.len(),
         root.display()
     );
     found
+}
+
+/// Vendor material, by the corpus's own rule: **a path with a `factory/` component
+/// carries no filename oracle**. Its names are Clavia's program names, so a sweep that
+/// reads a filename as ground truth has to drop these, while a round-trip sweep wants
+/// them.
+///
+/// Machine-checkable on purpose. An oracle sweep that filters on this cannot be broken
+/// by a new model directory arriving, and cannot quietly rot the way a hand-maintained
+/// exclusion list does.
+pub fn is_factory(path: &Path) -> bool {
+    path.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("factory"))
 }
 
 /// A specimen the corpus marks as not-yet-explainable, by the `.skip.` in its name.

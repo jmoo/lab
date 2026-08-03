@@ -20,13 +20,13 @@
 //! snapshot was bought for.
 //!
 //! ```sh
-//! NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+//! NORD_CORPUS_DIR=/path/to/nord-corpus \
 //!   cargo test -p nord-format --features corpus --test decode_snapshot
 //! ```
 
 mod common;
 
-use common::{all_programs, corpus_dir, packed, read_program, rows};
+use common::{all_programs, files_with, ne5_dir, packed, read_program, rows};
 use nord_format::{electro5, Entity};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -62,7 +62,7 @@ fn summarise(seen: &BTreeSet<String>) -> String {
 
 #[test]
 fn fields() {
-    let root = corpus_dir();
+    let root = ne5_dir();
     let programs = all_programs(&root);
 
     // Insertion-ordered by first sighting, which is declaration order within each panel.
@@ -127,7 +127,7 @@ fn fields() {
 
 #[test]
 fn specimens() {
-    let root = corpus_dir();
+    let root = ne5_dir();
     let mut out = String::new();
     out.push_str(
         "# Every field of a fixed handful of specimens. The companion to\n\
@@ -158,21 +158,16 @@ fn specimens() {
 }
 
 /// Every `.ne5s` the corpus ships, in a stable order.
+///
+/// The whole tree, not the `settings/` directory: this snapshot records what values the
+/// corpus has been seen to hold, and the baseline captured in a backup or shipped in a
+/// factory bank is as much a sighting as a change-one-knob specimen. No filename is read
+/// here, so nothing needs the oracle the vendor files lack.
 fn all_settings(root: &Path) -> Vec<PathBuf> {
-    let mut found = vec![
-        root.join("settings.ne5s"),
-        root.join("usb/backup/full_backup/contents/Settings/Settings/Settings.ne5s"),
-    ];
-    for entry in fs::read_dir(root.join("settings")).expect("settings corpus") {
-        let path = entry.unwrap().path();
-        if path.extension().is_some_and(|e| e == "ne5s") {
-            found.push(path);
-        }
-    }
-    found.sort();
+    let found = files_with(root, "ne5s");
     assert!(
         found.len() > 100,
-        "found only {} settings files under {} — is this a nord-corpus/ne5 checkout?",
+        "found only {} settings files under {} — is this the ne5 tree of a nord-corpus checkout?",
         found.len(),
         root.display()
     );
@@ -195,7 +190,7 @@ fn read_settings(path: &Path) -> electro5::Settings {
 /// field by field.
 #[test]
 fn settings() {
-    let root = corpus_dir();
+    let root = ne5_dir();
     let paths = all_settings(&root);
 
     let mut order = Vec::new();
