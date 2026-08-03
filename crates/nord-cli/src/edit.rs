@@ -7,53 +7,30 @@
 //! USB, so it obeys the rule every mutation obeys — describe the target, then refuse
 //! without `--yes`. Editing a file in place takes the same guard; `-o` avoids it.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use nord_format::electro5;
 use nord_format::{Entity, Program};
-use nord_usb::wire::Location;
 use nord_usb::ObjectClass;
 
+use crate::slot::Target;
 use crate::ui::Ui;
 use crate::EditArgs;
 
-/// Where the program came from, and therefore where it goes back to.
-enum Target {
-    File(PathBuf),
-    Slot(Location),
-    /// `--fields` with nothing to read: list what a fresh program offers.
-    Default,
-}
-
-/// Decide whether an argument names a file or a slot.
-///
-/// A path that exists wins, so a file called `7:4` is still a file. Otherwise anything
-/// that parses as `BANK:SLOT` is one — which is what makes `nord program edit 7:4` work
-/// without a flag saying which kind of thing was meant.
-fn resolve(target: Option<String>) -> Result<Target, String> {
-    let Some(target) = target else {
-        return Ok(Target::Default);
-    };
-    let path = PathBuf::from(&target);
-    if path.exists() {
-        return Ok(Target::File(path));
-    }
-    match crate::slot::parse(&target) {
-        Ok(at) => Ok(Target::Slot(at)),
-        // Neither reading works, so the error has to name both.
-        Err(e) => Err(format!("{target}: no such file, and not a slot ({e})")),
-    }
-}
-
 pub fn run(ui: &Ui, args: EditArgs) -> Result<(), String> {
-    let target = resolve(args.target)?;
+    // No target is `--fields` or `-o` with nothing to read: a fresh default program.
+    let target = args
+        .target
+        .as_deref()
+        .map(crate::slot::target)
+        .transpose()?;
 
     let original = match &target {
-        Target::File(path) => {
+        Some(Target::File(path)) => {
             std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?
         }
-        Target::Slot(at) => crate::device::fetch(*at, ObjectClass::Program)?,
-        Target::Default => {
+        Some(Target::Slot(at)) => crate::device::fetch(*at, ObjectClass::Program)?,
+        None => {
             let entity = Entity::Program(Program::Electro5(electro5::Program::new(
                 (0, 0).try_into().map_err(|e| format!("{e}"))?,
             )));
@@ -107,7 +84,7 @@ pub fn run(ui: &Ui, args: EditArgs) -> Result<(), String> {
     match (target, args.out) {
         // An explicit destination is the unambiguous case, whatever the source was.
         (_, Some(out)) => write_file(ui, &out, &edited),
-        (Target::File(path), None) => {
+        (Some(Target::File(path)), None) => {
             ui.note(format!(
                 "about to {} {} in place",
                 ui.danger("overwrite"),
@@ -116,7 +93,7 @@ pub fn run(ui: &Ui, args: EditArgs) -> Result<(), String> {
             ui.confirm(args.yes)?;
             write_file(ui, &path, &edited)
         }
-        (Target::Slot(at), None) => crate::device::send(
+        (Some(Target::Slot(at)), None) => crate::device::send(
             ui,
             &edited,
             at,
@@ -124,7 +101,7 @@ pub fn run(ui: &Ui, args: EditArgs) -> Result<(), String> {
             args.yes,
             "the edited program",
         ),
-        (Target::Default, None) => {
+        (None, None) => {
             Err("editing a default program needs -o: there is nothing to write back to".into())
         }
     }
