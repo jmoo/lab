@@ -21,14 +21,14 @@ pub use piano::{PianoCategory, PianoPanel};
 pub use sample::SamplePanel;
 
 use crate::common;
-use crate::common::bank;
+use crate::common::{bank, container};
 use crate::crc::{CrcReader, CrcWriter};
 use crate::error::{Error, ParseError};
 use crate::panel::{FieldError, Panel};
 use crate::types::RangedU16Pair;
 use binrw::{binrw, BinRead, BinWriterExt};
 
-use std::io::{Read, Seek, Write};
+use std::io::{Cursor, Read, Seek, Write};
 
 pub const FORMAT: &str = "ne5p";
 /// Schema versions this build's field offsets have been validated against. Every corpus
@@ -227,7 +227,8 @@ impl Program {
     }
 
     pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Program, Error> {
-        let schema = Schema::read_be(reader)?;
+        let image = container::read_fixed(reader, FILE_LEN)?;
+        let schema = Schema::read_be(&mut Cursor::new(image))?;
         check_tag(FORMAT, &schema)?;
         if !KNOWN_VERSIONS.contains(&schema.version) {
             return Err(ParseError::UnsupportedVersion {
@@ -242,7 +243,9 @@ impl Program {
     }
 
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        writer.write_be(&self.schema)?;
+        let mut image = Cursor::new(Vec::new());
+        image.write_be(&self.schema)?;
+        writer.write_all(&container::narrow(&image.into_inner()))?;
         Ok(())
     }
 }

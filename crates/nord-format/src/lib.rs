@@ -158,7 +158,13 @@ pub fn to_bytes(entity: &Entity) -> Result<Vec<u8>, Error> {
     };
 
     let bytes = out.into_inner();
-    if let Some((format, expected)) = expected {
+    if let Some((format, type1_len)) = expected {
+        // A type-0 file is shorter than the length the module declares, so the declared
+        // length is read through the generation the writer actually emitted.
+        let expected = common::container::stored_len(
+            common::container::header_type(&bytes).unwrap_or(common::container::TYPE_LONG),
+            type1_len,
+        );
         if bytes.len() != expected {
             return Err(ParseError::BadEncodedLength {
                 format,

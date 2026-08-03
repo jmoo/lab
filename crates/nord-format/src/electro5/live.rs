@@ -6,10 +6,10 @@
 //! space and every program field applies here unchanged.
 
 use binrw::{BinRead, BinWriterExt};
-use std::io::{Read, Seek, Write};
+use std::io::{Cursor, Read, Seek, Write};
 
 use crate::common;
-use crate::common::bank;
+use crate::common::{bank, container};
 use crate::electro5::program;
 use crate::error::{Error, ParseError};
 use crate::types::RangedU16Pair;
@@ -47,7 +47,8 @@ impl Live {
     }
 
     pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Live, Error> {
-        let schema = Schema::read_be(reader)?;
+        let image = container::read_fixed(reader, FILE_LEN)?;
+        let schema = Schema::read_be(&mut Cursor::new(image))?;
         program::check_tag(FORMAT, &schema)?;
         if !KNOWN_VERSIONS.contains(&schema.version) {
             return Err(ParseError::UnsupportedVersion {
@@ -62,7 +63,9 @@ impl Live {
     }
 
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        writer.write_be(&self.schema)?;
+        let mut image = Cursor::new(Vec::new());
+        image.write_be(&self.schema)?;
+        writer.write_all(&container::narrow(&image.into_inner()))?;
         Ok(())
     }
 }

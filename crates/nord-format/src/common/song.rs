@@ -15,6 +15,10 @@ where
     /// everything user-written is version 1, and re-emitting a 0 as a 1 silently
     /// rewrites the file.
     version: u32,
+    /// CBIN header generation, carried for the same reason as `version`: a song
+    /// rebuilds its header on write, and the two generations are 18 bytes apart, so a
+    /// type-0 song emitted as type 1 is a different file.
+    header_type: u32,
 }
 
 impl<const C: usize, S, P> Song<C, S, P>
@@ -28,12 +32,17 @@ where
             location,
             programs,
             version: Self::DEFAULT_VERSION,
+            header_type: Self::DEFAULT_HEADER_TYPE,
         }
     }
 
     /// What a newly authored song is written as. Reading a file overwrites this with
     /// whatever the file carried.
     pub const DEFAULT_VERSION: u32 = 1;
+
+    /// The generation a newly authored song is written in — the one the instrument
+    /// writes. Reading a file overwrites this with whatever the file carried.
+    pub const DEFAULT_HEADER_TYPE: u32 = crate::common::container::TYPE_LONG;
 
     /// Container schema version — see the field docs.
     pub fn version(&self) -> u32 {
@@ -42,6 +51,15 @@ where
 
     pub fn set_version(&mut self, version: u32) {
         self.version = version;
+    }
+
+    /// CBIN header generation — see the field docs.
+    pub fn header_type(&self) -> u32 {
+        self.header_type
+    }
+
+    pub fn set_header_type(&mut self, header_type: u32) {
+        self.header_type = header_type;
     }
 
     pub fn get(&self, slot: u16) -> P {

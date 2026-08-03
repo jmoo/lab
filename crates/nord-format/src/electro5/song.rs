@@ -1,8 +1,9 @@
 use binrw::{binrw, BinRead, BinWriterExt};
-use std::io::{Read, Seek, Write};
+use std::io::{Cursor, Read, Seek, Write};
 
 use crate::common;
 use crate::common::bank::Item;
+use crate::common::container;
 use crate::crc::{CrcReader, CrcWriter};
 use crate::error::{Error, ParseError};
 
@@ -76,6 +77,7 @@ struct Schema {
 
 impl Schema {
     pub fn new(
+        header_type: u32,
         location: Location,
         version: u32,
         a: program::Location,
@@ -84,7 +86,7 @@ impl Schema {
         d: program::Location,
     ) -> Schema {
         Schema {
-            header: Header::new(1, FORMAT, location),
+            header: Header::new(header_type, FORMAT, location),
             version,
             a,
             b,
@@ -96,7 +98,8 @@ impl Schema {
 
 impl Song {
     pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Song, Error> {
-        let schema = Schema::read_be(reader)?;
+        let image = container::read_fixed(reader, FILE_LEN)?;
+        let schema = Schema::read_be(&mut Cursor::new(image))?;
 
         if !KNOWN_VERSIONS.contains(&schema.version) {
             return Err(ParseError::UnsupportedVersion {
@@ -112,11 +115,13 @@ impl Song {
             [schema.a, schema.b, schema.c, schema.d],
         );
         song.set_version(schema.version);
+        song.set_header_type(schema.header.preamble.version);
         Ok(song)
     }
 
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
         let schema = Schema::new(
+            self.header_type(),
             self.location(),
             self.version(),
             self.programs()[0],
@@ -125,7 +130,9 @@ impl Song {
             self.programs()[3],
         );
 
-        writer.write_be(&schema)?;
+        let mut image = Cursor::new(Vec::new());
+        image.write_be(&schema)?;
+        writer.write_all(&container::narrow(&image.into_inner()))?;
         Ok(())
     }
 }

@@ -17,6 +17,7 @@ pub use section::Section;
 pub use stroke::Stroke;
 pub use zone::Zone;
 
+use crate::common::container;
 use crate::crc::crc32;
 use crate::error::{Error, ParseError};
 use std::fmt;
@@ -124,7 +125,13 @@ impl Sample {
         Sample::from_bytes(&bytes)
     }
 
+    /// Decodes an instrument of either CBIN generation.
+    ///
+    /// ⚠️ For a type-0 file the checksum compared below is the one
+    /// [`container::widen`] just synthesised, so it proves nothing; `widen` verifying
+    /// that file's own crc16 is what does.
     pub fn from_bytes(bytes: &[u8]) -> Result<Sample, Error> {
+        let bytes = &container::widen(bytes)?[..];
         let header = Header::read(bytes)?;
         let computed = crc32(&bytes[BODY_AT..]);
         if computed != header.crc32 {
@@ -155,7 +162,7 @@ impl Sample {
         let mut out = Vec::with_capacity(BODY_AT + body.len());
         header.write_into(&mut out);
         out.extend_from_slice(&body);
-        out
+        container::narrow(&out)
     }
 
     /// Instrument name, as the Nord display shows it.

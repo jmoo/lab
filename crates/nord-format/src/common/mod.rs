@@ -1,5 +1,6 @@
 pub mod bank;
 pub mod components;
+pub mod container;
 pub mod piano;
 pub mod sample;
 pub mod song;

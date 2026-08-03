@@ -17,6 +17,17 @@ pub fn crc32(bytes: &[u8]) -> u32 {
     CRC_32.compute(bytes)
 }
 
+const CRC_16: crcxx::crc16::Crc<crcxx::crc16::LookupTable256> =
+    crcxx::crc16::Crc::<crcxx::crc16::LookupTable256>::new(&crcxx::crc16::catalog::CRC_16_IBM_3740);
+
+/// CRC-16/IBM-3740 — the CCITT-FALSE parameters — of a contiguous slice.
+///
+/// The type-0 CBIN generation checksums with this instead of a CRC-32; see
+/// [`crate::common::container`].
+pub fn crc16(bytes: &[u8]) -> u16 {
+    CRC_16.compute(bytes)
+}
+
 /// Accumulates the CRC of bytes falling inside one region of a stream.
 ///
 /// ⚠️ `length` is the region's **last byte index minus `first_byte`** — an inclusive

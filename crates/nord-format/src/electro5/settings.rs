@@ -13,6 +13,7 @@ pub use panel::{
 };
 
 use crate::common;
+use crate::common::container;
 use crate::crc::{CrcReader, CrcWriter};
 use crate::electro5::program;
 use crate::error::{Error, ParseError};
@@ -21,7 +22,7 @@ use crate::types::RangedU16Pair;
 use binrw::{binrw, BinRead, BinWriterExt};
 use panel::BODY_LEN;
 use std::fmt::Debug;
-use std::io::{Read, Seek, Write};
+use std::io::{Cursor, Read, Seek, Write};
 
 pub const FORMAT: &str = "ne5s";
 /// Schema versions validated against the corpus. Every corpus settings file reports 0.
@@ -111,7 +112,8 @@ impl Settings {
     }
 
     pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Settings, Error> {
-        let schema = Schema::read_be(reader)?;
+        let image = container::read_fixed(reader, FILE_LEN)?;
+        let schema = Schema::read_be(&mut Cursor::new(image))?;
 
         if !KNOWN_VERSIONS.contains(&schema.version) {
             return Err(ParseError::UnsupportedVersion {
@@ -126,7 +128,9 @@ impl Settings {
     }
 
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        writer.write_be(&self.schema)?;
+        let mut image = Cursor::new(Vec::new());
+        image.write_be(&self.schema)?;
+        writer.write_all(&container::narrow(&image.into_inner()))?;
         Ok(())
     }
 
