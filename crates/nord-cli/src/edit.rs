@@ -12,13 +12,39 @@ use std::path::Path;
 
 use nord_format::common::bank;
 use nord_format::electro5;
-use nord_format::electro5::program::Schema;
-use nord_format::{Entity, Live, Program};
+use nord_format::electro5::program::{Field, Schema};
+use nord_format::panel::FieldError;
+use nord_format::{Entity, Live, Program, Settings};
 use nord_usb::ObjectClass;
 
 use crate::slot::Target;
 use crate::ui::Ui;
 use crate::EditArgs;
+
+/// The schema shapes `edit` drives: the program body in either slot space, and the
+/// settings singleton. One vocabulary — `--set member.field=value` — over each.
+trait Editable {
+    fn fields(&self) -> Vec<Field>;
+    fn set_field(&mut self, path: &str, value: &str) -> Result<(), FieldError>;
+}
+
+impl<L: bank::Location> Editable for Schema<L> {
+    fn fields(&self) -> Vec<Field> {
+        Schema::fields(self)
+    }
+    fn set_field(&mut self, path: &str, value: &str) -> Result<(), FieldError> {
+        Schema::set_field(self, path, value)
+    }
+}
+
+impl Editable for electro5::settings::Schema {
+    fn fields(&self) -> Vec<Field> {
+        electro5::settings::Schema::fields(self)
+    }
+    fn set_field(&mut self, path: &str, value: &str) -> Result<(), FieldError> {
+        electro5::settings::Schema::set_field(self, path, value)
+    }
+}
 
 pub fn run(ui: &Ui, args: EditArgs, class: ObjectClass) -> Result<(), String> {
     // No target is `--fields` or `-o` with nothing to read: a fresh default object.
@@ -43,6 +69,9 @@ pub fn run(ui: &Ui, args: EditArgs, class: ObjectClass) -> Result<(), String> {
             stage(ui, &args, &mut p.schema)?
         }
         (Entity::Live(Live::Electro5(l)), ObjectClass::Live) => stage(ui, &args, &mut l.schema)?,
+        (Entity::Settings(Settings::Electro5(s)), ObjectClass::Settings) => {
+            stage(ui, &args, &mut s.schema)?
+        }
         _ => return Err(mismatch(&entity, class)),
     };
     // `--fields` has listed them and is done.
@@ -79,11 +108,15 @@ pub fn run(ui: &Ui, args: EditArgs, class: ObjectClass) -> Result<(), String> {
                 crate::device::send(ui, &edited, at, class, args.yes, "the edited program")
             }
             // ⚠️ `send` deletes the destination to make room, and whether the live
-            // buffer — the panel itself — survives a class-6 delete/write is
-            // unconfirmed on hardware. Until it is, an edited live slot stops at a file.
-            _ => Err("writing the live buffer back over USB is unproven; \
-                 give -o a path to save the edit as a .ne5l file"
-                .into()),
+            // buffer or the settings singleton survives a delete/write of its class is
+            // unconfirmed on hardware. Until it is, an edited slot of either stops at
+            // a file.
+            _ => Err(format!(
+                "writing {} back over USB is unproven; give -o a path to save the edit \
+                 as a .{} file",
+                class.label(),
+                crate::file::tag(class).unwrap_or("bin"),
+            )),
         },
         (None, None) => {
             Err("editing a fresh default needs -o: there is nothing to write back to".into())
@@ -101,6 +134,7 @@ fn fresh(class: ObjectClass) -> Result<Vec<u8>, String> {
         ObjectClass::Live => Entity::Live(Live::Electro5(electro5::Live::new(
             (0, 0).try_into().map_err(|e| format!("{e}"))?,
         ))),
+        ObjectClass::Settings => Entity::Settings(Settings::Electro5(electro5::Settings::new())),
         other => return Err(format!("edit does not exist for {}", other.label())),
     };
     nord_format::to_bytes(&entity).map_err(|e| e.to_string())
@@ -109,26 +143,28 @@ fn fresh(class: ObjectClass) -> Result<Vec<u8>, String> {
 /// The target decoded, but not to what this noun edits.
 fn mismatch(entity: &Entity, class: ObjectClass) -> String {
     let got = crate::file::entity_tag(entity);
-    // Steer only to a noun that has an `edit`.
-    let steer = match got {
-        "ne5p" => " — try `nord program edit`",
-        "ne5l" => " — try `nord live edit`",
-        _ => "",
-    };
     format!(
-        "this command edits {} ({}); the target holds {got}{steer}",
+        "this command edits {} ({}); the target holds {got}{}",
         class.label(),
         crate::file::tag(class).unwrap_or("?"),
+        steer(got),
     )
+}
+
+/// The `edit` that reads a tag's files — empty for a tag whose noun has none, so the
+/// message never points at a command that does not exist.
+fn steer(tag: &str) -> &'static str {
+    match tag {
+        "ne5p" => " — try `nord program edit`",
+        "ne5l" => " — try `nord live edit`",
+        "ne5s" => " — try `nord settings edit`",
+        _ => "",
+    }
 }
 
 /// List the fields (`--fields`, `None`) or apply every `--set`, returning how many
 /// fields moved.
-fn stage<L: bank::Location>(
-    ui: &Ui,
-    args: &EditArgs,
-    schema: &mut Schema<L>,
-) -> Result<Option<usize>, String> {
+fn stage(ui: &Ui, args: &EditArgs, schema: &mut impl Editable) -> Result<Option<usize>, String> {
     if args.fields {
         list_fields(ui, schema);
         return Ok(None);
@@ -238,7 +274,7 @@ fn print_byte_diff(ui: &Ui, before: &[u8], after: &[u8]) {
     }
 }
 
-fn list_fields<L: bank::Location>(ui: &Ui, schema: &Schema<L>) {
+fn list_fields(ui: &Ui, schema: &impl Editable) {
     ui.out(format!(
         "{:<40} {:<12} {:<28} {}",
         "path", "bits", "value", "accepts"
@@ -283,8 +319,13 @@ mod tests {
         let err = mismatch(&program, ObjectClass::Live);
         assert!(err.contains("nord program edit"), "{err}");
 
-        // Settings have no edit anywhere, so the message must not invent one.
-        let settings = Entity::Settings(nord_format::Settings::Electro5(electro5::Settings::new()));
-        assert!(!mismatch(&settings, ObjectClass::Program).contains("edit`"));
+        let settings = Entity::Settings(Settings::Electro5(electro5::Settings::new()));
+        let err = mismatch(&settings, ObjectClass::Program);
+        assert!(err.contains("nord settings edit"), "{err}");
+
+        // Set lists and library content have no edit, so no steer may be invented.
+        for tag in ["ne5t", "npno", "nsmp", "zip"] {
+            assert_eq!(steer(tag), "", "{tag}");
+        }
     }
 }

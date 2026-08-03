@@ -3,8 +3,9 @@
 //! Not a product; it exists to exercise the libraries and surface API friction.
 //!
 //! The nouns are the protocol's object classes: `nord program`, `nord setlist` and
-//! `nord live` are [`slot_action`] with the class fixed, and the hidden
-//! `nord raw --class N` is the same with the class given as a number.
+//! `nord live` are [`slot_action`] with the class fixed, `nord settings` carries the
+//! one verb its singleton needs (`edit`), and the hidden `nord raw --class N` is
+//! [`slot_action`] with the class given as a number.
 //! `inspect`/`verify` dispatch on the CBIN format tag rather than on a class, so they sit
 //! at the top level.
 //!
@@ -86,6 +87,13 @@ enum Command {
         action: LiveAction,
     },
 
+    /// The global settings singleton (object class 7): the System, MIDI and Sound
+    /// menus, plus the panel state the instrument restores at power-up.
+    Settings {
+        #[command(subcommand)]
+        action: SettingsAction,
+    },
+
     /// The class-generic primitives, addressed by object-class number.
     ///
     /// Every typed noun above is this with the class fixed. Use it for a class with no
@@ -155,6 +163,19 @@ enum LiveAction {
     /// The live buffer is the program body under another tag, so the fields are exactly
     /// `nord program edit`'s. A slot target is read off the instrument but never
     /// written back — the edit needs `-o`.
+    Edit(EditArgs),
+}
+
+/// `nord settings`: the instrument holds exactly one of these, so there is nothing to
+/// move, copy, name or delete, and `edit` is the whole verb set. The class-generic
+/// verbs remain reachable as `raw --class 7`.
+#[derive(Subcommand)]
+enum SettingsAction {
+    /// Change fields inside the global settings, in a `.ne5s` file.
+    ///
+    /// Fields are `panel.*` (the menu settings) and `selection.*` (the restored panel
+    /// state); `--fields` lists them. A slot target is read off the instrument but
+    /// never written back — the edit needs `-o`.
     Edit(EditArgs),
 }
 
@@ -331,10 +352,10 @@ enum SlotAction {
 
 #[derive(Args)]
 pub struct EditArgs {
-    /// A file (`.ne5p` under `nord program`, `.ne5l` under `nord live`), or a slot on
-    /// the instrument (`7:4`). A slot makes this a read-modify-write over USB, so it is
-    /// a mutation and obeys `--yes`. Omit it to start from a fresh default, which then
-    /// needs `-o`.
+    /// A file (`.ne5p` under `nord program`, `.ne5l` under `nord live`, `.ne5s` under
+    /// `nord settings`), or a slot on the instrument (`7:4`). A slot makes this a
+    /// read-modify-write over USB, so it is a mutation and obeys `--yes`. Omit it to
+    /// start from a fresh default, which then needs `-o`.
     #[arg(
         value_name = "FILE|BANK:SLOT",
         required_unless_present_any = ["fields", "out"],
@@ -388,6 +409,9 @@ fn main() -> ExitCode {
         Command::Live { action } => match action {
             LiveAction::Slot(action) => slot_action(&ui, action.into(), ObjectClass::Live),
             LiveAction::Edit(args) => edit::run(&ui, args, ObjectClass::Live),
+        },
+        Command::Settings { action } => match action {
+            SettingsAction::Edit(args) => edit::run(&ui, args, ObjectClass::Settings),
         },
         Command::Raw { class, action } => slot_action(&ui, action, ObjectClass::from_raw(class)),
     };
