@@ -439,12 +439,13 @@ pub fn print(ui: &Ui, entity: &Entity) {
             for (name, value) in [
                 ("program", location(sel.program.x(), sel.program.y())),
                 ("live mode", yn(sel.live_mode).to_string()),
-                (
-                    "live slot",
-                    sel.live_slot.label().unwrap_or("unknown").to_string(),
-                ),
+                ("live slot", sel.live_slot.to_string()),
                 ("set list mode", yn(sel.set_list_mode).to_string()),
-                ("set list song", location(sel.song.x(), sel.song.y())),
+                // The hardware numbers set lists, not banks.
+                (
+                    "set list song",
+                    format!("list {} song {}", sel.song.x() + 1, sel.song.y() + 1),
+                ),
             ] {
                 ui.out(format!(
                     "    {}{}",
