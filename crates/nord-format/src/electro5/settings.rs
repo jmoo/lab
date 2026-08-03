@@ -159,9 +159,9 @@ mod tests {
 
     /// Both panels share the body, so editing one must not revert the other.
     ///
-    /// They are re-encoded in sequence onto the same bytes and each carries a stale copy
-    /// of the other's bits; this is what catches the two being applied the wrong way
-    /// round.
+    /// Each carries a stale copy of the other's fields in the bytes it was decoded from;
+    /// this is what catches an encode that keeps only one panel's output instead of
+    /// threading it through the other's.
     #[test]
     fn the_two_panels_do_not_overwrite_each_other() {
         let mut settings = Settings::new();

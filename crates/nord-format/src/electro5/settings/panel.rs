@@ -14,8 +14,9 @@
 //! [`crate::electro5::song`]. `ne5s` is version 0, so they read zero.
 //!
 //! Bits 16..=37 are not settings at all: they are where the instrument *was*, and they
-//! live in [`Selection`]. **Bit 18 is the only bit of the body no field claims.** It is
-//! clear in every specimen. Whatever it is, it survives a re-encode untouched.
+//! live in [`Selection`]. **Bit 18 is the only bit below the settings that no field
+//! claims.** It is clear in every specimen. Whatever it is, it survives a re-encode
+//! untouched, as does everything past the last setting.
 //!
 //! **Two catalogued settings have no home here.** Toggling *memory protect* and *local
 //! control* on the panel and re-reading the object moves no bit of the body, so neither
@@ -34,10 +35,12 @@ pub const BODY_LEN: usize = 0x4e - 0x2c;
 
 /// Write a settings body from the two panels that share it.
 ///
-/// ⚠️ The order is load-bearing. A panel re-encodes onto the bytes it was decoded from,
-/// so each carries a stale copy of the other's bits; applying the selection to the bytes
-/// the settings produced is what keeps both sets of edits. Swapping the two silently
-/// reverts whichever ran first.
+/// ⚠️ The threading is load-bearing. A panel re-encodes onto the bytes it was decoded
+/// from, so each carries a stale copy of the other's fields; feeding the settings'
+/// output through the selection's encode is what keeps both sets of edits. Encoding each
+/// from its own bytes and keeping either result silently reverts the other. The order
+/// only decides whose copy supplies the bits neither panel claims — the same bytes
+/// whenever both came from one decode.
 pub fn encode(settings: &SettingsPanel, selection: &Selection) -> [u8; BODY_LEN] {
     let raw = <[u8; BODY_LEN]>::from(settings);
     <[u8; BODY_LEN]>::from(&Selection { raw, ..*selection })
@@ -151,8 +154,9 @@ pub struct SettingsPanel {
 #[bitpanel(34)]
 #[derive(Clone, Copy)]
 pub struct Selection {
-    /// Inferred from specimens; not confirmed on hardware. One specimen holds it, and
-    /// that specimen is the only one whose `song` is not the first slot.
+    /// Inferred from specimens; not confirmed on hardware. One specimen holds it — the
+    /// one capture made in set list mode. The full backup moves `song` without it, so
+    /// the bit tracks the mode, not the song.
     #[bits(16..=16)]
     pub set_list_mode: bool,
     #[bits(17..=17)]
