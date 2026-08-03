@@ -121,6 +121,9 @@ operations NSM performed through this crate's own `Session`/`op` primitives has 
 emit exactly the frame sizes the capture holds. That checks framing and structure,
 never argument values; values are the golden replays' job.
 
+`NORD_CORPUS_DIR` names the **corpus root**, the directory holding every model.
+The captures are the Electro 5's, so this suite joins `ne5/` itself.
+
 ```sh
 cargo test -p nord-usb --features replay
 

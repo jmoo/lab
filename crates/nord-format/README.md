@@ -2,8 +2,9 @@
 
 Parse and write **Clavia / Nord** keyboard binary file formats from Rust.
 
-This is the pure format-logic crate of the Nord toolkit: the `CBIN` container,
-the CRC-32 (ISO-HDLC) range checksum, and per-model entity layouts. It depends
+This is the pure format-logic crate of the Nord toolkit: the `CBIN` container in
+both of its header generations, their two checksums, and per-model entity
+layouts. It depends
 only on [`binrw`] (plus `zip` behind the `bundle` feature for backup bundles) and
 does no USB, OS, or I/O beyond `Read`/`Seek`/`Write` — so it's trivially testable
 against a specimen corpus and reusable by higher layers (a device/USB crate, a
@@ -22,6 +23,24 @@ CLI) without dragging in a transport stack.
 
 Everything that parses **round-trips byte-for-byte**, verified against a
 change-one-knob specimen corpus.
+
+### Both CBIN generations
+
+A file's header type sits at `0x04` and decides the container, not the body:
+
+| | type 1 | type 0 |
+|---|---|---|
+| header | 44 bytes | 24 bytes |
+| checksum | CRC-32 (ISO-HDLC) at `0x18`, over the body | CRC-16 (IBM-3740) in the last two bytes, over everything before them |
+| body starts | `0x2c` | `0x18` |
+
+so the same content is 18 bytes shorter as type 0. `common::container` reads and
+writes both, and every reader re-emits a file in the generation it arrived in.
+The Electro 5 factory banks, the whole Stage 2 export and the Stage EX are type
+0; almost everything written by an Electro 5 in the field is type 1.
+
+⚠️ A type-0 file's crc16 covers its **header** as well as its body, so patching a
+tag in place invalidates it where the type-1 crc32 would not notice.
 
 ## Usage
 
@@ -78,6 +97,30 @@ surface in one run, and a `.skip.` specimen shows up as an ignored case. `tests/
 holds what a per-specimen harness cannot express — a named specimen read field by
 field, and the assertions that span the whole corpus.
 
+`tests/containers.rs` is the sweep across **every** instrument the corpus covers.
+It classifies each of the 4,000-odd CBIN files at the level they have in common —
+`decoded` (a schema accounts for the body and it re-emits byte for byte),
+`container` (the container reads and checksums, the body is one unknown region),
+`refused` — and holds per-extension and per-outcome floors that ratchet up only.
+An unknown format is a classification, not a failure; a file sliding *down* a
+class is the failure.
+
+### Differential and factory specimens
+
+The corpus holds two kinds of file, and its rule is machine-checkable: **a path
+with a `factory/` component is vendor material and carries no filename oracle**.
+Everything else in a model directory is differential — a change-one-knob patch
+whose filename encodes its settings.
+
+So the oracle-driven checks filter on `is_factory` (`tests/common/mod.rs`) and a
+`coverage/no_factory_in_the_oracle_sweep` trial asserts none leaked in, while
+round-trip and container sweeps take the whole tree. Nothing here needs a
+hand-maintained exclusion list, and a new model directory cannot break one.
+
+`NORD_CORPUS_DIR` names the **corpus root** — the directory holding `ne5/`,
+`ne6/`, … and `library/` — not one model. A suite that is about one instrument
+joins its own directory (`ne5_dir()`).
+
 ```sh
 cargo test -p nord-format                       # minimal suite (inline unit tests)
 
@@ -95,6 +138,8 @@ nix build .#checks.<system>.nord-format-corpus
 
 `tests/corpus_rev.txt` names the corpus revision the suite is blessed against, and
 `corpus_dir()` refuses a checkout sitting anywhere else — see `tests/common/mod.rs`.
+A checkout git cannot answer for is passed, which is how the Nix store copy runs:
+its revision is the pin itself.
 `tests/corpus_guard.rs` runs under every feature set and fails when `NORD_CORPUS_DIR`
 is set without `--features corpus`, since that run verifies none of the decode.
 
