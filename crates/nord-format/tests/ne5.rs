@@ -665,6 +665,8 @@ fn test_ne5_program_read_write_center_panel() {
 
     let center_panel_re = Regex::new(r"([ospx])([01])([01])_([0-9.-]+)_([ospx])([01])([01])([01])_([0-9.-]+)_([0-9.-]+)_([0-9.-]+)_([0-9.-]+)_([0-9.-]+)[.](skip[.])?ne5p$").unwrap();
 
+    let mut checks = 0usize;
+
     for path in paths {
         let inner = path.unwrap();
 
@@ -855,6 +857,7 @@ fn test_ne5_program_read_write_center_panel() {
                             path
                         );
                     }
+                    checks += 1;
                 }
                 _ => panic!("expected electro5 song in file {}", path),
             }
@@ -862,6 +865,12 @@ fn test_ne5_program_read_write_center_panel() {
             panic!("invalid file name: {}", path)
         }
     }
+
+    assert!(
+        checks > 0,
+        "no center panel specimens checked in {} — is the corpus present?",
+        test_files.display(),
+    );
 }
 
 #[test]
@@ -871,6 +880,8 @@ fn test_ne5_program_read_write_gain() {
     let paths = fs::read_dir(&test_files).unwrap();
 
     let gain_re = Regex::new(r"([0-9.-]+)[.](skip[.])?ne5p$").unwrap();
+
+    let mut checks = 0usize;
 
     for path in paths {
         let inner = path.unwrap();
@@ -908,6 +919,7 @@ fn test_ne5_program_read_write_gain() {
                         "gain mismatch in file {}",
                         path
                     );
+                    checks += 1;
                 }
                 _ => panic!("expected electro5 song in file {}", path),
             }
@@ -915,6 +927,12 @@ fn test_ne5_program_read_write_gain() {
             panic!("invalid file name: {}", path)
         }
     }
+
+    assert!(
+        checks > 0,
+        "no gain specimens checked in {} — is the corpus present?",
+        test_files.display(),
+    );
 }
 
 #[test]
@@ -926,6 +944,8 @@ fn test_ne5_program_read_write_fx() {
     let gain_re =
         Regex::new(r"fx([0-9])_([0-9])([0-9])([0-9])_([0-9.-]+)_?([0-9.-]+)?[.](skip[.])?ne5p$")
             .unwrap();
+
+    let mut checks = 0usize;
 
     for path in paths {
         let inner = path.unwrap();
@@ -1134,6 +1154,7 @@ fn test_ne5_program_read_write_fx() {
                         "read/write mismatch in file {}",
                         path
                     );
+                    checks += 1;
                 }
                 _ => panic!("expected electro5 song in file {}", path),
             }
@@ -1141,8 +1162,39 @@ fn test_ne5_program_read_write_fx() {
             panic!("invalid file name: {}", path)
         }
     }
+
+    assert!(
+        checks > 0,
+        "no fx specimens checked in {} — is the corpus present?",
+        test_files.display(),
+    );
 }
 
+/// A 0..127 knob against the value its filename names.
+///
+/// ⚠️ At a stop the capture is exact, and mid-travel it is not: the filename records the
+/// value the operator was aiming at, the file the position the knob landed on. Every
+/// knob the corpus captures at mid-travel *with* a centre detent — the three EQ gains,
+/// decay/release at sustain — is exact; the two without one, EQ freq and sample attack,
+/// sit a few counts off. A misplaced bit range moves a value by at least a factor of
+/// two, so the slack costs the oracle nothing.
+fn assert_knob(stored: u8, named: u8, what: &str, path: &str) {
+    const SLACK: u8 = 4;
+    let ok = match named {
+        0 | 127 => stored == named,
+        _ => stored.abs_diff(named) <= SLACK,
+    };
+    assert!(
+        ok,
+        "{what} is {stored}, filename says {named}, in file {path}"
+    );
+}
+
+/// `a_bbbcccdddeee.ne5p` — a: part select, then bass, freq, freq gain and treble. See
+/// `programs/equalizer/README.md`.
+///
+/// The panel's "off" position is a bit of its own, so the filename's four positions are
+/// two fields: `equalizer_on`, and which part the EQ reaches when it is on.
 #[test]
 fn test_ne5_program_read_write_equalizer() {
     let test_files = corpus_dir().join("programs/equalizer");
@@ -1151,6 +1203,8 @@ fn test_ne5_program_read_write_equalizer() {
 
     let equalizer_re =
         Regex::new(r"([0-9]+)_([0-9]{3})([0-9]{3})([0-9]{3})([0-9]{3})[.](skip[.])?ne5p$").unwrap();
+
+    let mut checks = 0usize;
 
     for path in paths {
         let inner = path.unwrap();
@@ -1169,11 +1223,11 @@ fn test_ne5_program_read_write_equalizer() {
                 continue;
             };
 
-            let _part_select = u8::from_str(matches.get(1).unwrap().as_str()).unwrap();
-            let _bass = u8::from_str(matches.get(2).unwrap().as_str()).unwrap();
-            let _freq = u8::from_str(matches.get(3).unwrap().as_str()).unwrap();
-            let _freq_gain = u8::from_str(matches.get(4).unwrap().as_str()).unwrap();
-            let _treble = u8::from_str(matches.get(5).unwrap().as_str()).unwrap();
+            let part_select = u8::from_str(matches.get(1).unwrap().as_str()).unwrap();
+            let bass = u8::from_str(matches.get(2).unwrap().as_str()).unwrap();
+            let freq = u8::from_str(matches.get(3).unwrap().as_str()).unwrap();
+            let freq_gain = u8::from_str(matches.get(4).unwrap().as_str()).unwrap();
+            let treble = u8::from_str(matches.get(5).unwrap().as_str()).unwrap();
 
             match program {
                 Entity::Program(nord_format::Program::Electro5(program)) => {
@@ -1186,6 +1240,55 @@ fn test_ne5_program_read_write_equalizer() {
                         "read/write mismatch in file {}",
                         path
                     );
+
+                    let equalizer = &program.schema.effects_panel;
+                    assert_eq!(
+                        equalizer.equalizer_on,
+                        part_select != 0,
+                        "equalizer on mismatch in file {}",
+                        path
+                    );
+                    // Off leaves the part where it was, so it is the one position the
+                    // filename does not name.
+                    if part_select != 0 {
+                        assert_eq!(
+                            equalizer.equalizer_part,
+                            match part_select {
+                                1 => EqualizerPart::Lower,
+                                2 => EqualizerPart::Upper,
+                                3 => EqualizerPart::Both,
+                                a => panic!("unknown equalizer part {} in file {}", a, path),
+                            },
+                            "equalizer part mismatch in file {}",
+                            path
+                        );
+                    }
+
+                    assert_knob(
+                        equalizer.equalizer_bass.as_u8(),
+                        bass,
+                        "equalizer bass",
+                        &path,
+                    );
+                    assert_knob(
+                        equalizer.equalizer_freq.as_u8(),
+                        freq,
+                        "equalizer freq",
+                        &path,
+                    );
+                    assert_knob(
+                        equalizer.equalizer_freq_gain.as_u8(),
+                        freq_gain,
+                        "equalizer freq gain",
+                        &path,
+                    );
+                    assert_knob(
+                        equalizer.equalizer_treble.as_u8(),
+                        treble,
+                        "equalizer treble",
+                        &path,
+                    );
+                    checks += 1;
                 }
                 _ => panic!("expected electro5 song in file {}", path),
             }
@@ -1193,8 +1296,20 @@ fn test_ne5_program_read_write_equalizer() {
             panic!("invalid file name: {}", path)
         }
     }
+
+    assert!(
+        checks > 0,
+        "no equalizer specimens checked in {} — is the corpus present?",
+        test_files.display(),
+    );
 }
 
+/// `abc_dd_eee_fggg.ne5p` — a: part, b: dynamics, c: filter, dd: sample number, eee:
+/// attack, f/ggg: decay-release. See `programs/sample/README.md`.
+///
+/// `test_ne5_program_sample_id` reads the same filenames from the other end, for the
+/// slot and the dependency id it resolves to. What is left to this one is the part the
+/// sample plays on and the envelope.
 #[test]
 fn test_ne5_program_read_sample() {
     let test_files = corpus_dir().join("programs/sample");
@@ -1205,6 +1320,8 @@ fn test_ne5_program_read_sample() {
         r"([0-9])([0-9])([0-9])_([a-fA-F0-9]{2})_([0-9]{3})_([dsr])([0-9]{3})[.](skip[.])?ne5p$",
     )
     .unwrap();
+
+    let mut checks = 0usize;
 
     for path in paths {
         let inner = path.unwrap();
@@ -1223,13 +1340,14 @@ fn test_ne5_program_read_sample() {
                 continue;
             };
 
-            let _part_select = u8::from_str(matches.get(1).unwrap().as_str()).unwrap();
-            let _dynamics = u8::from_str(matches.get(2).unwrap().as_str()).unwrap();
-            let _filter = u8::from_str(matches.get(3).unwrap().as_str()).unwrap();
-            let _sample_id = matches.get(4).unwrap().as_str();
-            let _attack = u8::from_str(matches.get(5).unwrap().as_str()).unwrap();
-            let _decay_release_type = matches.get(6).unwrap().as_str();
-            let _decay_release = u8::from_str(matches.get(7).unwrap().as_str()).unwrap();
+            let part_select = u8::from_str(matches.get(1).unwrap().as_str()).unwrap();
+            let dynamics = u8::from_str(matches.get(2).unwrap().as_str()).unwrap();
+            let filter = matches.get(3).unwrap().as_str() == "1";
+            // The panel shows a 1-based number; the field stores the slot.
+            let number = panel_number(matches.get(4).unwrap().as_str()) - 1;
+            let attack = u8::from_str(matches.get(5).unwrap().as_str()).unwrap();
+            let decay_release_type = matches.get(6).unwrap().as_str();
+            let decay_release = u8::from_str(matches.get(7).unwrap().as_str()).unwrap();
 
             match program {
                 Entity::Program(nord_format::Program::Electro5(program)) => {
@@ -1242,6 +1360,57 @@ fn test_ne5_program_read_sample() {
                         "read/write mismatch in file {}",
                         path
                     );
+
+                    let center = &program.schema.center_panel;
+                    let (part, enabled) = match part_select {
+                        0 => (center.lower_part, center.lower_enabled),
+                        1 => (center.upper_part, center.upper_enabled),
+                        a => panic!("unknown part {} in file {}", a, path),
+                    };
+                    assert_eq!(
+                        (part, enabled),
+                        (Instrument::Sample, true),
+                        "sample part mismatch in file {}",
+                        path
+                    );
+
+                    let sample = &program.schema.sample_panel;
+                    assert_eq!(
+                        sample.dynamics, dynamics,
+                        "sample dynamics mismatch in file {}",
+                        path
+                    );
+                    assert_eq!(
+                        sample.filter, filter,
+                        "sample filter mismatch in file {}",
+                        path
+                    );
+                    assert_eq!(
+                        sample.number, number,
+                        "sample number mismatch in file {}",
+                        path
+                    );
+                    assert_knob(sample.attack.as_u8(), attack, "sample attack", &path);
+                    // One knob, three regimes: decay below the midpoint, sustain at it,
+                    // release above. The filename names both the number and which side
+                    // of the midpoint it is meant to fall on.
+                    assert_knob(
+                        sample.decay_release.as_u8(),
+                        decay_release,
+                        "sample decay/release",
+                        &path,
+                    );
+                    let regime = match decay_release {
+                        0..=63 => "d",
+                        64 => "s",
+                        _ => "r",
+                    };
+                    assert_eq!(
+                        regime, decay_release_type,
+                        "decay/release {} is not a {} in file {}",
+                        decay_release, decay_release_type, path
+                    );
+                    checks += 1;
                 }
                 _ => panic!("expected electro5 song in file {}", path),
             }
@@ -1249,6 +1418,12 @@ fn test_ne5_program_read_sample() {
             panic!("invalid file name: {}", path)
         }
     }
+
+    assert!(
+        checks > 0,
+        "no sample specimens checked in {} — is the corpus present?",
+        test_files.display(),
+    );
 }
 
 #[test]
