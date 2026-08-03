@@ -23,6 +23,7 @@
 mod common;
 
 use common::{all_programs, ne5_dir, read_program, rows};
+use nord_format::common::container;
 use nord_format::crc::MultipartCrc32;
 use nord_format::electro5::program::FILE_LEN;
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,6 +31,11 @@ use std::fs::read;
 use std::io::Cursor;
 
 /// First byte of the panel body — everything before it is the CBIN header.
+///
+/// ⚠️ Every offset here is into the **type-1 image**, so specimens are widened before
+/// they are measured (see [`image`]). The body is the same 121 bytes in either
+/// generation; only the header around it differs, and a type-0 specimen read at these
+/// offsets would be measuring its header.
 const BODY: usize = 0x2c;
 /// Bits of body a program has. The measurement's denominator.
 const BODY_BITS: usize = (FILE_LEN - BODY) * 8;
@@ -56,6 +62,12 @@ const BASES: &[&str] = &[
 const MIN_VARYING: usize = 556;
 const MIN_READ: usize = 536;
 const MAX_BLIND: usize = 68;
+
+/// One specimen as the type-1 image every offset here is written against.
+fn image(path: &std::path::Path) -> Vec<u8> {
+    let bytes = read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    container::widen(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
 
 /// `0x51[3]` — where a body bit sits, as a reader of the format notes would write it.
 fn spell(bit: usize) -> String {
@@ -111,7 +123,7 @@ fn varying_bits() -> BTreeSet<usize> {
     let mut one = vec![false; BODY_BITS];
 
     for path in &programs {
-        let bytes = read(path).unwrap();
+        let bytes = image(path);
         assert_eq!(bytes.len(), FILE_LEN, "{} is not a program", path.display());
         for bit in 0..BODY_BITS {
             let set = bytes[BODY + bit / 8] >> (bit % 8) & 1 == 1;
@@ -140,7 +152,7 @@ fn every_body_bit_is_accounted_for() {
     for base in BASES {
         let path = root.join(base);
         assert!(path.is_file(), "base specimen {base} is missing");
-        let bytes = read(&path).unwrap();
+        let bytes = image(&path);
         let baseline: Vec<String> = rows(&read_program(&path)).iter().map(render).collect();
 
         for bit in 0..BODY_BITS {
