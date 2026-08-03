@@ -75,9 +75,18 @@ cargo test -p nord-format                       # minimal suite (inline unit tes
 NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
   cargo test -p nord-format --features corpus
 
+# Everything both crates have, which is what a change should be run against:
+NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+  cargo test --workspace --features nord-usb/replay,nord-format/corpus
+
 # With nix
 nix build .#checks.<system>.nord-format-corpus
 ```
+
+`tests/corpus_rev.txt` names the corpus revision the suite is blessed against, and
+`corpus_dir()` refuses a checkout sitting anywhere else — see `tests/common/mod.rs`.
+`tests/corpus_guard.rs` runs under every feature set and fails when `NORD_CORPUS_DIR`
+is set without `--features corpus`, since that run verifies none of the decode.
 
 ## Where this fits
 

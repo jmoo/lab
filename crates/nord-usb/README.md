@@ -117,11 +117,16 @@ with its own encoder. No hardware, no platform dependency.
 
 ```sh
 cargo test -p nord-usb --features replay
+
+# Everything both crates have, which is what a change should be run against:
+NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+  cargo test --workspace --features nord-usb/replay,nord-format/corpus
 ```
 
 ⚠️ `replay` is not a default feature, so a bare `cargo test -p nord-usb` compiles
 the golden tests out and reports a pass having verified none of the wire encoding.
-The Nix build enables it via `[package.metadata.nix] testFeatures` in `Cargo.toml`.
+The Nix build enables it via `[package.metadata.nix] testFeatures` in `Cargo.toml`,
+and `tests/replay_guard.rs` fails the run when `NORD_CORPUS_DIR` is set without it.
 
 ## Status
 
