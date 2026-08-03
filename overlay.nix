@@ -52,6 +52,10 @@ lib'.composeManyExtensions [
 
     # Private repository of clavia nord files to test nord-format against
     nord-corpus = builtins.fetchGit {
+      # ⚠️ The pinned rev lives on `size-tiering`, not the default branch, and
+      # `fetchGit` only fetches the refs it is told about — without this it reports the
+      # rev as not found. Drop it when the branch merges.
+      ref = "size-tiering";
       rev = final.nord-corpus-rev;
       url = "git+ssh://git@github.com/jmoo/nord-corpus.git";
     };
@@ -60,7 +64,7 @@ lib'.composeManyExtensions [
     # it without pulling the private repo. It must equal
     # `crates/nord-format/tests/corpus_rev.txt`, which the suite blesses its specimen
     # expectations against — that check is what holds the two together.
-    nord-corpus-rev = "d9626c366ea0143ef498c9d00b30e4bd01ee4252";
+    nord-corpus-rev = "d5f4374ec2085cb689db43de218b59c123335483";
 
     nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 
