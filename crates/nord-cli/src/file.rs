@@ -13,7 +13,7 @@ use crate::slot::shown;
 use crate::ui::Ui;
 
 /// The format tag a class's files carry, or `None` for a class with no known tag.
-fn tag(class: ObjectClass) -> Option<&'static str> {
+pub(crate) fn tag(class: ObjectClass) -> Option<&'static str> {
     match class {
         ObjectClass::Piano => Some(common::piano::FORMAT),
         ObjectClass::Sample => Some(common::sample::FORMAT),
@@ -185,7 +185,7 @@ pub fn deps(ui: &Ui, path: &Path, class: ObjectClass) -> Result<(), String> {
 }
 
 /// The format tag a decoded entity would carry on disk.
-fn entity_tag(entity: &Entity) -> &'static str {
+pub(crate) fn entity_tag(entity: &Entity) -> &'static str {
     match entity {
         Entity::Program(Program::Electro5(_)) => electro5::program::FORMAT,
         Entity::Live(Live::Electro5(_)) => electro5::live::FORMAT,

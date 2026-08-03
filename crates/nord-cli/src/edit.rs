@@ -1,7 +1,8 @@
-//! `nord program edit` — change fields inside a program.
+//! `nord program edit` and `nord live edit` — change fields inside a program body.
 //!
 //! Field paths and values come straight from `#[bitpanel]`, so `--fields` cannot go
-//! stale and a field becomes settable by being declared.
+//! stale and a field becomes settable by being declared. The live buffer is the program
+//! body under another tag, so both nouns run this one command with the class fixed.
 //!
 //! A file and a slot are the same command. The slot form is a read-modify-write over
 //! USB, so it obeys the rule every mutation obeys — describe the target, then refuse
@@ -9,16 +10,18 @@
 
 use std::path::Path;
 
+use nord_format::common::bank;
 use nord_format::electro5;
-use nord_format::{Entity, Program};
+use nord_format::electro5::program::Schema;
+use nord_format::{Entity, Live, Program};
 use nord_usb::ObjectClass;
 
 use crate::slot::Target;
 use crate::ui::Ui;
 use crate::EditArgs;
 
-pub fn run(ui: &Ui, args: EditArgs) -> Result<(), String> {
-    // No target is `--fields` or `-o` with nothing to read: a fresh default program.
+pub fn run(ui: &Ui, args: EditArgs, class: ObjectClass) -> Result<(), String> {
+    // No target is `--fields` or `-o` with nothing to read: a fresh default object.
     let target = args
         .target
         .as_deref()
@@ -29,45 +32,23 @@ pub fn run(ui: &Ui, args: EditArgs) -> Result<(), String> {
         Some(Target::File(path)) => {
             std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?
         }
-        Some(Target::Slot(at)) => crate::device::fetch(*at, ObjectClass::Program)?,
-        None => {
-            let entity = Entity::Program(Program::Electro5(electro5::Program::new(
-                (0, 0).try_into().map_err(|e| format!("{e}"))?,
-            )));
-            nord_format::to_bytes(&entity).map_err(|e| e.to_string())?
-        }
+        Some(Target::Slot(at)) => crate::device::fetch(*at, class)?,
+        None => fresh(class)?,
     };
 
     let mut entity = nord_format::from_stream(&mut std::io::Cursor::new(&original))
         .map_err(|e| e.to_string())?;
-    let Entity::Program(Program::Electro5(program)) = &mut entity else {
-        return Err("edit only understands Electro 5 programs (.ne5p)".into());
+    let staged = match (&mut entity, class) {
+        (Entity::Program(Program::Electro5(p)), ObjectClass::Program) => {
+            stage(ui, &args, &mut p.schema)?
+        }
+        (Entity::Live(Live::Electro5(l)), ObjectClass::Live) => stage(ui, &args, &mut l.schema)?,
+        _ => return Err(mismatch(&entity, class)),
     };
-
-    if args.fields {
-        list_fields(ui, &program.schema);
+    // `--fields` has listed them and is done.
+    let Some(changed) = staged else {
         return Ok(());
-    }
-    if args.set.is_empty() {
-        return Err("nothing to do: pass --set PATH=VALUE, or --fields to see what exists".into());
-    }
-
-    // Every change lands before anything is written, so a bad path or an out-of-range
-    // value cannot leave a half-edited program behind.
-    let before = program.schema.fields();
-    for assignment in &args.set {
-        let (path, value) = assignment
-            .split_once('=')
-            .ok_or_else(|| format!("expected PATH=VALUE, got {assignment:?}"))?;
-        program
-            .schema
-            .set_field(path.trim(), value)
-            .map_err(|e| e.to_string())?;
-    }
-    warn_on_sticky_pairs(ui, &args.set);
-
-    let after = program.schema.fields();
-    let changed = report_changes(ui, &before, &after);
+    };
     if changed == 0 {
         ui.note("no field changed; writing nothing");
         return Ok(());
@@ -93,18 +74,84 @@ pub fn run(ui: &Ui, args: EditArgs) -> Result<(), String> {
             ui.confirm(args.yes)?;
             write_file(ui, &path, &edited)
         }
-        (Some(Target::Slot(at)), None) => crate::device::send(
-            ui,
-            &edited,
-            at,
-            ObjectClass::Program,
-            args.yes,
-            "the edited program",
-        ),
+        (Some(Target::Slot(at)), None) => match class {
+            ObjectClass::Program => {
+                crate::device::send(ui, &edited, at, class, args.yes, "the edited program")
+            }
+            // ⚠️ `send` deletes the destination to make room, and whether the live
+            // buffer — the panel itself — survives a class-6 delete/write is
+            // unconfirmed on hardware. Until it is, an edited live slot stops at a file.
+            _ => Err("writing the live buffer back over USB is unproven; \
+                 give -o a path to save the edit as a .ne5l file"
+                .into()),
+        },
         (None, None) => {
-            Err("editing a default program needs -o: there is nothing to write back to".into())
+            Err("editing a fresh default needs -o: there is nothing to write back to".into())
         }
     }
+}
+
+/// The bytes of a fresh default object: what a target-less `--fields` lists and a
+/// target-less `-o` starts from.
+fn fresh(class: ObjectClass) -> Result<Vec<u8>, String> {
+    let entity = match class {
+        ObjectClass::Program => Entity::Program(Program::Electro5(electro5::Program::new(
+            (0, 0).try_into().map_err(|e| format!("{e}"))?,
+        ))),
+        ObjectClass::Live => Entity::Live(Live::Electro5(electro5::Live::new(
+            (0, 0).try_into().map_err(|e| format!("{e}"))?,
+        ))),
+        other => return Err(format!("edit does not exist for {}", other.label())),
+    };
+    nord_format::to_bytes(&entity).map_err(|e| e.to_string())
+}
+
+/// The target decoded, but not to what this noun edits.
+fn mismatch(entity: &Entity, class: ObjectClass) -> String {
+    let got = crate::file::entity_tag(entity);
+    // Steer only to a noun that has an `edit`.
+    let steer = match got {
+        "ne5p" => " — try `nord program edit`",
+        "ne5l" => " — try `nord live edit`",
+        _ => "",
+    };
+    format!(
+        "this command edits {} ({}); the target holds {got}{steer}",
+        class.label(),
+        crate::file::tag(class).unwrap_or("?"),
+    )
+}
+
+/// List the fields (`--fields`, `None`) or apply every `--set`, returning how many
+/// fields moved.
+fn stage<L: bank::Location>(
+    ui: &Ui,
+    args: &EditArgs,
+    schema: &mut Schema<L>,
+) -> Result<Option<usize>, String> {
+    if args.fields {
+        list_fields(ui, schema);
+        return Ok(None);
+    }
+    if args.set.is_empty() {
+        return Err("nothing to do: pass --set PATH=VALUE, or --fields to see what exists".into());
+    }
+
+    // Every change lands before anything is written, so a bad path or an out-of-range
+    // value cannot leave a half-edited program behind.
+    let before = schema.fields();
+    for assignment in &args.set {
+        let (path, value) = assignment
+            .split_once('=')
+            .ok_or_else(|| format!("expected PATH=VALUE, got {assignment:?}"))?;
+        schema
+            .set_field(path.trim(), value)
+            .map_err(|e| e.to_string())?;
+    }
+    warn_on_sticky_pairs(ui, &args.set);
+
+    let after = schema.fields();
+    Ok(Some(report_changes(ui, &before, &after)))
 }
 
 fn write_file(ui: &Ui, path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -191,7 +238,7 @@ fn print_byte_diff(ui: &Ui, before: &[u8], after: &[u8]) {
     }
 }
 
-fn list_fields(ui: &Ui, schema: &electro5::program::Schema<electro5::program::Location>) {
+fn list_fields<L: bank::Location>(ui: &Ui, schema: &Schema<L>) {
     ui.out(format!(
         "{:<40} {:<12} {:<28} {}",
         "path", "bits", "value", "accepts"
@@ -213,5 +260,31 @@ fn list_fields(ui: &Ui, schema: &electro5::program::Schema<electro5::program::Lo
             "{:<40} {:<12} {value:<28} {accepts}",
             f.path, f.spec.placement,
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A wrong-format target must steer to the noun whose `edit` reads it, and never
+    /// to one that has no `edit` at all.
+    #[test]
+    fn a_mismatched_target_steers_to_the_noun_that_edits_it() {
+        let live = Entity::Live(Live::Electro5(electro5::Live::new(
+            (0, 0).try_into().unwrap(),
+        )));
+        let err = mismatch(&live, ObjectClass::Program);
+        assert!(err.contains("nord live edit"), "{err}");
+
+        let program = Entity::Program(Program::Electro5(electro5::Program::new(
+            (0, 0).try_into().unwrap(),
+        )));
+        let err = mismatch(&program, ObjectClass::Live);
+        assert!(err.contains("nord program edit"), "{err}");
+
+        // Settings have no edit anywhere, so the message must not invent one.
+        let settings = Entity::Settings(nord_format::Settings::Electro5(electro5::Settings::new()));
+        assert!(!mismatch(&settings, ObjectClass::Program).contains("edit`"));
     }
 }

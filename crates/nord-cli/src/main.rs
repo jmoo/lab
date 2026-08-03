@@ -143,9 +143,24 @@ enum ProgramAction {
 ///
 /// The live buffer is the panel as it stands, not a library — there is nothing to name,
 /// nothing to delete, and `select` is what the *other* classes do to it. What is left is
-/// the read-only subset, spelled exactly as [`SlotAction`] spells it.
+/// the read-only subset, spelled exactly as [`SlotAction`] spells it, plus `edit`,
+/// whose output stops at a file.
 #[derive(Subcommand)]
 enum LiveAction {
+    #[command(flatten)]
+    Slot(LiveSlotAction),
+
+    /// Change fields inside a live slot, in a `.ne5l` file.
+    ///
+    /// The live buffer is the program body under another tag, so the fields are exactly
+    /// `nord program edit`'s. A slot target is read off the instrument but never
+    /// written back — the edit needs `-o`.
+    Edit(EditArgs),
+}
+
+/// The [`SlotAction`] verbs the live buffer keeps, spelled identically.
+#[derive(Subcommand)]
+enum LiveSlotAction {
     /// Read a live slot off the instrument, or a `.ne5l` file. Read-only.
     ///
     /// Prints a summary by default; with `--out` writes the file instead.
@@ -316,9 +331,10 @@ enum SlotAction {
 
 #[derive(Args)]
 pub struct EditArgs {
-    /// A `.ne5p` file, or a slot on the instrument (`7:4`). A slot makes this a
-    /// read-modify-write over USB, so it is a mutation and obeys `--yes`. Omit it to
-    /// start from a fresh default program, which then needs `-o`.
+    /// A file (`.ne5p` under `nord program`, `.ne5l` under `nord live`), or a slot on
+    /// the instrument (`7:4`). A slot makes this a read-modify-write over USB, so it is
+    /// a mutation and obeys `--yes`. Omit it to start from a fresh default, which then
+    /// needs `-o`.
     #[arg(
         value_name = "FILE|BANK:SLOT",
         required_unless_present_any = ["fields", "out"],
@@ -334,11 +350,11 @@ pub struct EditArgs {
     pub dry_run: bool,
 
     /// List every settable field with its placement and current value, then exit. With
-    /// no target, lists the fields of a default program.
+    /// no target, lists the fields of a fresh default.
     #[arg(long)]
     pub fields: bool,
 
-    /// Write the edited program here instead of over the input file.
+    /// Write the edit here instead of over the input file.
     #[arg(short, long, value_name = "FILE")]
     pub out: Option<PathBuf>,
 
@@ -366,10 +382,13 @@ fn main() -> ExitCode {
         },
         Command::Program { action } => match action {
             ProgramAction::Slot(action) => slot_action(&ui, action, ObjectClass::Program),
-            ProgramAction::Edit(args) => edit::run(&ui, args),
+            ProgramAction::Edit(args) => edit::run(&ui, args, ObjectClass::Program),
         },
         Command::Setlist { action } => slot_action(&ui, action, ObjectClass::SetList),
-        Command::Live { action } => slot_action(&ui, action.into(), ObjectClass::Live),
+        Command::Live { action } => match action {
+            LiveAction::Slot(action) => slot_action(&ui, action.into(), ObjectClass::Live),
+            LiveAction::Edit(args) => edit::run(&ui, args, ObjectClass::Live),
+        },
         Command::Raw { class, action } => slot_action(&ui, action, ObjectClass::from_raw(class)),
     };
 
@@ -382,10 +401,10 @@ fn main() -> ExitCode {
     }
 }
 
-impl From<LiveAction> for SlotAction {
-    fn from(action: LiveAction) -> SlotAction {
+impl From<LiveSlotAction> for SlotAction {
+    fn from(action: LiveSlotAction) -> SlotAction {
         match action {
-            LiveAction::Get {
+            LiveSlotAction::Get {
                 at,
                 out,
                 body,
@@ -396,8 +415,8 @@ impl From<LiveAction> for SlotAction {
                 body,
                 sweep,
             },
-            LiveAction::Info { at } => SlotAction::Info { at },
-            LiveAction::Deps { at } => SlotAction::Deps { at },
+            LiveSlotAction::Info { at } => SlotAction::Info { at },
+            LiveSlotAction::Deps { at } => SlotAction::Deps { at },
         }
     }
 }
