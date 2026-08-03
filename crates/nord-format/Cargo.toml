@@ -38,3 +38,9 @@ regex = "1"
 [[test]]
 name = "corpus_cases"
 harness = false
+
+# The multi-model container sweep, same harness and for the same reason: 4,000-odd
+# specimens across seven instruments, each of which has to name itself when it moves.
+[[test]]
+name = "containers"
+harness = false
