@@ -52,7 +52,7 @@ lib'.composeManyExtensions [
 
     # Private repository of clavia nord files to test nord-format against
     nord-corpus = builtins.fetchGit {
-      rev = "ca5d1a59a4bf568ebe5264e842b505d73b488923";
+      rev = "d9626c366ea0143ef498c9d00b30e4bd01ee4252";
       url = "git+ssh://git@github.com/jmoo/nord-corpus.git";
     };
 

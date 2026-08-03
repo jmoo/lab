@@ -35,6 +35,7 @@ let
       pkgs,
       lib,
       config,
+      options,
       ...
     }:
     let
@@ -90,6 +91,14 @@ let
         # uwsm owns the systemd session, so disable home-manager's own unit.
         systemd.enable = false;
         xwayland.enable = true;
+      }
+      # ⚠️ Everything above is hyprlang, not lua: `extraConfig` is a `.conf` file and
+      # the `$var` settings are hyprlang syntax. Under `configType = "lua"` — the
+      # home-manager default from 26.05 on — both land in `hyprland.lua`, where
+      # neither is valid. Asahi's pinned home-manager predates the option, hence the
+      # presence check.
+      // lib.optionalAttrs (options.wayland.windowManager.hyprland ? configType) {
+        configType = "hyprlang";
       };
 
       xdg = {
