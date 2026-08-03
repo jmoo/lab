@@ -78,7 +78,7 @@
               # Test nord-format against real clavia nord files.
               # This requires access to a private repository (jmoo/nord-corpus)
               nord-format-corpus = pkgs.nord-format.overrideAttrs (old: {
-                NORD_CORPUS_DIR = "${pkgs.nord-corpus}/ne5";
+                NORD_CORPUS_DIR = "${pkgs.nord-corpus}";
                 cargoTestFlags = old.cargoTestFlags ++ [
                   "--features"
                   "corpus"
@@ -89,7 +89,7 @@
               # Test nord-usb's wire, session and envelope layers against the captured
               # NSM exchange shapes. Same private corpus as nord-format-corpus.
               nord-usb-corpus = pkgs.nord-usb.overrideAttrs (old: {
-                NORD_CORPUS_DIR = "${pkgs.nord-corpus}/ne5";
+                NORD_CORPUS_DIR = "${pkgs.nord-corpus}";
                 cargoTestFlags = old.cargoTestFlags ++ [
                   "--features"
                   "corpus"
@@ -102,6 +102,7 @@
               inherit (pkgs)
                 anki-tool
                 nord-cli
+                nord-corpus-full
                 nord-format
                 nord-usb
                 open-bamboo-networking
