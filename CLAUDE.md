@@ -83,7 +83,7 @@ modules/               # flake-parts modules, auto-imported
   default.nix          #   lab.hosts base options
   {nixos,asahi,darwin}.nix  # platforms + their *{Configurations,Modules} outputs
   nixpkgs.nix          #   nixpkgs.{config,overlays} options + systems + perSystem pkgs/legacyPackages
-  treefmt.nix          #   formatter (nixfmt-tree)
+  treefmt.nix          #   formatter (treefmt-nix: nixfmt, rustfmt, shfmt, taplo)
   {nix,locale}.nix     #   always-on shared config (nix daemon; i18n/timezone)
   <feature>.nix        #   one file per feature toggle (ghostty, shell, …)
   <feature>/           #   multi-file features carry their non-.nix assets alongside
@@ -129,7 +129,7 @@ Under the hood `mkRustCrate` uses `rustPlatform.buildRustPackage` over the whole
 
 ## Code style
 
-- **Always `nix fmt` before committing** (nixfmt-tree, 2-space).
+- **Always `nix fmt` before committing** (treefmt: nixfmt 2-space for `.nix`, rustfmt for `.rs`, shfmt for `.sh`/`.bash`, taplo for `.toml`).
 - **Alphabetize** attribute-set keys.
 - **Single child → dotted path** (`a.b.c = v;`); **2+ children → nested braces** (`a = { … };`). Decide per attrset literal; never merge across separate definitions / `mkMerge` / `mkIf`. A `mkOption { … }` call is *not* an attrset literal — never collapse it to `x.type = …`.
 - Pushed config is a `{ pkgs, ... }:` function so packages resolve at build time; never reference `pkgs` in an option *default* (there is no `pkgs` at the flake-parts level).

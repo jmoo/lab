@@ -40,6 +40,11 @@
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
 
     nudelta.url = "github:donn/nudelta";
+
+    treefmt-nix = {
+      inputs.nixpkgs.follows = "nixpkgs";
+      url = "github:numtide/treefmt-nix";
+    };
   };
 
   outputs =
