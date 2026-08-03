@@ -63,10 +63,16 @@ refinement — never a risk to the write path.
 
 ## Tests
 
-Unit tests live inline (`#[cfg(test)] mod tests`) and run on a plain
-`cargo test`. The **corpus integration suite** (`tests/ne5.rs`) is gated behind
-the `corpus` feature because it needs the specimen corpus, which lives in a
-separate private repo (`jmoo/nord-corpus`)
+Unit tests live inline (`#[cfg(test)] mod tests`) and run on a plain `cargo test`,
+alongside `tests/fixtures.rs` — a set of small **synthetic** specimens in
+`tests/fixtures/`, emitted by this crate's own writers, which give a fresh clone a
+parse / round-trip / checksum suite with no corpus at all. Their filenames are the
+oracle, and `cargo test -p nord-format --test fixtures -- --ignored bless` rewrites
+the bytes from the generator.
+
+The **corpus integration suite** (`tests/ne5.rs`) is gated behind the `corpus`
+feature because it needs the specimen corpus, which lives in a separate private repo
+(`jmoo/nord-corpus`)
 
 ```sh
 cargo test -p nord-format                       # minimal suite (inline unit tests)
