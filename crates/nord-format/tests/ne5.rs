@@ -127,7 +127,7 @@ fn test_ne5_backup_dependency_ids() {
     let backup = ne5_dir().join("usb/backup/full_backup");
 
     // The backup's member list: what the instrument actually shipped. The blobs
-    // themselves are private-tier and absent here, but the listing tells us how many
+    // themselves are R2-tier and absent here, but the listing tells us how many
     // pianos each category held.
     let members = fs::read_to_string(backup.join("backup.members.tsv")).unwrap();
     let mut shipped: BTreeMap<&str, usize> = BTreeMap::new();

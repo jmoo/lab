@@ -12,7 +12,7 @@ lib'.composeManyExtensions [
       # The corpus repository as fetched — deliberately *not* an overlay attribute.
       #
       # ⚠️ The tree carries `manifest.json`, which is the R2 blob address of every
-      # private artifact. This repo is public, so nothing may hand a consumer the raw
+      # R2-tier artifact. This repo is public, so nothing may hand a consumer the raw
       # tree: what lab exposes is `mkCorpus`'s output, which is the filtered git tier
       # plus only the blobs a caller asked for by name.
       nord-corpus-tree = builtins.fetchGit {
@@ -86,19 +86,19 @@ lib'.composeManyExtensions [
       # The same corpus with the manifest's R2-tier blobs spliced in — the multi-hundred-MB
       # bundle archives and their untrimmed captures. Not a check: the blobs live in a
       # private bucket, so building this needs either R2 credentials or a pre-seeded store
-      # (`corpus nix-add`), and `nix flake check` must stay runnable without both. See the
-      # repo README.
+      # (`corpus nix-add`), and `nix flake check` must stay runnable without both. See
+      # `docs/nord-corpus.md`.
       #
       # The ids come from the corpus's own manifest at eval time rather than being copied
       # here: a list of blob ids in a public repo is a list of what the private bucket
       # holds.
-      nord-corpus-full = mkCorpus { blobs = final.nord-corpus.privateIds; };
+      nord-corpus-full = mkCorpus { blobs = final.nord-corpus.r2Ids; };
 
       # Kept beside the fetch rather than inside it so `checks.corpus-rev-agrees` can read
       # it without pulling the private repo. It must equal
       # `crates/nord-format/tests/corpus_rev.txt`, which the suite blesses its specimen
       # expectations against — that check is what holds the two together.
-      nord-corpus-rev = "d5f4374ec2085cb689db43de218b59c123335483";
+      nord-corpus-rev = "961e1b6f2a864448aa0c2f15eeb02a3609ca2e01";
 
       nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 
