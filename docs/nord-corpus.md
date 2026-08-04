@@ -16,29 +16,49 @@ tree: the git tier filtered against the corpus's R2 manifest, with the corpus
 repo's standing assertion that nothing oversized escaped it. Only that output is
 exposed, so no blob address from the manifest reaches this public repo.
 
-## Building the corpus with its R2-tier blobs
+## Building the full corpus: bundles and the sample pool
 
-`packages.nord-corpus-full` is the same assembly with the manifest's private
-blobs — the multi-hundred-megabyte bundle archives and their untrimmed captures —
-spliced in. It is deliberately **not** a check: those blobs live in a private
-bucket, and `nix flake check` has to run without credentials for it.
+`packages.nord-corpus-full` is the same assembly with two private-bucket things
+spliced in: the manifest's R2-tier blobs (the multi-hundred-megabyte bundle
+archives and their untrimmed captures) and the whole 1,018-file vendor sample
+pool, under `library/pool/<real filename>`, alongside the 19 curated specimens
+that already live in `library/specimens/`. It is deliberately **not** a check:
+both live in a private bucket, and `nix flake check` has to run without
+credentials for either.
 
-Each blob is a fixed-output derivation whose output *is* the blob, so the simplest
-way to build it needs no privilege change — fetch the blobs yourself and hand them
-to the store at exactly the path the derivation expects:
+Each item — each blob, each pool file — is its own fixed-output derivation whose
+output *is* the vendor bytes, so the simplest way to build any of it needs no
+privilege change: fetch it yourself and hand it to the store at exactly the path
+the derivation expects.
 
 ```sh
 cd ~/Repos/jmoo/nord-corpus && nix develop
-corpus nix-add <artifact-id>          # once per blob; `corpus doctor` checks R2 setup
+corpus nix-add <artifact-id>           # once per bundle blob; `corpus doctor` checks R2 setup
+corpus nix-add --pool                  # seeds all 1,018 pool files from local disk —
+                                        # $NORD_SAMPLE_POOL, or after `corpus r2 pull`
 
 nix build .#nord-corpus-full
 ```
 
-Once a blob's store path exists Nix considers that derivation satisfied and never
-runs the fetch. The alternative is to give the Nix daemon the `R2_*` variables (in
-a multi-user install it does not inherit yours), which the derivation's own error
-message spells out.
+Once a store path exists Nix considers that derivation satisfied and never runs
+the fetch. The alternative is to give the Nix daemon the `R2_*` variables (in a
+multi-user install it does not inherit yours), which each derivation's own error
+message spells out. Seeded paths carry no GC root — a `nix-collect-garbage` can
+reclaim them, and the next build just re-seeds.
 
 > ⚠️ Never push `nord-corpus-full` or its blobs to a shared binary cache. The
-> outputs are vendor firmware and piano libraries under their own hashes, and
+> outputs are vendor firmware and sample libraries under their own hashes, and
 > content-addressing is not access control.
+
+With the full corpus built, point the whole test matrix at it:
+
+```sh
+NORD_CORPUS_DIR=$(nix build .#nord-corpus-full --print-out-paths) \
+  cargo test --workspace --features nord-usb/corpus,nord-format/corpus
+```
+
+`nord-format`'s container sweep (`tests/containers.rs`) sees the pool
+automatically — `library/pool` gets one trial per file plus completeness floors
+read against the corpus's own `library/library.json`. Against a plain
+`pkgs.nord-corpus` (no pool), the sweep still runs; it just reports one visible
+ignored trial, `library_pool/absent`, instead of silently covering fewer files.
