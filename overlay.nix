@@ -76,7 +76,7 @@ lib'.composeManyExtensions [
 
       nord-cli = prev.lib.addMetaAttrs { mainProgram = "nord"; } prev.nord-cli;
 
-      # The specimen corpus nord-format and nord-usb are tested against: seven model
+      # The specimen corpus nord-format and nord-usb are tested against: the model
       # directories plus the shared sample library, at the pinned revision.
       #
       # `NORD_CORPUS_DIR` points at this whole store path, not at one model — the sweeps

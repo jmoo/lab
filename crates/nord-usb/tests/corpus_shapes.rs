@@ -34,7 +34,7 @@
 //!
 //! Not reproduced, and why:
 //!
-//! * `relink_*` (7 captures) — command `0x35`'s payload semantics are not pinned down,
+//! * `relink_*` — command `0x35`'s payload semantics are not pinned down,
 //!   so the crate builds no typed operation on it and there is nothing to drive.
 //! * the read, write and bundle transfers, the full backup, the firmware update and the
 //!   NSM startup sync — these are several transactions with NSM's host-side browser
