@@ -12,13 +12,8 @@ use nord_format::{electro5, Entity};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The revision of `jmoo/nord-corpus` this suite's expectations were blessed against.
-///
-/// A specimen sweep is only as pinned as the specimens: a checkout at another revision
-/// produces failures that read as decode regressions and are not. The same string is the
-/// `nord-corpus` pin in the flake's `overlay.nix`, which `checks.corpus-rev-agrees` holds
-/// to it.
-const BLESSED_REV: &str = include_str!("../corpus_rev.txt");
+/// The attribute in the flake's `overlay.nix` that pins `jmoo/nord-corpus`.
+const PIN: &str = "nord-corpus-rev";
 
 /// Root of the specimen corpus, taken from `NORD_CORPUS_DIR` — **the whole corpus**,
 /// the directory holding `ne5/`, `ne6/`, … and `library/`, not one model.
@@ -42,33 +37,76 @@ pub fn ne5_dir() -> PathBuf {
     corpus_dir().join("ne5")
 }
 
-/// Refuse a checkout that is not at [`BLESSED_REV`], naming which way it is skewed.
+/// Refuse a checkout that is not at the revision `overlay.nix` pins, naming which way it
+/// is skewed.
 ///
-/// A directory git cannot answer for is passed: that is the Nix store copy, whose
-/// revision is the pin itself, and it has no `.git` at all. A **worktree** root does
-/// answer — its `.git` is a file rather than a directory, which `git -C` resolves the
-/// same way — so a worktree of the corpus is held to the pin like any other checkout.
+/// A specimen sweep is only as pinned as the specimens: a checkout at another revision
+/// produces failures that read as decode regressions and are not.
+///
+/// Two situations pass silently, and both mean the corpus in hand *is* the pinned one:
+/// a directory git cannot answer for is the Nix store assembly, which has no `.git` at
+/// all; and a missing `overlay.nix` is the Nix sandbox, where the crate is built from
+/// the `crates/` workspace alone and the corpus arrives as that same flake's fetch. A
+/// **worktree** root does answer git — its `.git` is a file rather than a directory,
+/// which `git -C` resolves the same way — so a worktree of the corpus is held to the pin
+/// like any other checkout.
 fn check_revision(dir: &Path) {
-    let blessed = BLESSED_REV.trim();
+    let Some(pinned) = pinned_rev() else {
+        return;
+    };
     let Some(head) = git(dir, &["rev-parse", "HEAD"]) else {
         return;
     };
-    if head == blessed {
+    if head == pinned {
         return;
     }
 
     let ancestor = |older: &str, newer: &str| {
         git(dir, &["merge-base", "--is-ancestor", older, newer]).is_some()
     };
-    let fix = if ancestor(blessed, &head) {
-        "the checkout is ahead — re-bless it in tests/corpus_rev.txt and bump the pin in \
-         the flake's overlay.nix"
-    } else if ancestor(&head, blessed) {
+    let fix = if ancestor(&pinned, &head) {
+        "the checkout is ahead — bump nord-corpus-rev in the flake's overlay.nix"
+    } else if ancestor(&head, &pinned) {
         "the checkout is behind — git -C … fetch && git -C … checkout the expected rev"
     } else {
         "the two have diverged, or the expected commit is not in this checkout — fetch it"
     };
-    panic!("corpus at {head}, tests expect {blessed} — {fix}");
+    panic!("corpus at {head}, tests expect {pinned} — {fix}");
+}
+
+/// The corpus revision the flake pins, read out of `overlay.nix` beside this workspace.
+///
+/// `None` where there is no `overlay.nix` to read — see [`check_revision`]. A file that
+/// *is* readable but does not hold exactly one `nord-corpus-rev = "<40 hex>";` binding
+/// panics: a pattern that silently matched nothing would disable the guard without
+/// saying so.
+fn pinned_rev() -> Option<String> {
+    let overlay = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)?
+        .join("overlay.nix");
+    let text = fs::read_to_string(&overlay).ok()?;
+    let found: Vec<&str> = text
+        .match_indices(PIN)
+        .filter_map(|(at, _)| pin_value(&text[at + PIN.len()..]))
+        .collect();
+    match found[..] {
+        [rev] => Some(rev.to_string()),
+        _ => panic!(
+            "{} holds {} `{PIN} = \"<40 hex>\";` bindings, expected exactly one — the \
+             corpus revision guard cannot tell what this workspace is pinned to",
+            overlay.display(),
+            found.len(),
+        ),
+    }
+}
+
+/// The 40-hex value of the `= "…"` that follows, or `None` where this occurrence of the
+/// name is not a binding of it — `overlay.nix` also *reads* the attribute.
+fn pin_value(after_name: &str) -> Option<&str> {
+    let rest = after_name.trim_start().strip_prefix('=')?.trim_start();
+    let rev = rest.strip_prefix('"')?.split('"').next()?;
+    (rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit())).then_some(rev)
 }
 
 /// `git -C dir <args>`, or `None` if git is absent, the directory is not a checkout, or

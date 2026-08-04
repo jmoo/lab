@@ -136,10 +136,12 @@ NORD_CORPUS_DIR=/path/to/nord-corpus \
 nix build .#checks.<system>.nord-format-corpus
 ```
 
-`tests/corpus_rev.txt` names the corpus revision the suite is blessed against, and
-`corpus_dir()` refuses a checkout sitting anywhere else — see `tests/common/mod.rs`.
-A checkout git cannot answer for is passed, which is how the Nix store copy runs:
-its revision is the pin itself.
+`corpus_dir()` refuses a checkout that is not at the revision the flake pins,
+which it reads out of `overlay.nix`'s `nord-corpus-rev` at test time — one pin,
+no second copy to drift. A checkout git cannot answer for is passed, which is how
+the Nix store copy runs: its revision is the pin itself. So is a build with no
+`overlay.nix` beside it, which is the Nix sandbox, where the corpus is that same
+flake's fetch. See `tests/common/mod.rs`.
 `tests/corpus_guard.rs` runs under every feature set and fails when `NORD_CORPUS_DIR`
 is set without `--features corpus`, since that run verifies none of the decode.
 

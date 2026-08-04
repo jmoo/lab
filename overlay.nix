@@ -98,10 +98,12 @@ lib'.composeManyExtensions [
         library = true;
       };
 
-      # Kept beside the fetch rather than inside it so `checks.corpus-rev-agrees` can read
-      # it without pulling the private repo. It must equal
-      # `crates/nord-format/tests/corpus_rev.txt`, which the suite blesses its specimen
-      # expectations against — that check is what holds the two together.
+      # The corpus revision this workspace is pinned to, and the only place it is written.
+      #
+      # ⚠️ The crates' corpus suites parse this binding out of this file at test time to
+      # refuse a checkout at another revision — they match `nord-corpus-rev = "<40 hex>";`
+      # and fail loudly on anything but exactly one match. Keep it a literal one-line
+      # string, and keep it the only such binding here.
       nord-corpus-rev = "78bbc38dcf32f4bfff5370db31f9ca2bb1db6ec9";
 
       nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
