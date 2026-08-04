@@ -8,49 +8,57 @@ holding `ne5/`, `ne6/`, … and `library/`.
 ```sh
 nix build .#checks.<system>.nord-format-corpus   # needs read access to the corpus repo
 nix build .#checks.<system>.nord-usb-corpus
-nix build .#checks.<system>.corpus-rev-agrees    # needs nothing
 ```
 
+`overlay.nix`'s `nord-corpus-rev` is the only place that revision is written. The
+crates' corpus suites parse the binding out of that file at test time and refuse
+a checkout sitting anywhere else, so a local run and a Nix check cannot quietly
+read different specimens. Two cases pass: a corpus git cannot answer for is the
+Nix store assembly, and a build with no `overlay.nix` beside it is the Nix
+sandbox — in both, the corpus in hand *is* the pinned fetch.
+
 `pkgs.nord-corpus` is the corpus's own `nix/corpus.nix` assembly, not the raw
-tree: the git tier filtered against the corpus's R2 manifest, with the corpus
-repo's standing assertion that nothing oversized escaped it. Only that output is
-exposed, so no blob address from the manifest reaches this public repo.
+tree: the git tier filtered against the corpus's `library/library.json`, with the
+corpus repo's standing assertion that nothing oversized escaped it. Only that
+output is exposed, so no R2 address reaches this public repo.
 
-## Building the full corpus: bundles and the sample pool
+## The everything-run: both suites against the full corpus
 
-`packages.nord-corpus-full` is the same assembly with two private-bucket things
-spliced in: the manifest's R2-tier blobs (the multi-hundred-megabyte bundle
-archives and their untrimmed captures) and the whole 1,018-file vendor sample
-pool, under `library/pool/<real filename>`, alongside the 19 curated specimens
-that already live in `library/specimens/`. It is deliberately **not** a check:
-both live in a private bucket, and `nix flake check` has to run without
-credentials for either.
+`packages.nord-corpus-full` is the same assembly with the whole R2 tier spliced
+in — every object `library/library.json` indexes: the multi-hundred-megabyte
+bundle archives and their untrimmed captures at their capture paths, and the
+1,018-file vendor sample pool under `library/pool/<real filename>`, alongside the
+curated specimens that already live in `library/specimens/`.
 
-Each item — each blob, each pool file — is its own fixed-output derivation whose
-output *is* the vendor bytes, so the simplest way to build any of it needs no
-privilege change: fetch it yourself and hand it to the store at exactly the path
-the derivation expects.
+`packages.corpus-full` runs **both** crates' full suites against it, and is the
+one command:
 
 ```sh
 cd ~/Repos/jmoo/nord-corpus && nix develop
-corpus nix-add <artifact-id>           # once per bundle blob; `corpus doctor` checks R2 setup
-corpus nix-add --pool                  # seeds all 1,018 pool files from local disk —
-                                        # $NORD_SAMPLE_POOL, or after `corpus r2 pull`
+corpus nix-add            # seed the store, ~3.5GB; `corpus doctor` checks R2 setup
 
-nix build .#nord-corpus-full
+cd ~/Repos/jmoo/lab
+nix build .#corpus-full
 ```
 
-Once a store path exists Nix considers that derivation satisfied and never runs
-the fetch. The alternative is to give the Nix daemon the `R2_*` variables (in a
-multi-user install it does not inherit yours), which each derivation's own error
-message spells out. Seeded paths carry no GC root — a `nix-collect-garbage` can
-reclaim them, and the next build just re-seeds.
+It is deliberately **not** a check: it needs that seeded store (or R2 credentials
+in the builder), and `nix flake check` has to stay runnable with neither. Either
+leg builds on its own as `.#nord-format-corpus-full` / `.#nord-usb-corpus-full`.
 
-> ⚠️ Never push `nord-corpus-full` or its blobs to a shared binary cache. The
-> outputs are vendor firmware and sample libraries under their own hashes, and
-> content-addressing is not access control.
+Every indexed object is its own fixed-output derivation whose output *is* the
+vendor bytes, and `nix-add` stages each one at exactly the store path that
+derivation expects — once the path exists Nix considers the derivation satisfied
+and never runs the fetch. The alternative is to give the Nix daemon the `R2_*`
+variables (in a multi-user install it does not inherit yours), which each
+derivation's own error message spells out. Seeded paths carry no GC root — a
+`nix-collect-garbage` can reclaim them, and the next build just re-seeds.
 
-With the full corpus built, point the whole test matrix at it:
+> ⚠️ Never push `nord-corpus-full` or the objects it fetches to a shared binary
+> cache. The outputs are vendor firmware and sample libraries under their own
+> hashes, and content-addressing is not access control.
+
+To iterate locally instead, build the corpus alone and point the test matrix at
+it:
 
 ```sh
 NORD_CORPUS_DIR=$(nix build .#nord-corpus-full --print-out-paths) \

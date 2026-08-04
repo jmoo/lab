@@ -55,30 +55,29 @@
       }
       {
         perSystem =
-          { pkgs, ... }:
+          { config, pkgs, ... }:
+          let
+            # One crate's corpus suite, run against a given corpus assembly.
+            corpusSuite =
+              corpus: crate:
+              crate.overrideAttrs (old: {
+                NORD_CORPUS_DIR = "${corpus}";
+                cargoTestFlags = old.cargoTestFlags ++ [
+                  "--features"
+                  "corpus"
+                ];
+                doCheck = true;
+              });
+          in
           {
             checks = {
               # Test nord-format against real clavia nord files.
               # This requires access to a private repository (jmoo/nord-corpus)
-              nord-format-corpus = pkgs.nord-format.overrideAttrs (old: {
-                NORD_CORPUS_DIR = "${pkgs.nord-corpus}";
-                cargoTestFlags = old.cargoTestFlags ++ [
-                  "--features"
-                  "corpus"
-                ];
-                doCheck = true;
-              });
+              nord-format-corpus = corpusSuite pkgs.nord-corpus pkgs.nord-format;
 
               # Test nord-usb's wire, session and envelope layers against the captured
               # NSM exchange shapes. Same private corpus as nord-format-corpus.
-              nord-usb-corpus = pkgs.nord-usb.overrideAttrs (old: {
-                NORD_CORPUS_DIR = "${pkgs.nord-corpus}";
-                cargoTestFlags = old.cargoTestFlags ++ [
-                  "--features"
-                  "corpus"
-                ];
-                doCheck = true;
-              });
+              nord-usb-corpus = corpusSuite pkgs.nord-corpus pkgs.nord-usb;
             };
 
             packages = {
@@ -90,6 +89,22 @@
                 nord-usb
                 open-bamboo-networking
                 ;
+
+              # The everything-run: both suites against the corpus with its R2 tier
+              # spliced in, so the sweeps see the bundle archives, the untrimmed captures
+              # and the whole vendor sample pool.
+              #
+              # ⚠️ Packages, not checks: these need a store seeded by `corpus nix-add`
+              # (or R2 credentials in the builder), and `nix flake check` has to stay
+              # runnable with neither. See `docs/nord-corpus.md`.
+              corpus-full = pkgs.linkFarm "nord-corpus-full-suites" {
+                nord-format = config.packages.nord-format-corpus-full;
+                nord-usb = config.packages.nord-usb-corpus-full;
+              };
+
+              nord-format-corpus-full = corpusSuite pkgs.nord-corpus-full pkgs.nord-format;
+
+              nord-usb-corpus-full = corpusSuite pkgs.nord-corpus-full pkgs.nord-usb;
             };
           };
       };
