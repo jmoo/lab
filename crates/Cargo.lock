@@ -682,6 +682,7 @@ dependencies = [
  "libtest-mimic",
  "nord-bits-derive",
  "regex",
+ "serde_json",
  "thiserror",
  "zip",
 ]

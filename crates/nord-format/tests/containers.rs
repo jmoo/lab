@@ -19,6 +19,12 @@
 //! sliding *down* a class, which the ratcheted floors in [`FILES`] and [`OUTCOMES`]
 //! catch. Never lower a floor to make a run green — a floor going down is the finding.
 //!
+//! `library/pool` — the 1,018-file vendor sample pool `mkCorpus { library = true; }`
+//! splices in — gets the same per-file sweep automatically (nothing excludes it from the
+//! walk), plus completeness floors against the corpus's own `library.json` in
+//! [`pool_coverage`]. A plain corpus has no pool at all; that is not silently fewer
+//! trials, it is one visible ignored trial saying so.
+//!
 //! ```sh
 //! NORD_CORPUS_DIR=/path/to/nord-corpus \
 //!   cargo test -p nord-format --features corpus --test containers
@@ -227,6 +233,126 @@ mod containers {
     const TYPE_0_FLOOR: usize = 1275;
 
     // -----------------------------------------------------------------------
+    // The sample pool
+    // -----------------------------------------------------------------------
+
+    /// `(pool extension, outcome, at least this many files reach it)`, measured against
+    /// the full 1,018-file pool (`nix build .#nord-corpus-full` with `library = true`).
+    ///
+    /// **Ratchets up only**, same rule as [`OUTCOMES`] — library.json cannot supply these
+    /// numbers, since it records what the pool *is*, not what this build can do with it.
+    ///
+    /// All 268 `.nsmp` (v2) decode. All 470 `.nsmp3` (v3) and 280 `.nsmp4` (v4) stop at
+    /// `container` — this build has no schema for the v3/v4 sample body. Nothing in the
+    /// pool is `Refused`.
+    const POOL_OUTCOMES: &[(&str, Outcome, usize)] = &[
+        ("nsmp", Outcome::Decoded, 268),
+        ("nsmp3", Outcome::Container, 470),
+        ("nsmp4", Outcome::Container, 280),
+    ];
+
+    fn library_pool_dir(root: &Path) -> PathBuf {
+        root.join("library").join("pool")
+    }
+
+    /// `library/library.json`'s `totals`, read fresh each run rather than copied into
+    /// this file — a pool that grows updates its own floor, instead of this suite
+    /// silently accepting fewer files than the index claims.
+    fn library_totals(root: &Path) -> serde_json::Value {
+        let path = root.join("library").join("library.json");
+        let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let index: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        index["totals"].clone()
+    }
+
+    /// The pool's filesystem extension for one `library.json` generation — `nsmp` for
+    /// v2, `nsmp<generation>` for v3/v4. Confirmed against the index's own rows.
+    fn pool_extension(generation: &str) -> String {
+        if generation == "2" {
+            "nsmp".to_string()
+        } else {
+            format!("nsmp{generation}")
+        }
+    }
+
+    /// Trials scoped to `library/pool` alone — not the specimens the general sweep
+    /// already counts under the same `library` model bucket, since the pool physically
+    /// duplicates 19 of them under a second path and a floor here must not double-count.
+    fn pool_coverage(root: &Path, pool_dir: &Path, files: &[PathBuf]) -> Vec<Trial> {
+        let totals = library_totals(root);
+        let expected_total = totals["files"].as_u64().unwrap() as usize;
+        let expected_by_generation: Vec<(String, usize)> = totals["by_generation"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(gen, row)| (gen.clone(), row["files"].as_u64().unwrap() as usize))
+            .collect();
+
+        let mut by_extension: BTreeMap<String, usize> = BTreeMap::new();
+        let mut by_outcome: BTreeMap<(String, Outcome), usize> = BTreeMap::new();
+        let mut found_total = 0usize;
+        for path in files.iter().filter(|p| p.starts_with(pool_dir)) {
+            found_total += 1;
+            let bytes = fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let ext = extension(path);
+            let (outcome, _) = classify(path, &bytes);
+            *by_extension.entry(ext.clone()).or_default() += 1;
+            *by_outcome.entry((ext, outcome)).or_default() += 1;
+        }
+        let by_extension = std::sync::Arc::new(by_extension);
+        let by_outcome = std::sync::Arc::new(by_outcome);
+
+        let mut trials = Vec::new();
+
+        trials.push(aggregate(
+            "coverage/library_pool/files/total".to_string(),
+            move || {
+                assert!(
+                    found_total >= expected_total,
+                    "library/pool holds {found_total} files, library.json claims \
+                     {expected_total} — the nix assembly and the index have drifted",
+                );
+            },
+        ));
+
+        for (generation, expected) in expected_by_generation {
+            let ext = pool_extension(&generation);
+            let by_extension = by_extension.clone();
+            let name = format!("coverage/library_pool/files/v{generation}");
+            trials.push(aggregate(name, move || {
+                let found = by_extension.get(&ext).copied().unwrap_or(0);
+                assert!(
+                    found >= expected,
+                    "library/pool holds {found} .{ext} files, library.json claims \
+                     {expected} for generation {generation} — a pool file went missing",
+                );
+            }));
+        }
+
+        for &(ext, outcome, floor) in POOL_OUTCOMES {
+            let by_outcome = by_outcome.clone();
+            let name = format!("coverage/library_pool/outcome/{ext}/{}", outcome.as_str());
+            trials.push(aggregate(name, move || {
+                let found: usize = by_outcome
+                    .iter()
+                    .filter(|((e, o), _)| e == ext && *o >= outcome)
+                    .map(|(_, n)| n)
+                    .sum();
+                assert!(
+                    found >= floor,
+                    "library/pool: {found} .{ext} files reach `{}`, expected at least \
+                     {floor} — support ratchets up, so this is a regression, not a floor \
+                     to lower",
+                    outcome.as_str(),
+                );
+            }));
+        }
+
+        trials
+    }
+
+    // -----------------------------------------------------------------------
     // The harness
     // -----------------------------------------------------------------------
 
@@ -254,6 +380,26 @@ mod containers {
             .collect();
 
         trials.extend(coverage(&root, &files));
+
+        let pool_dir = library_pool_dir(&root);
+        if pool_dir.is_dir() {
+            trials.extend(pool_coverage(&root, &pool_dir, &files));
+        } else {
+            let at = root.clone();
+            trials.push(
+                Trial::test("library_pool/absent".to_string(), move || {
+                    println!(
+                        "library/pool absent under {} — this corpus build has no sample \
+                         pool spliced in (nix build .#nord-corpus-full, not plain \
+                         nord-corpus)",
+                        at.display(),
+                    );
+                    Ok(())
+                })
+                .with_ignored_flag(true),
+            );
+        }
+
         libtest_mimic::run(&args, trials).exit()
     }
 
