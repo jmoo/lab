@@ -255,15 +255,26 @@ mod containers {
         root.join("library").join("pool")
     }
 
-    /// `library/library.json`'s `totals`, read fresh each run rather than copied into
+    /// `library/library.json`'s pool totals, read fresh each run rather than copied into
     /// this file — a pool that grows updates its own floor, instead of this suite
     /// silently accepting fewer files than the index claims.
-    fn library_totals(root: &Path) -> serde_json::Value {
+    ///
+    /// The index covers the whole R2 tier, so the pool's own counts are `totals.pool`.
+    /// `totals.files` is the wider number: it also counts the recorded artifacts, which
+    /// assemble at their capture paths and never under `library/pool`.
+    fn pool_totals(root: &Path) -> serde_json::Value {
         let path = root.join("library").join("library.json");
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let index: serde_json::Value =
             serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        index["totals"].clone()
+        let totals = index["totals"]["pool"].clone();
+        assert!(
+            totals.is_object(),
+            "{}: no totals.pool object — the index schema moved and these floors are \
+             reading nothing",
+            path.display(),
+        );
+        totals
     }
 
     /// The pool's filesystem extension for one `library.json` generation — `nsmp` for
@@ -280,13 +291,18 @@ mod containers {
     /// already counts under the same `library` model bucket, since the pool physically
     /// duplicates 19 of them under a second path and a floor here must not double-count.
     fn pool_coverage(root: &Path, pool_dir: &Path, files: &[PathBuf]) -> Vec<Trial> {
-        let totals = library_totals(root);
-        let expected_total = totals["files"].as_u64().unwrap() as usize;
+        let totals = pool_totals(root);
+        let expected_total = totals["files"].as_u64().expect("totals.pool.files") as usize;
         let expected_by_generation: Vec<(String, usize)> = totals["by_generation"]
             .as_object()
-            .unwrap()
+            .expect("totals.pool.by_generation")
             .iter()
-            .map(|(gen, row)| (gen.clone(), row["files"].as_u64().unwrap() as usize))
+            .map(|(gen, row)| {
+                let files = row["files"]
+                    .as_u64()
+                    .expect("totals.pool.by_generation[].files");
+                (gen.clone(), files as usize)
+            })
             .collect();
 
         let mut by_extension: BTreeMap<String, usize> = BTreeMap::new();
