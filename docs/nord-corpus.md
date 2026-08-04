@@ -1,21 +1,21 @@
 # The Nord specimen corpus
 
 The `nord-*` crates are tested against a specimen corpus in a **separate private
-repo**, pinned by revision in `overlay.nix` and fetched over SSH only when a
-corpus target is built. `NORD_CORPUS_DIR` names the corpus root — the directory
-holding `ne5/`, `ne6/`, … and `library/`.
+repo**, pinned by revision in `crates/corpus_rev.txt` and fetched over SSH only
+when a corpus target is built. `NORD_CORPUS_DIR` names the corpus root — the
+directory holding `ne5/`, `ne6/`, … and `library/`.
 
 ```sh
 nix build .#checks.<system>.nord-format-corpus   # needs read access to the corpus repo
 nix build .#checks.<system>.nord-usb-corpus
 ```
 
-`overlay.nix`'s `nord-corpus-rev` is the only place that revision is written. The
-crates' corpus suites parse the binding out of that file at test time and refuse
-a checkout sitting anywhere else, so a local run and a Nix check cannot quietly
-read different specimens. Two cases pass: a corpus git cannot answer for is the
-Nix store assembly, and a build with no `overlay.nix` beside it is the Nix
-sandbox — in both, the corpus in hand *is* the pinned fetch.
+`crates/corpus_rev.txt` is the only place that revision is written. `overlay.nix`
+reads it to fetch the corpus, and the crates' corpus suites read the same file at
+test time and refuse a checkout sitting anywhere else, so a local run and a Nix
+check cannot quietly read different specimens. One case passes: a corpus git
+cannot answer for is the Nix store assembly, where the corpus in hand *is* the
+pinned fetch by construction.
 
 `pkgs.nord-corpus` is the corpus's own `nix/corpus.nix` assembly, not the raw
 tree: the git tier filtered against the corpus's `library/library.json`, with the

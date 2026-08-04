@@ -93,13 +93,10 @@ lib'.composeManyExtensions [
       # See `docs/nord-corpus.md`.
       nord-corpus-full = mkCorpus { library = true; };
 
-      # The corpus revision this workspace is pinned to, and the only place it is written.
-      #
-      # ⚠️ The crates' corpus suites parse this binding out of this file at test time to
-      # refuse a checkout at another revision — they match `nord-corpus-rev = "<40 hex>";`
-      # and fail loudly on anything but exactly one match. Keep it a literal one-line
-      # string, and keep it the only such binding here.
-      nord-corpus-rev = "dc0604f576a0646e0da9640a72a826845b5a6947";
+      # The corpus revision this workspace is pinned to. `crates/corpus_rev.txt` is the
+      # single source of truth — read here at eval time, and by the crates' own corpus
+      # guards as plain data at test time, so there is exactly one place to bump it.
+      nord-corpus-rev = lib'.trim (builtins.readFile ./crates/corpus_rev.txt);
 
       nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 
