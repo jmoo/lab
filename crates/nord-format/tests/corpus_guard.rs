@@ -13,6 +13,6 @@ fn corpus_dir_without_the_corpus_feature_is_a_mistake() {
         std::env::var_os("NORD_CORPUS_DIR").is_none(),
         "NORD_CORPUS_DIR is set but --features corpus is off: the corpus suite compiled \
          out and this run verified none of it. The full command is\n    \
-         cargo test --workspace --features nord-usb/replay,nord-format/corpus"
+         cargo test --workspace --features nord-usb/corpus,nord-format/corpus"
     );
 }

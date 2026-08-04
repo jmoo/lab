@@ -13,7 +13,7 @@
 //!
 //! ```sh
 //! NORD_CORPUS_DIR=/path/to/nord-corpus \
-//!   cargo test --workspace --features nord-usb/replay,nord-format/corpus
+//!   cargo test --workspace --features nord-usb/corpus,nord-format/corpus
 //! ```
 
 mod common;

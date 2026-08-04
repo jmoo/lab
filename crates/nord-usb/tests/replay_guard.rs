@@ -13,6 +13,6 @@ fn replay_gate_off_means_the_wire_encoding_is_unverified() {
         std::env::var_os("NORD_CORPUS_DIR").is_none(),
         "NORD_CORPUS_DIR is set but --features replay is off: no wire test ran. The full \
          command is\n    \
-         cargo test --workspace --features nord-usb/replay,nord-format/corpus"
+         cargo test --workspace --features nord-usb/corpus,nord-format/corpus"
     );
 }
