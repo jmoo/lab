@@ -36,8 +36,12 @@ A file's header type sits at `0x04` and decides the container, not the body:
 
 so the same content is 18 bytes shorter as type 0. `common::container` reads and
 writes both, and every reader re-emits a file in the generation it arrived in.
-The Electro 5 factory banks, the whole Stage 2 export and the Stage EX are type
-0; almost everything written by an Electro 5 in the field is type 1.
+Type 0 is the commoner of the two across the corpus: the Electro 5 factory banks,
+the Electro 3 / 3 HP / 4 / 4D, both C2s, the Wave, the Stage Classic / EX / 2 /
+2 EX, the Nord Piano 1–3, the Lead 4 and A1, and the whole `.nsmp` sample
+generation. Type 1 is what the Electro 5 writes in the field, and what the
+Electro 6 and 7, the Stage 3 and 4, the Nord Piano 4 and 5, the Grand, the Organ
+3 and the Wave 2 ship.
 
 ⚠️ A type-0 file's crc16 covers its **header** as well as its body, so patching a
 tag in place invalidates it where the type-1 crc32 would not notice.
@@ -97,13 +101,30 @@ surface in one run, and a `.skip.` specimen shows up as an ignored case. `tests/
 holds what a per-specimen harness cannot express — a named specimen read field by
 field, and the assertions that span the whole corpus.
 
-`tests/containers.rs` is the sweep across **every** instrument the corpus covers.
-It classifies each of the 4,000-odd CBIN files at the level they have in common —
-`decoded` (a schema accounts for the body and it re-emits byte for byte),
-`container` (the container reads and checksums, the body is one unknown region),
-`refused` — and holds per-extension and per-outcome floors that ratchet up only.
-An unknown format is a classification, not a failure; a file sliding *down* a
-class is the failure.
+`tests/containers.rs` is the sweep across **every** instrument the corpus covers —
+32 model directories and the shared sample library, ten thousand specimens in the
+git tier and 12,646 with the whole R2 tier spliced in. Each file gets two labels.
+
+Its **class** is what the first four bytes say it is, and is a property of the
+material: `cbin-type0` / `cbin-type1`, or `midi`, `sysex`, `zip`, `cn3`, `smac`
+for the corpus's non-CBIN material — six model directories hold no CBIN at all —
+or `unknown`. Its **outcome** is how far this build gets:
+
+| | |
+|---|---|
+| `decoded` | a schema accounts for the body and it re-emits byte for byte |
+| `container` | the container reads and checksums, the body is one unknown region |
+| `unsupported` | the magic is recognised and this build does not read the format |
+| `refused` | a CBIN file whose container does not read — **the regression signal** |
+| `unidentified` | the magic names nothing |
+
+Class counts and outcomes are floored per model and per class, and the floors
+ratchet up only. An unknown format is a classification, not a failure, and
+`unsupported` is a permanent answer rather than a TODO: the CBIN container and
+its two checksums are the whole of what this crate knows, and none of it applies
+to a MIDI dump. What fails is a file sliding *down* a class — or an `unknown`
+count going *up*, which is the one number here that is capped rather than
+floored.
 
 ### Differential and factory specimens
 
@@ -130,7 +151,7 @@ NORD_CORPUS_DIR=/path/to/nord-corpus \
 
 # Everything both crates have, which is what a change should be run against:
 NORD_CORPUS_DIR=/path/to/nord-corpus \
-  cargo test --workspace --features nord-usb/replay,nord-format/corpus
+  cargo test --workspace --features nord-usb/corpus,nord-format/corpus
 
 # With nix
 nix build .#checks.<system>.nord-format-corpus
