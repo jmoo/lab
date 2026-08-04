@@ -83,22 +83,26 @@ lib'.composeManyExtensions [
       # walk every model and join their own subdirectory when they are model-specific.
       nord-corpus = mkCorpus { };
 
-      # The same corpus with the manifest's R2-tier blobs spliced in — the multi-hundred-MB
-      # bundle archives and their untrimmed captures. Not a check: the blobs live in a
-      # private bucket, so building this needs either R2 credentials or a pre-seeded store
-      # (`corpus nix-add`), and `nix flake check` must stay runnable without both. See
-      # `docs/nord-corpus.md`.
+      # The same corpus with the manifest's R2-tier blobs *and* the 1,018-file vendor
+      # sample pool spliced in — the multi-hundred-MB bundle archives, their untrimmed
+      # captures, and every `library/pool/<filename>` alongside the 19 in-git specimens.
+      # Not a check: both need either R2 credentials or a pre-seeded store
+      # (`corpus nix-add` / `corpus nix-add --pool`), and `nix flake check` must stay
+      # runnable without either. See `docs/nord-corpus.md`.
       #
-      # The ids come from the corpus's own manifest at eval time rather than being copied
-      # here: a list of blob ids in a public repo is a list of what the private bucket
-      # holds.
-      nord-corpus-full = mkCorpus { blobs = final.nord-corpus.r2Ids; };
+      # The blob ids come from the corpus's own manifest at eval time rather than being
+      # copied here: a list of blob ids in a public repo is a list of what the private
+      # bucket holds.
+      nord-corpus-full = mkCorpus {
+        blobs = final.nord-corpus.r2Ids;
+        library = true;
+      };
 
       # Kept beside the fetch rather than inside it so `checks.corpus-rev-agrees` can read
       # it without pulling the private repo. It must equal
       # `crates/nord-format/tests/corpus_rev.txt`, which the suite blesses its specimen
       # expectations against — that check is what holds the two together.
-      nord-corpus-rev = "961e1b6f2a864448aa0c2f15eeb02a3609ca2e01";
+      nord-corpus-rev = "78bbc38dcf32f4bfff5370db31f9ca2bb1db6ec9";
 
       nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 
