@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use nord_format::common::container::{self, Container};
 use nord_format::{common, electro5, Entity, Live, Program};
 use nord_usb::ObjectClass;
 
@@ -55,12 +56,28 @@ fn check(path: &Path, format: &str, class: ObjectClass) -> Result<(), String> {
     }
 }
 
-/// The header fields `envelope::unwrap` does not hand back: the schema version at 0x14
-/// and the stored CRC-32 at 0x18. `unwrap` has already checked the length and checksum.
-fn version_and_crc(file: &[u8]) -> (u32, u32) {
-    let version = u32::from_le_bytes(file[0x14..0x18].try_into().unwrap());
-    let crc = u32::from_le_bytes(file[0x18..0x1c].try_into().unwrap());
-    (version, crc)
+/// The header fields `envelope::unwrap` does not hand back: the schema version, and the
+/// checksum as a labelled row.
+///
+/// The checksum is per generation — a type-1 crc32 over the body, a type-0 crc16 over
+/// the whole file — so the label moves with it rather than calling both a crc32.
+/// `unwrap` has already verified whichever one this file carries.
+fn version_and_crc(file: &[u8]) -> Result<(u32, &'static str, String), String> {
+    let container = Container::parse(file).map_err(|e| e.to_string())?;
+    let (label, value) = match container.header.header_type {
+        container::TYPE_SHORT => (
+            "crc16:",
+            format!(
+                "{:#06x}",
+                nord_format::crc::crc16(&file[..file.len() - container::CRC16_LEN])
+            ),
+        ),
+        _ => (
+            "crc32:",
+            format!("{:#010x}", nord_format::crc::crc32(&container.body)),
+        ),
+    };
+    Ok((container.header.version, label, value))
 }
 
 /// `get` on a file: print the summary, or with `--body` extract the wire body.
@@ -107,7 +124,7 @@ pub fn info(ui: &Ui, path: &Path, class: ObjectClass) -> Result<(), String> {
     let (format, at, body) =
         nord_usb::envelope::unwrap(&file).map_err(|e| format!("{}: {e}", path.display()))?;
     check(path, &format, class)?;
-    let (version, crc) = version_and_crc(&file);
+    let (version, crc_label, crc) = version_and_crc(&file)?;
 
     let row = |label: &str, value: String| {
         ui.out(format!("  {}{value}", ui.dim(format!("{label:<11}"))));
@@ -143,7 +160,7 @@ pub fn info(ui: &Ui, path: &Path, class: ObjectClass) -> Result<(), String> {
             }
         ),
     );
-    row("crc32:", format!("{crc:#010x}"));
+    row(crc_label, crc);
     Ok(())
 }
 
@@ -220,9 +237,12 @@ mod tests {
         let a = nord_usb::envelope::wrap("ne5p", at, 4, &[0u8; 8]).unwrap();
         let b = nord_usb::envelope::wrap("ne5p", at, 4, &[1u8; 8]).unwrap();
         let c = nord_usb::envelope::wrap("ne5t", at, 1, &[0u8; 8]).unwrap();
-        assert_eq!(version_and_crc(&a).0, 4);
-        assert_eq!(version_and_crc(&c).0, 1);
-        assert_ne!(version_and_crc(&a).1, version_and_crc(&b).1);
+        assert_eq!(version_and_crc(&a).unwrap().0, 4);
+        assert_eq!(version_and_crc(&c).unwrap().0, 1);
+        assert_ne!(
+            version_and_crc(&a).unwrap().2,
+            version_and_crc(&b).unwrap().2
+        );
     }
 
     /// The mismatch error must steer to the noun that does read the file.
