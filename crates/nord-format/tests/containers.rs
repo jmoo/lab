@@ -23,13 +23,14 @@
 //! *down*, which the ratcheted floors catch. Never lower a floor to make a run green —
 //! a floor going down is the finding.
 //!
-//! `library/pool` — the 2,433-file vendor sample pool `mkCorpus { library = true; }`
-//! splices in — gets the same per-file sweep automatically (nothing excludes it from the
-//! walk), plus completeness floors against the corpus's own `library.json` in
-//! [`pool_coverage`]. A plain corpus has no pool at all; that is not silently fewer
-//! trials, it is one visible ignored trial saying so. The full corpus also splices back
-//! the R2-tier originals the git tier cannot hold — the C2's 59MB `.npip` pipe library
-//! and the two `.ne5*bundle` archives — and those are swept like anything else.
+//! The vendor sample pool a full corpus build projects into the per-extension root
+//! directories (`nsmp/`, `nsmp3/`, … beside the committed specimens there) gets the same
+//! per-file sweep automatically — nothing excludes it from the walk — plus completeness
+//! floors against the corpus's own `library.json` in [`pool_coverage`]. A plain corpus
+//! holds only the committed specimens; that is not silently fewer trials, it is one
+//! visible ignored trial saying so. The full corpus also splices back the R2-tier
+//! originals the git tier cannot hold — the C2's 59MB `.npip` pipe library and the two
+//! `.ne5*bundle` archives — and those are swept like anything else.
 //!
 //! ```sh
 //! NORD_CORPUS_DIR=/path/to/nord-corpus \
@@ -44,7 +45,7 @@ mod containers {
     use super::common::{corpus_dir, rel};
     use libtest_mimic::{Arguments, Trial};
     use nord_format::common::container;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fmt::Write as _;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -233,8 +234,8 @@ mod containers {
     const UNTRACKED: &str = "pending";
 
     /// Root directories that are the corpus repo's machinery rather than specimens.
-    /// Everything else at the root is a model directory or `library/`.
-    const NOT_SPECIMEN_DIRS: &[&str] = &["nix", "tools"];
+    /// Everything else at the root is a model directory or a sample-pool directory.
+    const NOT_SPECIMEN_DIRS: &[&str] = &["tools"];
 
     /// Extensions the corpus uses for its own prose, indexes, vendor documentation and
     /// the extracts its tools cut out of oversized originals. None of them is a file a
@@ -248,7 +249,7 @@ mod containers {
         "body",      // a CBIN body cut out of its container
         "gitignore", //
         "html",      // Clavia's program-list documents
-        "json",      // library/library.json
+        "json",      // library.json, and the oracle sidecars
         "md",        // the corpus's own prose
         "pcapng",    // USB captures — nord-usb's material, not a container
         "pdf",       // Clavia's manuals
@@ -259,7 +260,7 @@ mod containers {
     /// Every specimen under the corpus root, in a stable order.
     ///
     /// The root's own files and [`NOT_SPECIMEN_DIRS`] are skipped, because every
-    /// specimen lives under a model directory or `library/`. Below that the only filter
+    /// specimen lives under a model directory or a sample-pool directory. Below that the only filter
     /// is [`NOT_SPECIMEN_EXTS`] — what a file *is* comes from its magic, so a new
     /// extension needs no list to be swept.
     fn specimens(root: &Path) -> Vec<PathBuf> {
@@ -297,8 +298,9 @@ mod containers {
     }
 
     /// The model directory a file belongs to — the first component under the corpus
-    /// root. `library` is one of them: the sample pool is shared across instruments,
-    /// which is why it sits beside them rather than under one.
+    /// root. `nsmp`, `nsmp3` and `nsmp4` are among them: the sample pool is shared
+    /// across instruments, so it sits beside the models, one directory per extension,
+    /// rather than under any one of them.
     fn model(root: &Path, path: &Path) -> String {
         rel(root, path).split('/').next().unwrap_or("?").to_string()
     }
@@ -322,9 +324,6 @@ mod containers {
     /// (`nc2`'s `.npip`, the two `ne5` bundles) are absent from these numbers and clear
     /// them by one.
     const FILES: &[(&str, &str, usize)] = &[
-        ("library", "nsmp", 7),
-        ("library", "nsmp3", 7),
-        ("library", "nsmp4", 5),
         ("nc2", "ncpg", 125),
         ("nc2", "ncsy", 1),
         ("nc2d", "nc2p", 126),
@@ -341,6 +340,7 @@ mod containers {
         ("ne4d", "ne4l", 4),
         ("ne4d", "ne4p", 128),
         ("ne4d", "ne4s", 1),
+
         ("ne5", "ne5l", 6),
         ("ne5", "ne5p", 828),
         ("ne5", "ne5s", 122),
@@ -408,11 +408,15 @@ mod containers {
         ("nsclassic", "nss", 297),
         ("nsex", "nspg", 126),
         ("nsex", "nss", 297),
+        ("nsmp", "nsmp", 7),
+        ("nsmp3", "nsmp3", 7),
+        ("nsmp4", "nsmp4", 5),
         ("nw", "nwp", 1024),
         ("nw", "nwsy", 1),
         ("nw2", "nw2l", 5),
         ("nw2", "nw2p", 350),
         ("nw2", "nw2s", 1),
+
     ];
 
     /// `(model, outcome, at least this many files reach it)` — how far this build gets.
@@ -425,16 +429,15 @@ mod containers {
     /// files are floored by [`CLASSES`] instead, where they cannot be read as a claim
     /// about decoding progress.
     const OUTCOMES: &[(&str, Outcome, usize)] = &[
-        ("library", Outcome::Container, 19),
         // The `.nsmp` v2 specimens. The v3 and v4 generations carry the same `nsmp` tag
         // and a section chain this build misreads, so they stop at `container`.
-        ("library", Outcome::Decoded, 7),
         ("nc2", Outcome::Container, 126),
         ("nc2d", Outcome::Container, 127),
         ("ne3", Outcome::Container, 179),
         ("ne3hp", Outcome::Container, 179),
         ("ne4", Outcome::Container, 133),
         ("ne4d", Outcome::Container, 133),
+
         ("ne5", Outcome::Decoded, 1063),
         ("ne6", Outcome::Container, 249),
         ("ne7", Outcome::Container, 306),
@@ -455,6 +458,13 @@ mod containers {
         ("nsex", Outcome::Container, 423),
         ("nw", Outcome::Container, 1025),
         ("nw2", Outcome::Container, 356),
+
+        // The three sample-pool directories, one per generation of the same `nsmp` tag.
+        // Only the v2 specimens decode: v3 and v4 carry a section chain this build
+        // misreads, so they stop at `container`.
+        ("nsmp", Outcome::Decoded, 7),
+        ("nsmp3", Outcome::Container, 7),
+        ("nsmp4", Outcome::Container, 5),
     ];
 
     /// `(class, at least this many files, the outcome every one of them reaches)` —
@@ -519,19 +529,15 @@ mod containers {
         ("nsp", Outcome::Container, 9),
     ];
 
-    fn library_pool_dir(root: &Path) -> PathBuf {
-        root.join("library").join("pool")
-    }
-
-    /// `library/library.json`'s pool totals, read fresh each run rather than copied into
+    /// `library.json`'s pool totals, read fresh each run rather than copied into
     /// this file — a pool that grows updates its own floor, instead of this suite
     /// silently accepting fewer files than the index claims.
     ///
     /// The index covers the whole R2 tier, so the pool's own counts are `totals.pool`.
     /// `totals.files` is the wider number: it also counts the recorded artifacts, which
-    /// assemble at their capture paths and never under `library/pool`.
+    /// project to their capture paths rather than into a per-extension directory.
     fn pool_totals(root: &Path) -> serde_json::Value {
-        let path = root.join("library").join("library.json");
+        let path = root.join("library.json");
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let index: serde_json::Value =
             serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
@@ -570,9 +576,9 @@ mod containers {
         }
     }
 
-    /// Trials scoped to `library/pool` alone — not the specimens the general sweep
-    /// already counts under the same `library` model bucket, since the pool physically
-    /// duplicates 19 of them under a second path and a floor here must not double-count.
+    /// Trials scoped to the sample-pool directories. The committed specimens live at
+    /// their own projection paths, so a full build holds each pool file exactly once and
+    /// these floors count committed and projected files together, as the index does.
     fn pool_coverage(root: &Path, c: &std::sync::Arc<Census>) -> Vec<Trial> {
         let totals = pool_totals(root);
         let expected_total = totals["files"].as_u64().expect("totals.pool.files") as usize;
@@ -584,12 +590,12 @@ mod containers {
         {
             let c = c.clone();
             trials.push(aggregate(
-                "coverage/library_pool/files/total".to_string(),
+                "coverage/sample_pool/files/total".to_string(),
                 move || {
                     let found: usize = c.pool_by_extension.values().sum();
                     assert!(
                         found >= expected_total,
-                        "library/pool holds {found} files, library.json claims \
+                        "the sample-pool directories hold {found} files, library.json claims \
                          {expected_total} — the nix assembly and the index have drifted",
                     );
                 },
@@ -609,7 +615,7 @@ mod containers {
             let generations: usize = by_generation.iter().map(|(_, n)| n).sum();
             let named: Vec<String> = by_generation.iter().map(|(g, _)| g.clone()).collect();
             trials.push(aggregate(
-                "coverage/library_pool/index_shape".to_string(),
+                "coverage/sample_pool/index_shape".to_string(),
                 move || {
                     assert_eq!(
                         generations, lineage,
@@ -623,12 +629,12 @@ mod containers {
 
         for (ext, expected) in by_extension {
             let c = c.clone();
-            let name = format!("coverage/library_pool/files/{ext}");
+            let name = format!("coverage/sample_pool/files/{ext}");
             trials.push(aggregate(name, move || {
                 let found = c.pool_by_extension.get(&ext).copied().unwrap_or(0);
                 assert!(
                     found >= expected,
-                    "library/pool holds {found} .{ext} files, library.json claims \
+                    "the sample-pool directories hold {found} .{ext} files, library.json claims \
                      {expected} — a pool file went missing",
                 );
             }));
@@ -637,12 +643,12 @@ mod containers {
         for (generation, expected) in by_generation {
             let c = c.clone();
             let ext = pool_extension(&generation);
-            let name = format!("coverage/library_pool/generation/v{generation}");
+            let name = format!("coverage/sample_pool/generation/v{generation}");
             trials.push(aggregate(name, move || {
                 let found = c.pool_by_extension.get(&ext).copied().unwrap_or(0);
                 assert!(
                     found >= expected,
-                    "library/pool holds {found} .{ext} files, library.json claims \
+                    "the sample-pool directories hold {found} .{ext} files, library.json claims \
                      {expected} for generation {generation} — a pool file went missing",
                 );
             }));
@@ -650,7 +656,7 @@ mod containers {
 
         for &(ext, outcome, floor) in POOL_OUTCOMES {
             let c = c.clone();
-            let name = format!("coverage/library_pool/outcome/{ext}/{}", outcome.as_str());
+            let name = format!("coverage/sample_pool/outcome/{ext}/{}", outcome.as_str());
             trials.push(aggregate(name, move || {
                 let found: usize = c
                     .pool_by_outcome
@@ -660,7 +666,7 @@ mod containers {
                     .sum();
                 assert!(
                     found >= floor,
-                    "library/pool: {found} .{ext} files reach `{}`, expected at least \
+                    "sample pool: {found} .{ext} files reach `{}`, expected at least \
                      {floor} — support ratchets up, so this is a regression, not a floor \
                      to lower",
                     outcome.as_str(),
@@ -698,20 +704,27 @@ mod containers {
             })
             .collect();
 
-        let pool_dir = library_pool_dir(&root);
-        let c = std::sync::Arc::new(census(&root, &pool_dir, &files));
+        // The pool directories are the extensions the index names, and a full build is
+        // recognised by its numbers: the pool projects into the same directories that
+        // hold the committed specimens, so presence is "the walk found what the index
+        // claims", not any directory existing.
+        let totals = pool_totals(&root);
+        let pool_dirs: BTreeSet<String> =
+            pool_rows(&totals, "by_extension").into_iter().map(|(ext, _)| ext).collect();
+        let expected_total = totals["files"].as_u64().expect("totals.pool.files") as usize;
+        let c = std::sync::Arc::new(census(&root, &pool_dirs, &files));
         trials.extend(coverage(&c));
 
-        if pool_dir.is_dir() {
+        if c.pool_by_extension.values().sum::<usize>() >= expected_total {
             trials.extend(pool_coverage(&root, &c));
         } else {
             let at = root.clone();
             trials.push(
-                Trial::test("library_pool/absent".to_string(), move || {
+                Trial::test("sample_pool/absent".to_string(), move || {
                     println!(
-                        "library/pool absent under {} — this corpus build has no sample \
-                         pool spliced in (nix build .#nord-corpus-full, not plain \
-                         nord-corpus)",
+                        "the sample pool under {} holds only the committed specimens — \
+                         this corpus build has no R2 tier projected in (nix build \
+                         .#corpus-full, not plain nord-corpus)",
                         at.display(),
                     );
                     Ok(())
@@ -740,15 +753,15 @@ mod containers {
         by_class: BTreeMap<String, usize>,
         /// `class name -> the worst outcome any file of it reached, and one to look at`.
         worst_of_class: BTreeMap<String, (Outcome, String, String)>,
-        /// `extension -> files`, under `library/pool` alone.
+        /// `extension -> files`, in the sample-pool directories alone.
         pool_by_extension: BTreeMap<String, usize>,
-        /// `(extension, outcome) -> files`, under `library/pool` alone.
+        /// `(extension, outcome) -> files`, in the sample-pool directories alone.
         pool_by_outcome: BTreeMap<(String, Outcome), usize>,
         /// The worst class each model reached, with one file to look at.
         examples: BTreeMap<(String, Outcome), (String, String)>,
     }
 
-    fn census(root: &Path, pool_dir: &Path, files: &[PathBuf]) -> Census {
+    fn census(root: &Path, pool_dirs: &BTreeSet<String>, files: &[PathBuf]) -> Census {
         let mut c = Census {
             by_extension: BTreeMap::new(),
             by_outcome: BTreeMap::new(),
@@ -763,6 +776,7 @@ mod containers {
             let model = model(root, path);
             let ext = extension(path);
             let (class, outcome, why) = classify(path, &bytes);
+            let in_pool = pool_dirs.contains(&model);
 
             *c.by_extension
                 .entry((model.clone(), ext.clone()))
@@ -781,7 +795,7 @@ mod containers {
                 .entry((model, outcome))
                 .or_insert_with(|| (rel(root, path), why));
 
-            if path.starts_with(pool_dir) {
+            if in_pool {
                 *c.pool_by_extension.entry(ext.clone()).or_default() += 1;
                 *c.pool_by_outcome.entry((ext, outcome)).or_default() += 1;
             }
@@ -928,7 +942,7 @@ mod containers {
             let _ = writeln!(out, "  {class:12} {n:>6}  worst outcome: {worst}");
         }
         if !c.pool_by_extension.is_empty() {
-            let _ = writeln!(out, "\nlibrary/pool:");
+            let _ = writeln!(out, "\nsample pool:");
             for ((ext, outcome), n) in &c.pool_by_outcome {
                 let _ = writeln!(out, "  {ext:8} {:12} {n:>6}", outcome.as_str());
             }

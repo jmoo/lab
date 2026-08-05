@@ -139,8 +139,8 @@ round-trip and container sweeps take the whole tree. Nothing here needs a
 hand-maintained exclusion list, and a new model directory cannot break one.
 
 `NORD_CORPUS_DIR` names the **corpus root** — the directory holding `ne5/`,
-`ne6/`, … and `library/` — not one model. A suite that is about one instrument
-joins its own directory (`ne5_dir()`).
+`ne6/`, … and the sample-pool directories `nsmp/`, `nsmp3/`, `nsmp4/` — not one
+model. A suite that is about one instrument joins its own directory (`ne5_dir()`).
 
 ```sh
 cargo test -p nord-format                       # minimal suite (inline unit tests)

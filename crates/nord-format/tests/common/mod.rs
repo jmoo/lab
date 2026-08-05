@@ -13,7 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Root of the specimen corpus, taken from `NORD_CORPUS_DIR` — **the whole corpus**,
-/// the directory holding `ne5/`, `ne6/`, … and `library/`, not one model.
+/// the directory holding `ne5/`, `ne6/`, … and the sample-pool directories `nsmp/`,
+/// `nsmp3/`, `nsmp4/`, not one model.
 ///
 /// Since these tests only compile under the `corpus` feature, a missing
 /// `NORD_CORPUS_DIR` is a hard error, not a skip.
