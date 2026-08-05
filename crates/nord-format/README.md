@@ -97,9 +97,19 @@ The **corpus integration suite** is gated behind the `corpus` feature because it
 the specimen corpus, which lives in a separate private repo (`jmoo/nord-corpus`).
 `tests/corpus_cases.rs` is a `libtest-mimic` harness reporting one case per specimen
 (`<check>/<path under the corpus root>`), so a failure names the file, all failures
-surface in one run, and a `.skip.` specimen shows up as an ignored case. `tests/ne5.rs`
-holds what a per-specimen harness cannot express — a named specimen read field by
-field, and the assertions that span the whole corpus.
+surface in one run, and a `.skip.` specimen shows up as an ignored case. Its
+`corpus_wide/` trials hold the two assertions a per-specimen harness cannot express:
+the dependency-id bijection over every program in the backup, and the set of live
+slots the corpus covers.
+
+Its `decode` sweep reads the corpus's **oracle sidecars**. Every specimen the corpus
+can say something about ships a `<filename>.oracle.json` beside it, pinning field
+paths to the values its capture fixed — `"center_panel.lower_part": "Organ"`, a
+numeric knob with a tolerance, a sibling its bytes must equal, or a stated reason for
+pinning nothing. Nothing in this crate knows what a knob or a panel directory is: the
+oracle names the field, `Schema::fields()` answers, and a specimen joins the sweep by
+gaining a sidecar in the corpus. The schema is defined in nord-corpus's README, which
+owns it.
 
 `tests/containers.rs` is the sweep across **every** instrument the corpus covers —
 32 model directories and the shared sample library, ten thousand specimens in the
@@ -133,9 +143,10 @@ with a `factory/` component is vendor material and carries no filename oracle**.
 Everything else in a model directory is differential — a change-one-knob patch
 whose filename encodes its settings.
 
-So the oracle-driven checks filter on `is_factory` (`tests/common/mod.rs`) and a
-`coverage/no_factory_in_the_oracle_sweep` trial asserts none leaked in, while
-round-trip and container sweeps take the whole tree. Nothing here needs a
+So the panel sweeps filter on `is_factory` (`tests/common/mod.rs`) and the
+`coverage/oracles_are_a_decision` trial asserts no `factory/` path carries a sidecar,
+no differential specimen is missing one, and no sidecar has outlived its specimen —
+while round-trip and container sweeps take the whole tree. Nothing here needs a
 hand-maintained exclusion list, and a new model directory cannot break one.
 
 `NORD_CORPUS_DIR` names the **corpus root** — the directory holding `ne5/`,

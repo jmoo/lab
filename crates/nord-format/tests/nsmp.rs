@@ -1,5 +1,5 @@
 #![cfg(feature = "corpus")]
-//! Sample-instrument (`.nsmp`) tests, read field by field.
+//! Sample-instrument (`.nsmp`) tests: the edits, and what the reader refuses.
 //!
 //! `.nsmp` is a cross-model entity (`src/common/sample/`), not an Electro 5 format — but
 //! the specimens live under `<corpus>/ne5/samples/` because they were captured off the
@@ -24,44 +24,6 @@ use std::path::PathBuf;
 
 fn samples_dir() -> PathBuf {
     ne5_dir().join("samples")
-}
-
-/// The named multi-zone specimens, decoded field by field. The filename is the oracle.
-#[test]
-fn test_nsmp_named_specimens() {
-    let dir = samples_dir();
-    for (stem, name, roots, tops) in [
-        ("D1-one-zone", "TEST", vec![60u8], vec![84u8]),
-        ("E-name-14char", "D1-one-zone-C4", vec![60], vec![84]),
-        ("D2-rootkey-C3", "TEST", vec![48], vec![72]),
-        ("D3-2zones", "D3-2zones", vec![60, 48], vec![84, 53]),
-        ("D4-3zones", "D4-3zones", vec![72, 60, 48], vec![96, 65, 53]),
-        ("D8-2zones-hi", "D8-2zones-hi", vec![72, 60], vec![96, 65]),
-    ] {
-        let sample = read_sample(&dir.join(format!("{stem}.nsmp")));
-        assert_eq!(sample.name().unwrap(), name, "{stem}: name");
-        assert_eq!(sample.header.version, 200, "{stem}: content version");
-        assert_eq!(
-            sample
-                .strokes()
-                .unwrap()
-                .iter()
-                .map(|s| s.root_key)
-                .collect::<Vec<_>>(),
-            roots,
-            "{stem}: root keys"
-        );
-        assert_eq!(
-            sample
-                .zones()
-                .unwrap()
-                .iter()
-                .map(|z| z.top_note)
-                .collect::<Vec<_>>(),
-            tops,
-            "{stem}: zone top notes"
-        );
-    }
 }
 
 /// Rename and remap reproduce a specimen the editor itself wrote.

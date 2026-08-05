@@ -1,6 +1,6 @@
 //! The one test target that compiles under every feature set.
 //!
-//! ⚠️ The corpus suites (`ne5.rs`, `decode_snapshot.rs`, `mutation.rs`) are
+//! ⚠️ The corpus suites (`corpus_cases.rs`, `decode_snapshot.rs`, `mutation.rs`) are
 //! `#![cfg(feature = "corpus")]`, so without the feature they compile to nothing and
 //! `cargo test` reports a pass having verified none of the decode. A set
 //! `NORD_CORPUS_DIR` is someone saying they meant to run them.

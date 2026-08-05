@@ -14,7 +14,7 @@ default = []
 # bundle`. Off by default so parse-only consumers (and the corpus round-trip
 # tests, which never touch bundles) stay lean.
 bundle = ["dep:zip"]
-# The corpus-backed round-trip/decode tests (tests/corpus_cases.rs, ne5.rs) need
+# The corpus-backed round-trip/decode tests (tests/corpus_cases.rs, nsmp.rs) need
 # the specimen corpus (NORD_CORPUS_DIR). Off by default so the open minimal suite
 # runs anywhere; the Nix `nord-format-corpus` check enables it. Test-only.
 corpus = []
