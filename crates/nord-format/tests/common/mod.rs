@@ -1,14 +1,16 @@
-//! What every corpus test target needs: the corpus root, and one program's decode as
-//! comparable rows.
+//! What every corpus test target needs: the corpus root, one program's decode as
+//! comparable rows, and the oracle sidecars.
 //!
 //! ⚠️ A rustc-visible module, not a test target — each corpus test compiles its own copy,
 //! so an item no single target uses is still live.
 #![allow(dead_code)]
 
+use nord_format::common::bank::Item;
 use nord_format::electro5::program::OrganPanel;
 use nord_format::electro5::{OrganModel, Program};
 use nord_format::panel::Panel;
 use nord_format::{electro5, Entity};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -26,9 +28,9 @@ pub fn corpus_dir() -> PathBuf {
 
 /// The Electro 5 model directory.
 ///
-/// Everything with a filename oracle is Electro 5, so the oracle suites join this rather
-/// than treating the corpus root as a model root. A suite that walks every model takes
-/// [`corpus_dir`] instead.
+/// Every specimen the corpus can oracle is Electro 5, so the decode suite joins this
+/// rather than treating the corpus root as a model root. A suite that walks every model
+/// takes [`corpus_dir`] instead.
 pub fn ne5_dir() -> PathBuf {
     corpus_dir().join("ne5")
 }
@@ -323,4 +325,260 @@ pub fn rel(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .into_owned()
+}
+
+// ---------------------------------------------------------------------------
+// The oracle sidecars
+// ---------------------------------------------------------------------------
+
+/// The suffix a specimen's oracle sidecar carries: `<specimen filename>.oracle.json`.
+///
+/// ⚠️ It must not end in an extension any corpus walker sweeps on. The walkers key on
+/// `Path::extension`, which sees `json` here, so a sidecar is never mistaken for a
+/// specimen.
+pub const SIDECAR: &str = ".oracle.json";
+
+/// The reserved sidecar name for facts about a whole directory rather than one file.
+pub const DIR_SIDECAR: &str = "dir.oracle.json";
+
+/// Where a specimen's sidecar sits.
+pub fn sidecar_of(specimen: &Path) -> PathBuf {
+    let mut name = specimen.file_name().unwrap().to_os_string();
+    name.push(SIDECAR);
+    specimen.with_file_name(name)
+}
+
+/// The specimen a sidecar belongs to, or `None` for the directory sidecar.
+pub fn specimen_of(sidecar: &Path) -> Option<PathBuf> {
+    let name = sidecar.file_name()?.to_string_lossy().into_owned();
+    if name == DIR_SIDECAR {
+        return None;
+    }
+    Some(sidecar.with_file_name(name.strip_suffix(SIDECAR)?))
+}
+
+/// Every `*.oracle.json` under `root`, in a stable order. Includes directory sidecars.
+pub fn sidecars(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if path.is_dir() {
+                if name != UNTRACKED && !name.starts_with('.') {
+                    stack.push(path);
+                }
+            } else if name.ends_with(SIDECAR) {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// One pinned value: what the capture says the field holds, and how far the decode may
+/// sit from it.
+pub struct Expect {
+    pub value: String,
+    /// `None` for an exact match. Otherwise both sides are read as numbers and must be
+    /// within this of each other — the analog knobs, whose capture is a position the
+    /// operator aimed at rather than the one the shaft landed on.
+    pub slack: Option<f64>,
+}
+
+/// A specimen's oracle, as its sidecar spells it.
+pub struct Oracle {
+    /// Field path -> what it must hold. Empty when the specimen is deliberately
+    /// unoracled.
+    pub fields: BTreeMap<String, Expect>,
+    /// Why this specimen pins nothing. Mutually exclusive with `fields`.
+    pub unoracled: Option<String>,
+    /// A sibling filename whose bytes this specimen's must equal — the relational
+    /// oracle, for a capture that was made to move something and moved nothing.
+    pub same_body_as: Option<String>,
+    /// Named mechanical properties the checkers understand. See the corpus README for
+    /// the vocabulary.
+    pub traits: Vec<String>,
+}
+
+/// Read one sidecar. A malformed one is a hard error: a sidecar the reader silently
+/// skips is an oracle that has stopped asserting anything.
+pub fn read_oracle(path: &Path) -> Oracle {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let json: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let at = |what: &str| format!("{}: {what}", path.display());
+
+    assert_eq!(
+        json["schema"].as_u64(),
+        Some(1),
+        "{}",
+        at("schema must be 1")
+    );
+
+    let mut fields = BTreeMap::new();
+    if let Some(map) = json.get("fields") {
+        for (key, want) in map
+            .as_object()
+            .unwrap_or_else(|| panic!("{}", at("`fields` is not an object")))
+        {
+            let expect = match want {
+                serde_json::Value::String(s) => Expect {
+                    value: s.clone(),
+                    slack: None,
+                },
+                serde_json::Value::Object(o) => Expect {
+                    value: o["value"]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("{}", at(&format!("{key}: no `value`"))))
+                        .to_string(),
+                    slack: o.get("slack").map(|s| {
+                        s.as_f64()
+                            .unwrap_or_else(|| panic!("{}", at(&format!("{key}: bad `slack`"))))
+                    }),
+                },
+                _ => panic!("{}", at(&format!("{key}: not a string or an object"))),
+            };
+            fields.insert(key.clone(), expect);
+        }
+    }
+
+    let unoracled = json.get("unoracled").map(|v| {
+        v.as_str()
+            .expect("`unoracled` is a reason string")
+            .to_string()
+    });
+    assert!(
+        unoracled.is_none() || fields.is_empty(),
+        "{}",
+        at("an unoracled specimen cannot also pin fields"),
+    );
+
+    Oracle {
+        fields,
+        unoracled,
+        same_body_as: json.get("same_body_as").map(|v| {
+            v.as_str()
+                .expect("`same_body_as` is a filename")
+                .to_string()
+        }),
+        traits: json
+            .get("traits")
+            .map(|v| {
+                v.as_array()
+                    .expect("`traits` is an array")
+                    .iter()
+                    .map(|t| t.as_str().expect("a trait is a string").to_string())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// Every value of one specimen an oracle may address, under the path it addresses it by.
+///
+/// Each path maps to the value's two canonical spellings: the way `nord inspect` prints
+/// it, and the way `--set` takes it. They differ only for a field too wide to have named
+/// values — the drawbar blocks and the dependency ids — where the first is a list or a
+/// decimal and the second the stored bits. A sidecar may use either.
+///
+/// Beyond the panel fields the view carries a few derived paths, for state that is real
+/// but is not one placement: the entity's slot, the organ accessors (which model reads
+/// which block is not expressible as a bit range), the two halves of the part mix, and a
+/// sample's name and zone layout.
+pub fn oracle_view(path: &Path) -> BTreeMap<String, [String; 2]> {
+    let mut view: BTreeMap<String, [String; 2]> = BTreeMap::new();
+    let mut put = |key: String, display: String| {
+        let both = [display.clone(), display];
+        view.insert(key, both);
+    };
+
+    match nord_format::from_path(path)
+        .unwrap_or_else(|e| panic!("{} failed to parse: {e}", path.display()))
+    {
+        Entity::Program(nord_format::Program::Electro5(p)) => {
+            put("location".into(), format!("{:?}", p.location().inner()));
+            program_view(&p.schema, &mut view);
+        }
+        Entity::Live(nord_format::Live::Electro5(l)) => {
+            put("location".into(), format!("{:?}", l.location().inner()));
+            program_view(&l.schema, &mut view);
+        }
+        Entity::Settings(nord_format::Settings::Electro5(s)) => {
+            for f in s.schema.fields() {
+                view.insert(f.path, [f.display, f.value]);
+            }
+        }
+        Entity::Song(nord_format::Song::Electro5(s)) => {
+            put("location".into(), format!("{:?}", s.location().inner()));
+            let programs: Vec<(u16, u16)> = (0..4).map(|i| s.get(i).inner()).collect();
+            put("programs".into(), format!("{programs:?}"));
+        }
+        Entity::Sample(s) => {
+            put("name".into(), s.name().unwrap());
+            put("version".into(), s.header.version.to_string());
+            let roots: Vec<u8> = s.strokes().unwrap().iter().map(|k| k.root_key).collect();
+            let tops: Vec<u8> = s.zones().unwrap().iter().map(|z| z.top_note).collect();
+            put("root_keys".into(), format!("{roots:?}"));
+            put("top_notes".into(), format!("{tops:?}"));
+        }
+        other => panic!("{} has no oracle view: {other:?}", path.display()),
+    }
+    view
+}
+
+fn program_view(schema: &electro5::program::Schema, view: &mut BTreeMap<String, [String; 2]>) {
+    for f in schema.fields() {
+        view.insert(f.path, [f.display, f.value]);
+    }
+    let mix = &schema.center_panel.part_mix;
+    for (half, value) in [("lower", mix.lower()), ("upper", mix.upper())] {
+        let text = value.to_string();
+        view.insert(
+            format!("center_panel.part_mix.{half}"),
+            [text.clone(), text],
+        );
+    }
+    // The organ accessors under the panel's own prefix. `organ` is the hand-written
+    // second statement of where the organ's state lives — see its doc — so the oracle
+    // reaches the meaning of a model's registration, not only its storage.
+    for row in organ(&schema.organ_panel) {
+        let key = row.key.replace("OrganPanel.", "organ_panel.");
+        view.insert(key, [row.value.clone(), row.value]);
+    }
+}
+
+/// Compare one pinned value against the decode. `slack` reads both sides as numbers.
+pub fn check_field(view: &BTreeMap<String, [String; 2]>, path: &str, want: &Expect, at: &str) {
+    let got = view
+        .get(path)
+        .unwrap_or_else(|| panic!("{at}: nothing at oracle path {path}"));
+    match want.slack {
+        None => assert!(
+            got.contains(&want.value),
+            "{at}: {path} is {:?}, the oracle says {:?}",
+            got[0],
+            want.value,
+        ),
+        Some(slack) => {
+            let number = |s: &str| {
+                s.parse::<f64>()
+                    .unwrap_or_else(|_| panic!("{at}: {path}: {s:?} is not a number"))
+            };
+            let (got, want_n) = (number(&got[0]), number(&want.value));
+            assert!(
+                (got - want_n).abs() <= slack,
+                "{at}: {path} is {got}, the oracle says {want_n} (± {slack})",
+            );
+        }
+    }
+}
+
+/// A sidecar's raw JSON, for the blocks [`read_oracle`] does not model — the golden
+/// tables a directory sidecar carries.
+pub fn read_json(path: &Path) -> serde_json::Value {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
