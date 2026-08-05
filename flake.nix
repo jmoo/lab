@@ -96,7 +96,8 @@
               #
               # ⚠️ Packages, not checks: these need a store seeded by `corpus nix-add`
               # (or R2 credentials in the builder), and `nix flake check` has to stay
-              # runnable with neither. See `docs/nord-corpus.md`.
+              # runnable with neither. The seeding mechanics are the corpus repo's
+              # README; the run tiers are crates/nord-format/README.md.
               corpus-full = pkgs.linkFarm "nord-corpus-full-suites" {
                 nord-format = config.packages.nord-format-corpus-full;
                 nord-usb = config.packages.nord-usb-corpus-full;

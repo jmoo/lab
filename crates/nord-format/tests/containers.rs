@@ -340,7 +340,6 @@ mod containers {
         ("ne4d", "ne4l", 4),
         ("ne4d", "ne4p", 128),
         ("ne4d", "ne4s", 1),
-
         ("ne5", "ne5l", 6),
         ("ne5", "ne5p", 828),
         ("ne5", "ne5s", 122),
@@ -416,7 +415,6 @@ mod containers {
         ("nw2", "nw2l", 5),
         ("nw2", "nw2p", 350),
         ("nw2", "nw2s", 1),
-
     ];
 
     /// `(model, outcome, at least this many files reach it)` — how far this build gets.
@@ -437,7 +435,6 @@ mod containers {
         ("ne3hp", Outcome::Container, 179),
         ("ne4", Outcome::Container, 133),
         ("ne4d", Outcome::Container, 133),
-
         ("ne5", Outcome::Decoded, 1063),
         ("ne6", Outcome::Container, 249),
         ("ne7", Outcome::Container, 306),
@@ -458,7 +455,6 @@ mod containers {
         ("nsex", Outcome::Container, 423),
         ("nw", Outcome::Container, 1025),
         ("nw2", Outcome::Container, 356),
-
         // The three sample-pool directories, one per generation of the same `nsmp` tag.
         // Only the v2 specimens decode: v3 and v4 carry a section chain this build
         // misreads, so they stop at `container`.
@@ -709,8 +705,10 @@ mod containers {
         // hold the committed specimens, so presence is "the walk found what the index
         // claims", not any directory existing.
         let totals = pool_totals(&root);
-        let pool_dirs: BTreeSet<String> =
-            pool_rows(&totals, "by_extension").into_iter().map(|(ext, _)| ext).collect();
+        let pool_dirs: BTreeSet<String> = pool_rows(&totals, "by_extension")
+            .into_iter()
+            .map(|(ext, _)| ext)
+            .collect();
         let expected_total = totals["files"].as_u64().expect("totals.pool.files") as usize;
         let c = std::sync::Arc::new(census(&root, &pool_dirs, &files));
         trials.extend(coverage(&c));
