@@ -11,10 +11,10 @@ lib'.composeManyExtensions [
     let
       # The corpus repository as fetched — deliberately *not* an overlay attribute.
       #
-      # ⚠️ The tree carries `library/library.json`, which is the R2 address of every
-      # R2-tier object. This repo is public, so nothing may hand a consumer the raw
-      # tree: what lab exposes is `mkCorpus`'s output, which is the filtered git tier
-      # plus, only when asked, the objects that index names.
+      # ⚠️ The tree carries `library.json`, which is the R2 address of every R2-tier
+      # object. This repo is public, so nothing may hand a consumer the raw tree: what
+      # lab exposes is the corpus's own assembly, which is the git tier filtered
+      # against that index.
       nord-corpus-tree = builtins.fetchGit {
         # ⚠️ The pinned rev lives on `size-tiering`, not the default branch, and
         # `fetchGit` only fetches the refs it is told about — without this it reports
@@ -22,14 +22,6 @@ lib'.composeManyExtensions [
         ref = "size-tiering";
         rev = final.nord-corpus-rev;
         url = "git+ssh://git@github.com/jmoo/nord-corpus.git";
-      };
-
-      # The corpus's own assembly, so lab consumes what the corpus repo asserts about
-      # itself (git tier filtered against the library index, no oversized file outside
-      # it) rather than whatever a checkout happened to contain.
-      mkCorpus = import "${nord-corpus-tree}/nix/corpus.nix" {
-        pkgs = final;
-        src = nord-corpus-tree;
       };
     in
     {
@@ -76,24 +68,26 @@ lib'.composeManyExtensions [
 
       nord-cli = prev.lib.addMetaAttrs { mainProgram = "nord"; } prev.nord-cli;
 
-      # The specimen corpus nord-format and nord-usb are tested against: the model
-      # directories plus the shared sample library, at the pinned revision.
+      # The specimen corpus nord-format and nord-usb are tested against, at the pinned
+      # revision: a model directory per instrument, the sample pool beside them, and an
+      # oracle sidecar beside every specimen the corpus can say something about.
+      #
+      # The corpus repo is the package, so lab consumes what that repo asserts about
+      # itself — the git tier filtered against `library.json`, with the standing check
+      # that nothing oversized escaped it — rather than whatever a checkout contained.
       #
       # `NORD_CORPUS_DIR` points at this whole store path, not at one model — the sweeps
       # walk every model and join their own subdirectory when they are model-specific.
-      nord-corpus = mkCorpus { };
+      nord-corpus = final.callPackage nord-corpus-tree { };
 
-      # The same corpus with the whole R2 tier spliced in — every object
-      # `library/library.json` indexes: the multi-hundred-MB bundle archives and their
-      # untrimmed captures at their capture paths, and the vendor sample pool at
-      # `library/pool/<filename>`, alongside the in-git specimens.
-      #
-      # Not a check: it needs either R2 credentials or a pre-seeded store
-      # (`corpus nix-add`), and `nix flake check` must stay runnable without either.
-      # See `docs/nord-corpus.md`.
-      nord-corpus-full = mkCorpus { library = true; };
+      # The same corpus with the R2 tier projected in — the vendor sample pool, the
+      # multi-hundred-MB bundle archives and their untrimmed captures, 7.0GB of it. Not
+      # a check: the objects live in a private bucket, so building this needs either R2
+      # credentials or a pre-seeded store (`corpus nix-add`), and `nix flake check` must
+      # stay runnable without both.
+      nord-corpus-full = final.callPackage nord-corpus-tree { full = true; };
 
-      nord-corpus-rev = "74996b17e0aa705b7020086e2274d75faed0fa74";
+      nord-corpus-rev = "43cfa477ac74a6e4f247ae97607b51f581b96aaf";
 
       nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 
