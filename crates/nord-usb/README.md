@@ -125,11 +125,6 @@ never argument values; values are the golden replays' job.
 The captures are the Electro 5's, so this suite joins `ne5/` itself — the corpus
 now carries 32 model directories, and none of the others hold USB traffic.
 
-The suite refuses a checkout that is not at the revision `crates/corpus_rev.txt`
-pins, which it reads at test time; that is the same file `overlay.nix` reads to
-fetch the corpus, so a local run and a Nix check cannot read different captures.
-A checkout git cannot answer for is passed, which is how the Nix store copy runs.
-
 ```sh
 cargo test -p nord-usb --features replay
 

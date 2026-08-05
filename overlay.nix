@@ -93,10 +93,7 @@ lib'.composeManyExtensions [
       # See `docs/nord-corpus.md`.
       nord-corpus-full = mkCorpus { library = true; };
 
-      # The corpus revision this workspace is pinned to. `crates/corpus_rev.txt` is the
-      # single source of truth — read here at eval time, and by the crates' own corpus
-      # guards as plain data at test time, so there is exactly one place to bump it.
-      nord-corpus-rev = lib'.trim (builtins.readFile ./crates/corpus_rev.txt);
+      nord-corpus-rev = "74996b17e0aa705b7020086e2274d75faed0fa74";
 
       nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 

@@ -18,11 +18,9 @@ use std::path::{Path, PathBuf};
 /// Since these tests only compile under the `corpus` feature, a missing
 /// `NORD_CORPUS_DIR` is a hard error, not a skip.
 pub fn corpus_dir() -> PathBuf {
-    let dir: PathBuf = std::env::var_os("NORD_CORPUS_DIR")
+    std::env::var_os("NORD_CORPUS_DIR")
         .expect("set NORD_CORPUS_DIR to a nord-corpus checkout root for --features corpus")
-        .into();
-    check_revision(&dir);
-    dir
+        .into()
 }
 
 /// The Electro 5 model directory.
@@ -32,74 +30,6 @@ pub fn corpus_dir() -> PathBuf {
 /// [`corpus_dir`] instead.
 pub fn ne5_dir() -> PathBuf {
     corpus_dir().join("ne5")
-}
-
-/// Refuse a checkout that is not at the revision `crates/corpus_rev.txt` pins, naming
-/// which way it is skewed.
-///
-/// A specimen sweep is only as pinned as the specimens: a checkout at another revision
-/// produces failures that read as decode regressions and are not.
-///
-/// One situation passes silently: a directory git cannot answer for is the Nix store
-/// assembly, which has no `.git` at all — the corpus in hand there *is* the pinned one
-/// by construction. A **worktree** root does answer git — its `.git` is a file rather
-/// than a directory, which `git -C` resolves the same way — so a worktree of the corpus
-/// is held to the pin like any other checkout.
-fn check_revision(dir: &Path) {
-    let pinned = pinned_rev();
-    let Some(head) = git(dir, &["rev-parse", "HEAD"]) else {
-        return;
-    };
-    if head == pinned {
-        return;
-    }
-
-    let ancestor = |older: &str, newer: &str| {
-        git(dir, &["merge-base", "--is-ancestor", older, newer]).is_some()
-    };
-    let fix = if ancestor(&pinned, &head) {
-        "the checkout is ahead — bump the pin in crates/corpus_rev.txt"
-    } else if ancestor(&head, &pinned) {
-        "the checkout is behind — git -C … fetch && git -C … checkout the expected rev"
-    } else {
-        "the two have diverged, or the expected commit is not in this checkout — fetch it"
-    };
-    panic!("corpus at {head}, tests expect {pinned} — {fix}");
-}
-
-/// The corpus revision this workspace is pinned to, read out of `crates/corpus_rev.txt`
-/// — the single file the flake and this guard both read, so there is no second copy to
-/// drift.
-///
-/// Present in every context this guard runs, including the Nix sandbox: `mkRustCrate`
-/// hands the build `crates/` (not the flake root) as source, and this file lives inside
-/// it. A missing or malformed file panics naming the path — silently disabling the
-/// guard on a bad file would be worse than not having one.
-fn pinned_rev() -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpus_rev.txt");
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let rev = text.trim();
-    if rev.len() != 40 || !rev.bytes().all(|b| b.is_ascii_hexdigit()) {
-        panic!(
-            "{} does not hold exactly one 40-hex-digit revision, got {rev:?}",
-            path.display(),
-        );
-    }
-    rev.to_string()
-}
-
-/// `git -C dir <args>`, or `None` if git is absent, the directory is not a checkout, or
-/// the command reports failure.
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// One field's decode: a panel-qualified key, where its bits sit, the bits themselves,

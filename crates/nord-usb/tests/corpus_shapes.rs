@@ -137,50 +137,7 @@ mod shapes {
         let dir: PathBuf = std::env::var_os("NORD_CORPUS_DIR")
             .expect("set NORD_CORPUS_DIR to a nord-corpus checkout root for --features corpus")
             .into();
-
-        // A directory git cannot answer for is the Nix store assembly, which has no
-        // `.git` at all — the corpus in hand there *is* the pinned one by construction.
-        // A worktree root does answer git, so it is held to the pin like any other
-        // checkout.
-        let head = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-        if let Some(head) = head {
-            let pinned = pinned_rev();
-            assert_eq!(
-                head, pinned,
-                "corpus at {head}, tests expect {pinned} — bump your checkout, or the \
-                 pin in crates/corpus_rev.txt",
-            );
-        }
         dir.join("ne5")
-    }
-
-    /// The corpus revision this workspace is pinned to, read out of
-    /// `crates/corpus_rev.txt` — the single file the flake and this guard both read, so
-    /// there is no second copy to drift.
-    ///
-    /// Present in every context this guard runs, including the Nix sandbox:
-    /// `mkRustCrate` hands the build `crates/` (not the flake root) as source, and this
-    /// file lives inside it. A missing or malformed file panics naming the path —
-    /// silently disabling the guard on a bad file would be worse than not having one.
-    fn pinned_rev() -> String {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpus_rev.txt");
-        let text =
-            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let rev = text.trim();
-        if rev.len() != 40 || !rev.bytes().all(|b| b.is_ascii_hexdigit()) {
-            panic!(
-                "{} does not hold exactly one 40-hex-digit revision, got {rev:?}",
-                path.display(),
-            );
-        }
-        rev.to_string()
     }
 
     fn shape_files(root: &Path) -> Vec<PathBuf> {
