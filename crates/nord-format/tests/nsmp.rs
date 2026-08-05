@@ -78,7 +78,7 @@ fn test_nsmp_edits_reproduce_the_editors_own_output() {
     sample.set_zone_top_note(1, 60).unwrap();
 
     assert_eq!(
-        sample.to_bytes(),
+        sample.to_bytes().unwrap(),
         read(dir.join("D7-upperkey.nsmp")).unwrap(),
         "rename + remap did not reproduce the editor's own file"
     );
@@ -92,7 +92,7 @@ fn test_nsmp_retune_touches_one_byte() {
     let mut sample = read_sample(&dir.join("D1-one-zone.nsmp"));
 
     sample.set_root_key(0, 48).unwrap();
-    let after = sample.to_bytes();
+    let after = sample.to_bytes().unwrap();
 
     let differing: Vec<usize> = (0..before.len())
         .filter(|&i| before[i] != after[i])

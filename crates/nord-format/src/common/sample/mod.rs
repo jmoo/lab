@@ -1,9 +1,9 @@
 //! Sample instruments (`.nsmp`) — the Nord Sample Library format.
 //!
 //! Shared across the Nord line rather than specific to one model, which is why this sits
-//! in [`crate::common`]. A file is the usual 44-byte CBIN header followed by a chain of
-//! tagged [`section`]s: an `hdr` carrying the name, a `cat` of category strings, a `map`
-//! ending in the [`zone`] table, one [`stroke`] per zone, and a trailing `sty`.
+//! in [`crate::common`]. The body inside the usual [`container`] is a chain of tagged
+//! [`section`]s: an `hdr` carrying the name, a `cat` of category strings, a `map` ending
+//! in the [`zone`] table, one [`stroke`] per zone, and a trailing `sty`.
 //!
 //! **The audio is encoded and stays that way.** Strokes are kept verbatim, so this reads
 //! and rewrites instruments byte-exactly and can retune, rename and remap them — but it
@@ -17,17 +17,12 @@ pub use section::Section;
 pub use stroke::Stroke;
 pub use zone::Zone;
 
-use crate::common::container;
-use crate::crc::crc32;
+use crate::common::container::{self, Container};
 use crate::error::{Error, ParseError};
 use std::fmt;
 use std::io::{Read, Seek, Write};
 
 pub const FORMAT: &str = "nsmp";
-
-/// The fixed CBIN header; the section chain starts here. Also the first byte the
-/// checksum covers.
-pub const BODY_AT: usize = 0x2c;
 
 /// Offset of the instrument name within the `hdr` payload.
 const NAME_AT: usize = 12;
@@ -44,81 +39,23 @@ pub const MAX_NAME_LEN: usize = 14;
 ///
 /// Sections are held in file order, including repeats — `stk` appears once per zone.
 pub struct Sample {
-    pub header: Header,
-    pub sections: Vec<Section>,
-}
+    /// The container header as read. Its `version` is content as
+    /// `format * 100 + revision`, so a 2.0 instrument reads 200 — not a schema revision
+    /// and not gated, since it moves with the library's own content.
+    ///
+    /// ⚠️ Its `trailer` is `0x000f0000` on every specimen, where every slotted format
+    /// holds [`container::SLOT_TRAILER`]. Meaning unknown; preserved verbatim.
+    pub header: container::Header,
 
-/// The CBIN header of a sample instrument.
-///
-/// ⚠️ Not [`crate::common::Header`]. Where other formats keep a bank/slot pair and an
-/// `0xFFFFFFFF` trailer, a sample file carries `0xFFFFFFFF` in the location and a
-/// different constant after it — a library sample has no slot until an instrument gives
-/// it one. Both are preserved verbatim.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Header {
-    /// CBIN header type. 1 on everything with a checksum.
-    pub header_type: u32,
-    pub format: String,
-    /// Where other formats hold bank and slot.
+    /// Where a slotted format holds bank and slot. `0xFFFFFFFF` on every specimen — a
+    /// library sample has no slot until an instrument gives it one.
     pub location: u32,
-    /// Where other formats hold the `0xFFFFFFFF` trailer. `0x000f0000` on every
-    /// specimen; meaning unknown.
-    pub unknown_0x10: u32,
-    /// Content version as `format * 100 + revision`, so a 2.0 instrument reads 200.
-    /// Not a schema revision, and not gated: it moves with the library's own content.
-    pub version: u32,
-    pub crc32: u32,
-}
 
-impl Header {
-    fn read(bytes: &[u8]) -> Result<Header, ParseError> {
-        if bytes.len() < BODY_AT {
-            return Err(ParseError::AssertFail(format!(
-                "{FORMAT}: {} bytes is shorter than the {BODY_AT}-byte header",
-                bytes.len()
-            )));
-        }
-        if &bytes[0..4] != b"CBIN" {
-            return Err(ParseError::UnknownFormat(
-                String::from_utf8_lossy(&bytes[0..4]).into_owned(),
-            ));
-        }
-        let format = String::from_utf8_lossy(&bytes[8..12]).into_owned();
-        if format != FORMAT {
-            return Err(ParseError::WrongFormat {
-                expected: FORMAT,
-                got: format,
-            });
-        }
-        let le = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
-        Ok(Header {
-            header_type: le(0x04),
-            format,
-            location: le(0x0c),
-            unknown_0x10: le(0x10),
-            version: le(0x14),
-            crc32: le(0x18),
-        })
-    }
-
-    fn write_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(b"CBIN");
-        out.extend_from_slice(&self.header_type.to_le_bytes());
-        out.extend_from_slice(self.format.as_bytes());
-        out.extend_from_slice(&self.location.to_le_bytes());
-        out.extend_from_slice(&self.unknown_0x10.to_le_bytes());
-        out.extend_from_slice(&self.version.to_le_bytes());
-        out.extend_from_slice(&self.crc32.to_le_bytes());
-        out.resize(BODY_AT, 0);
-    }
+    pub sections: Vec<Section>,
 }
 
 impl Sample {
     /// Reads a whole instrument, verifying its checksum.
-    ///
-    /// Unlike the fixed-length formats this does not drive the CRC through binrw's
-    /// `map_stream`: the checksummed region runs from [`BODY_AT`] to end of file, whose
-    /// length is not known until the file has been read.
     pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Sample, Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
@@ -126,43 +63,44 @@ impl Sample {
     }
 
     /// Decodes an instrument of either CBIN generation.
-    ///
-    /// ⚠️ For a type-0 file the checksum compared below is the one
-    /// [`container::widen`] just synthesised, so it proves nothing; `widen` verifying
-    /// that file's own crc16 is what does.
     pub fn from_bytes(bytes: &[u8]) -> Result<Sample, Error> {
-        let bytes = &container::widen(bytes)?[..];
-        let header = Header::read(bytes)?;
-        let computed = crc32(&bytes[BODY_AT..]);
-        if computed != header.crc32 {
-            return Err(ParseError::AssertFail(format!(
-                "{FORMAT}: stored checksum {:#010x} does not match the body's {computed:#010x}",
-                header.crc32
-            ))
+        let file = Container::parse(bytes)?;
+        if file.header.tag != FORMAT {
+            return Err(ParseError::WrongFormat {
+                expected: FORMAT,
+                got: file.header.tag,
+            }
             .into());
         }
-        let sections = section::read_chain(bytes, BODY_AT)?;
-        Ok(Sample { header, sections })
+        let sections = section::read_chain(&file.body, 0)?;
+        Ok(Sample {
+            header: file.header,
+            location: file.location,
+            sections,
+        })
     }
 
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        writer.write_all(&self.to_bytes())?;
-        Ok(())
+        self.container().write_to(writer)
     }
 
     /// Serialises, recomputing the checksum over the body it just produced.
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        self.container().to_bytes()
+    }
+
+    /// The instrument as its container: the header it was read with, around the section
+    /// chain as it now stands.
+    fn container(&self) -> Container {
         let mut body = Vec::new();
         for s in &self.sections {
             s.write_into(&mut body);
         }
-        let mut header = self.header.clone();
-        header.crc32 = crc32(&body);
-
-        let mut out = Vec::with_capacity(BODY_AT + body.len());
-        header.write_into(&mut out);
-        out.extend_from_slice(&body);
-        container::narrow(&out)
+        Container {
+            header: self.header.clone(),
+            location: self.location,
+            body,
+        }
     }
 
     /// Instrument name, as the Nord display shows it.

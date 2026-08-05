@@ -1,4 +1,5 @@
 use crate::common::bank::{Item, Location};
+use crate::common::container;
 use std::fmt::Debug;
 
 #[derive(Debug)]
@@ -10,15 +11,14 @@ where
     name: Option<String>,
     location: SongLocation,
     programs: [ProgramLocation; PROGRAM_COUNT],
-    /// Schema version from the container header. Carried so a song can be written back
-    /// as the version it was read as: the eight factory demo songs are version 0 and
-    /// everything user-written is version 1, and re-emitting a 0 as a 1 silently
-    /// rewrites the file.
-    version: u32,
-    /// CBIN header generation, carried for the same reason as `version`: a song
-    /// rebuilds its header on write, and the two generations are 18 bytes apart, so a
-    /// type-0 song emitted as type 1 is a different file.
-    header_type: u32,
+    /// The container this song arrived in. A song rebuilds its file on write, so
+    /// everything the header holds has to survive here: the eight factory demo songs
+    /// are version 0 where everything user-written is 1, and the two generations are
+    /// [`container::SIZE_DELTA`] bytes apart.
+    ///
+    /// ⚠️ Its `tag` is the format module's to stamp at write — a song is generic over
+    /// its slot space and does not know which format it is.
+    header: container::Header,
 }
 
 impl<const C: usize, S, P> Song<C, S, P>
@@ -31,8 +31,7 @@ where
             name: None,
             location,
             programs,
-            version: Self::DEFAULT_VERSION,
-            header_type: Self::DEFAULT_HEADER_TYPE,
+            header: container::Header::new("", Self::DEFAULT_VERSION),
         }
     }
 
@@ -40,26 +39,31 @@ where
     /// whatever the file carried.
     pub const DEFAULT_VERSION: u32 = 1;
 
-    /// The generation a newly authored song is written in — the one the instrument
-    /// writes. Reading a file overwrites this with whatever the file carried.
-    pub const DEFAULT_HEADER_TYPE: u32 = crate::common::container::TYPE_LONG;
+    /// The container the song was read from, for a format module to write it back with.
+    pub fn header(&self) -> &container::Header {
+        &self.header
+    }
+
+    pub fn set_header(&mut self, header: container::Header) {
+        self.header = header;
+    }
 
     /// Container schema version — see the field docs.
     pub fn version(&self) -> u32 {
-        self.version
+        self.header.version
     }
 
     pub fn set_version(&mut self, version: u32) {
-        self.version = version;
+        self.header.version = version;
     }
 
     /// CBIN header generation — see the field docs.
     pub fn header_type(&self) -> u32 {
-        self.header_type
+        self.header.header_type
     }
 
     pub fn set_header_type(&mut self, header_type: u32) {
-        self.header_type = header_type;
+        self.header.header_type = header_type;
     }
 
     pub fn get(&self, slot: u16) -> P {

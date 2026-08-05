@@ -8,10 +8,9 @@
 use binrw::{BinRead, BinWriterExt};
 use std::io::{Cursor, Read, Seek, Write};
 
-use crate::common;
 use crate::common::{bank, container};
 use crate::electro5::program;
-use crate::error::{Error, ParseError};
+use crate::error::Error;
 use crate::types::RangedU16Pair;
 
 pub const FORMAT: &str = "ne5l";
@@ -28,13 +27,15 @@ pub const BANK_MAX: u16 = 0;
 pub const SLOT_MAX: u16 = 2;
 
 pub type Location = RangedU16Pair<BANK_MAX, SLOT_MAX>;
-pub type Header = common::Header<Location>;
-pub type Schema = program::Schema<Location>;
+pub type Schema = program::Schema;
 
 /// One of the three live slots.
 #[derive(Debug)]
 pub struct Live {
     pub schema: Schema,
+    /// The container this slot arrived in — see [`program::Program`].
+    header: container::Header,
+    location: Location,
     name: Option<String>,
 }
 
@@ -42,31 +43,32 @@ impl Live {
     pub fn new(location: Location) -> Live {
         Live {
             name: None,
-            schema: Schema::new(FORMAT, location),
+            schema: Schema::new(),
+            header: container::Header::new(FORMAT, program::DEFAULT_VERSION),
+            location,
         }
     }
 
     pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Live, Error> {
-        let image = container::read_fixed(reader, FILE_LEN)?;
-        let schema = Schema::read_be(&mut Cursor::new(image))?;
-        program::check_tag(FORMAT, &schema)?;
-        if !KNOWN_VERSIONS.contains(&schema.version) {
-            return Err(ParseError::UnsupportedVersion {
-                format: FORMAT,
-                version: schema.version,
-                supported: KNOWN_VERSIONS,
-            }
-            .into());
-        }
-
-        Ok(Live { name: None, schema })
+        let (header, location, body) =
+            container::Container::open_fixed(reader, FORMAT, KNOWN_VERSIONS, FILE_LEN)?;
+        Ok(Live {
+            name: None,
+            schema: Schema::read_be(&mut Cursor::new(body))?,
+            header,
+            location,
+        })
     }
 
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        let mut image = Cursor::new(Vec::new());
-        image.write_be(&self.schema)?;
-        writer.write_all(&container::narrow(&image.into_inner()))?;
-        Ok(())
+        let mut body = Cursor::new(Vec::new());
+        body.write_be(&self.schema)?;
+        container::Container {
+            header: self.header.clone(),
+            location: container::location_of(self.location.x(), self.location.y()),
+            body: body.into_inner(),
+        }
+        .write_to(writer)
     }
 }
 
@@ -80,11 +82,11 @@ impl bank::Item<Location> for Live {
     }
 
     fn location(&self) -> Location {
-        self.schema.header.location
+        self.location
     }
 
     fn set_location(&mut self, location: Location) {
-        self.schema.header.location = location;
+        self.location = location;
     }
 }
 
@@ -92,6 +94,7 @@ impl bank::Item<Location> for Live {
 mod tests {
     use super::*;
     use crate::common::bank::Item;
+    use crate::error::ParseError;
     use std::io::Cursor;
 
     /// A live slot writes out at the program's length and reads back where it was.

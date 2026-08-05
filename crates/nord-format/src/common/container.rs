@@ -24,18 +24,15 @@
 //!
 //! ## How the rest of the crate sees it
 //!
-//! It does not. [`widen`] turns a type-0 file into the type-1 image the format readers
-//! are written against, [`narrow`] puts it back, and every reader keeps the header type
-//! it read so a file is re-emitted in the generation it arrived in.
-//!
-//! ⚠️ **The crc32 in a widened image is synthesised**, so a format's own
-//! `assert(checksum == crc32)` is vacuous for a type-0 file. [`widen`] verifying the
-//! crc16 is what stands in its place — weaken that and type-0 files stop being checked
-//! at all.
+//! [`Container`] is the only thing that knows any of the above. It parses either
+//! generation, verifies that generation's own checksum, and re-emits in the generation
+//! the file arrived in with the checksum recomputed over the bytes it actually wrote.
+//! A format schema is the **body** — offsets from the body's first byte, no header,
+//! no checksum field — and takes its tag, slot, version and generation from here.
 
-use crate::crc::{crc16, crc32};
+use crate::crc::{Crc16, Crc32, CrcWriter, MultipartCrc16, MultipartCrc32, Width};
 use crate::error::{Error, ParseError};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
 /// Length of a type-1 header: through the crc32 and the 16 unclaimed bytes after it.
 pub const HEADER_LEN: usize = 0x2c;
@@ -44,10 +41,10 @@ pub const HEADER_LEN: usize = 0x2c;
 pub const SHORT_HEADER_LEN: usize = 0x18;
 
 /// A type-0 file's trailing crc16.
-pub const TRAILER_LEN: usize = 2;
+pub const CRC16_LEN: usize = 2;
 
 /// How much shorter a type-0 file is than the same content as type 1.
-pub const SIZE_DELTA: usize = HEADER_LEN - SHORT_HEADER_LEN - TRAILER_LEN;
+pub const SIZE_DELTA: usize = HEADER_LEN - SHORT_HEADER_LEN - CRC16_LEN;
 
 /// The header type, as both generations store it.
 pub const TYPE_AT: usize = 0x04;
@@ -57,6 +54,13 @@ pub const TYPE_SHORT: u32 = 0;
 
 /// The long header with the crc32 in it.
 pub const TYPE_LONG: u32 = 1;
+
+/// The `0x10` field of every format addressed by slot. A library sample holds something
+/// else there — see [`crate::common::sample::Sample`].
+pub const SLOT_TRAILER: u32 = 0xFFFFFFFF;
+
+/// Where a type-1 header keeps its crc32.
+const CRC32_AT: usize = 0x18;
 
 /// The header type of a CBIN file, from as little as its first twelve bytes.
 pub fn header_type(bytes: &[u8]) -> Result<u32, ParseError> {
@@ -76,6 +80,14 @@ pub fn header_type(bytes: &[u8]) -> Result<u32, ParseError> {
     ))
 }
 
+/// Bytes of header ahead of the body in the given generation.
+pub fn body_at(header_type: u32) -> usize {
+    match header_type {
+        TYPE_SHORT => SHORT_HEADER_LEN,
+        _ => HEADER_LEN,
+    }
+}
+
 /// What a fixed-length format occupies on disk in the given generation, from the
 /// type-1 length its module declares.
 pub fn stored_len(header_type: u32, type1_len: usize) -> usize {
@@ -85,127 +97,381 @@ pub fn stored_len(header_type: u32, type1_len: usize) -> usize {
     }
 }
 
-/// One CBIN file's bytes as the type-1 image the format readers expect.
+/// A slot as a header stores it at `0x0c`: bank then slot, two little-endian `u16`s.
+pub fn location_of(bank: u16, slot: u16) -> u32 {
+    bank as u32 | (slot as u32) << 16
+}
+
+/// The bytes a generation's checksum covers, as [`MultipartCrc32`] takes them.
 ///
-/// A type-1 file passes through. A type-0 file has its trailing crc16 verified and
-/// dropped, and the crc32 and 16 unclaimed bytes a type-1 header carries synthesised in
-/// their place.
+/// ⚠️ The second element is the region's last byte index minus the first — the inclusive
+/// span [`crate::crc::MultipartCrc`] is written against, not a byte count. Read and write
+/// both come here so they cannot disagree about which bytes are checksummed.
+fn region(header_type: u32, body_len: usize) -> (u64, u64) {
+    match header_type {
+        TYPE_SHORT => (0, (SHORT_HEADER_LEN + body_len).saturating_sub(1) as u64),
+        _ => (HEADER_LEN as u64, body_len.saturating_sub(1) as u64),
+    }
+}
+
+/// A CBIN header's format-independent fields: everything but the slot, which each format
+/// addresses in its own space and so keeps typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Header {
+    /// The generation this file arrived in, [`TYPE_SHORT`] or [`TYPE_LONG`].
+    ///
+    /// ⚠️ Carried so a file goes back out as the generation it came in. The two are
+    /// [`SIZE_DELTA`] bytes apart and checksum different regions, so a type-0 file
+    /// written back as type 1 is a different file.
+    pub header_type: u32,
+
+    /// The four-character format tag at `0x08`.
+    pub tag: String,
+
+    /// `0x10`. [`SLOT_TRAILER`] in every format addressed by slot; `0x000f0000` on every
+    /// sample specimen, meaning unknown.
+    pub trailer: u32,
+
+    /// `0x14`. What each format module calls its schema version.
+    pub version: u32,
+
+    /// `0x1c..0x2c`, which no field of any format this build reads claims. Preserved
+    /// verbatim rather than assumed.
+    ///
+    /// ⚠️ A type-0 header has no room for these, so writing one drops them.
+    pub unclaimed: [u8; 16],
+}
+
+impl Header {
+    /// A type-1 header for a format addressed by slot — the generation the instrument
+    /// writes.
+    pub fn new(tag: &str, version: u32) -> Header {
+        Header {
+            header_type: TYPE_LONG,
+            tag: tag.to_string(),
+            trailer: SLOT_TRAILER,
+            version,
+            unclaimed: [0; 16],
+        }
+    }
+}
+
+/// One CBIN file: its header, the slot it addresses, and the body between them.
 ///
-/// Refuses a generation this build has no layout for: guessing which bytes are header
-/// would decode the body at the wrong offset and still produce plausible values.
-pub fn widen(bytes: &[u8]) -> Result<Vec<u8>, ParseError> {
-    match header_type(bytes)? {
-        TYPE_LONG => Ok(bytes.to_vec()),
-        TYPE_SHORT => {
-            if bytes.len() < SHORT_HEADER_LEN + TRAILER_LEN {
+/// Reading verifies the checksum of whichever generation the file arrived in; writing
+/// recomputes it over the bytes actually emitted. Nothing else in the crate touches
+/// either checksum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Container {
+    pub header: Header,
+
+    /// `0x0c`. Bank and slot as two little-endian `u16`s in every format addressed by
+    /// slot; `0xFFFFFFFF` in a library sample, which has no slot until an instrument
+    /// gives it one.
+    pub location: u32,
+
+    /// Everything between the header and the checksum: from `0x2c` in a type-1 file,
+    /// from `0x18` to the trailing crc16 in a type-0 one.
+    pub body: Vec<u8>,
+}
+
+impl Container {
+    /// A type-1 container around `body`, tagged and addressed.
+    pub fn new(tag: &str, location: u32, version: u32, body: Vec<u8>) -> Container {
+        Container {
+            header: Header::new(tag, version),
+            location,
+            body,
+        }
+    }
+
+    /// Bank, as a slotted format's header stores it.
+    pub fn bank(&self) -> u16 {
+        self.location as u16
+    }
+
+    /// Slot, as a slotted format's header stores it.
+    pub fn slot(&self) -> u16 {
+        (self.location >> 16) as u16
+    }
+
+    /// Parse one whole CBIN file, verifying the checksum of its generation.
+    ///
+    /// Refuses a generation this build has no layout for: guessing which bytes are
+    /// header would decode the body at the wrong offset and still produce plausible
+    /// values.
+    pub fn parse(bytes: &[u8]) -> Result<Container, ParseError> {
+        let header_type = header_type(bytes)?;
+        let (head_len, sum_len) = match header_type {
+            TYPE_LONG => (HEADER_LEN, 0),
+            TYPE_SHORT => (SHORT_HEADER_LEN, CRC16_LEN),
+            other => return Err(ParseError::UnknownHeaderType(other)),
+        };
+        if bytes.len() < head_len + sum_len {
+            return Err(ParseError::AssertFail(format!(
+                "{} bytes is shorter than a type-{header_type} header and its checksum",
+                bytes.len()
+            )));
+        }
+
+        let body = bytes[head_len..bytes.len() - sum_len].to_vec();
+        verify(header_type, bytes, body.len())?;
+
+        let le = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        Ok(Container {
+            header: Header {
+                header_type,
+                tag: String::from_utf8_lossy(&bytes[0x08..0x0c]).into_owned(),
+                trailer: le(0x10),
+                version: le(0x14),
+                unclaimed: match header_type {
+                    TYPE_LONG => bytes[0x1c..HEADER_LEN].try_into().unwrap(),
+                    _ => [0; 16],
+                },
+            },
+            location: le(0x0c),
+            body,
+        })
+    }
+
+    /// Read one fixed-length entity of either generation, from the type-1 length its
+    /// module declares.
+    ///
+    /// Consumes exactly the bytes the file occupies in its own generation, so the reader
+    /// is left where the next entity would start.
+    pub fn read_fixed(
+        reader: &mut (impl Read + Seek),
+        type1_len: usize,
+    ) -> Result<Container, Error> {
+        let start = reader.stream_position()?;
+        let mut head = [0u8; TYPE_AT + 4];
+        reader.read_exact(&mut head)?;
+        reader.seek(SeekFrom::Start(start))?;
+
+        let mut bytes = vec![0u8; stored_len(header_type(&head)?, type1_len)];
+        reader.read_exact(&mut bytes)?;
+        Ok(Container::parse(&bytes)?)
+    }
+
+    /// Read the rest of a stream as one container, for the formats whose body length is
+    /// not known until the file has been read.
+    pub fn read_all(reader: &mut (impl Read + Seek)) -> Result<Container, Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        Ok(Container::parse(&bytes)?)
+    }
+
+    /// Everything a format addressed by slot asks of its container before it will read
+    /// the body, answered with the slot in that format's own space.
+    ///
+    /// ⚠️ The tag check is the only thing separating formats that share a body layout:
+    /// `ne5p` and `ne5l` decode through one schema, so a program read as a live slot
+    /// parses cleanly and then writes itself back under the other tag.
+    pub fn open<L>(&self, tag: &'static str, versions: &'static [u32]) -> Result<L, Error>
+    where
+        L: TryFrom<(u16, u16)>,
+    {
+        if self.header.tag != tag {
+            return Err(ParseError::WrongFormat {
+                expected: tag,
+                got: self.header.tag.clone(),
+            }
+            .into());
+        }
+        if !versions.contains(&self.header.version) {
+            return Err(ParseError::UnsupportedVersion {
+                format: tag,
+                version: self.header.version,
+                supported: versions,
+            }
+            .into());
+        }
+        if self.header.trailer != SLOT_TRAILER {
+            return Err(ParseError::AssertFail(format!(
+                "{tag}: header trailer is {:#010x}, expected {SLOT_TRAILER:#010x}",
+                self.header.trailer
+            ))
+            .into());
+        }
+        L::try_from((self.bank(), self.slot())).map_err(|_| {
+            ParseError::OutOfBounds {
+                value: format!("{} {}", self.bank(), self.slot()),
+                bound: format!("a {tag} slot"),
+            }
+            .into()
+        })
+    }
+
+    /// Read one fixed-length file and take it apart on a slotted format's behalf:
+    /// [`Container::read_fixed`] and then [`Container::open`], leaving the caller the
+    /// header to carry, the typed slot, and the body to decode.
+    pub fn open_fixed<L>(
+        reader: &mut (impl Read + Seek),
+        tag: &'static str,
+        versions: &'static [u32],
+        type1_len: usize,
+    ) -> Result<(Header, L, Vec<u8>), Error>
+    where
+        L: TryFrom<(u16, u16)>,
+    {
+        let file = Container::read_fixed(reader, type1_len)?;
+        let location = file.open(tag, versions)?;
+        Ok((file.header, location, file.body))
+    }
+
+    /// Emit the file, in its own generation, with the checksum computed over the bytes
+    /// as they go out.
+    pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
+        let fields = self.fields()?;
+        let (first, length) = region(self.header.header_type, self.body.len());
+        match self.header.header_type {
+            TYPE_LONG => {
+                let mut w = CrcWriter::<_, Crc32>::new(writer, first, length);
+                w.write_all(&fields)?;
+                // The crc32 precedes the body it covers, so this is a placeholder and
+                // the writer patches it once the body has gone through.
+                let sum = w.checksum()?;
+                Crc32::write_le(sum, &mut w)?;
+                w.write_all(&self.header.unclaimed)?;
+                w.write_all(&self.body)?;
+            }
+            TYPE_SHORT => {
+                let mut w = CrcWriter::<_, Crc16>::new(writer, first, length);
+                w.write_all(&fields)?;
+                w.write_all(&self.body)?;
+                let sum = w.checksum()?;
+                Crc16::write_le(sum, &mut w)?;
+            }
+            other => return Err(ParseError::UnknownHeaderType(other).into()),
+        }
+        Ok(())
+    }
+
+    /// The file's bytes — [`Container::write_to`] into memory.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        let mut out = Cursor::new(Vec::new());
+        self.write_to(&mut out)?;
+        Ok(out.into_inner())
+    }
+
+    /// The header fields both generations share, `0x00..0x18`.
+    fn fields(&self) -> Result<[u8; SHORT_HEADER_LEN], ParseError> {
+        // The tag field is four bytes wide, so a tag of any other length would shift
+        // every field after it.
+        let tag = self.header.tag.as_bytes();
+        if tag.len() != 4 {
+            return Err(ParseError::AssertFail(format!(
+                "CBIN tag {:?} is {} bytes, not 4",
+                self.header.tag,
+                tag.len()
+            )));
+        }
+
+        let mut out = [0u8; SHORT_HEADER_LEN];
+        out[0x00..0x04].copy_from_slice(b"CBIN");
+        out[0x04..0x08].copy_from_slice(&self.header.header_type.to_le_bytes());
+        out[0x08..0x0c].copy_from_slice(tag);
+        out[0x0c..0x10].copy_from_slice(&self.location.to_le_bytes());
+        out[0x10..0x14].copy_from_slice(&self.header.trailer.to_le_bytes());
+        out[0x14..0x18].copy_from_slice(&self.header.version.to_le_bytes());
+        Ok(out)
+    }
+}
+
+/// Check the file's stored checksum against the bytes it arrived with.
+fn verify(header_type: u32, bytes: &[u8], body_len: usize) -> Result<(), ParseError> {
+    let (first, length) = region(header_type, body_len);
+    match header_type {
+        TYPE_LONG => {
+            let stored = u32::from_le_bytes(bytes[CRC32_AT..CRC32_AT + 4].try_into().unwrap());
+            let mut crc = MultipartCrc32::new(first, length);
+            crc.update(0, bytes);
+            let computed = crc.checksum();
+            if computed != stored {
                 return Err(ParseError::AssertFail(format!(
-                    "{} bytes is shorter than a type-0 header and its checksum",
-                    bytes.len()
+                    "type-1 CBIN: stored checksum {stored:#010x} does not match the body's \
+                     {computed:#010x}"
                 )));
             }
-            let (checked, stored) = bytes.split_at(bytes.len() - TRAILER_LEN);
-            let stored = u16::from_le_bytes(stored.try_into().unwrap());
-            let computed = crc16(checked);
+        }
+        _ => {
+            let at = bytes.len() - CRC16_LEN;
+            let stored = u16::from_le_bytes(bytes[at..].try_into().unwrap());
+            let mut crc = MultipartCrc16::new(first, length);
+            crc.update(0, bytes);
+            let computed = crc.checksum();
             if computed != stored {
                 return Err(ParseError::AssertFail(format!(
                     "type-0 CBIN: stored checksum {stored:#06x} does not match the file's \
                      {computed:#06x}"
                 )));
             }
-
-            let body = &checked[SHORT_HEADER_LEN..];
-            let mut out = Vec::with_capacity(HEADER_LEN + body.len());
-            out.extend_from_slice(&checked[..SHORT_HEADER_LEN]);
-            out.extend_from_slice(&crc32(body).to_le_bytes());
-            out.resize(HEADER_LEN, 0);
-            out.extend_from_slice(body);
-            Ok(out)
         }
-        other => Err(ParseError::UnknownHeaderType(other)),
     }
-}
-
-/// The inverse of [`widen`]: one format writer's type-1 image as the file to emit.
-///
-/// Anything that is not type 0 passes through, including a generation this build has no
-/// layout for — a writer emits what it was given, and only [`widen`] has to understand
-/// the bytes well enough to refuse them.
-///
-/// ⚠️ The 16 unclaimed bytes at `0x1c` have no home in a type-0 file and are dropped.
-/// That is lossless for anything that came through [`widen`], which synthesised them as
-/// zeros, and it is the only way they are ever reached.
-pub fn narrow(image: &[u8]) -> Vec<u8> {
-    if !matches!(header_type(image), Ok(TYPE_SHORT)) || image.len() < HEADER_LEN {
-        return image.to_vec();
-    }
-    let mut out = Vec::with_capacity(image.len() - SIZE_DELTA);
-    out.extend_from_slice(&image[..SHORT_HEADER_LEN]);
-    out.extend_from_slice(&image[HEADER_LEN..]);
-    let sum = crc16(&out);
-    out.extend_from_slice(&sum.to_le_bytes());
-    out
-}
-
-/// Read one fixed-length entity of either generation, as its type-1 image.
-///
-/// Consumes exactly the bytes the file occupies in its own generation, so the reader is
-/// left where the next entity would start.
-pub(crate) fn read_fixed(
-    reader: &mut (impl Read + Seek),
-    type1_len: usize,
-) -> Result<Vec<u8>, Error> {
-    let start = reader.stream_position()?;
-    let mut head = [0u8; TYPE_AT + 4];
-    reader.read_exact(&mut head)?;
-    reader.seek(SeekFrom::Start(start))?;
-
-    let mut bytes = vec![0u8; stored_len(header_type(&head)?, type1_len)];
-    reader.read_exact(&mut bytes)?;
-    Ok(widen(&bytes)?)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A type-1 file is not touched, whatever it holds.
-    #[test]
-    fn a_type_1_file_passes_through_both_ways() {
-        let mut file = b"CBIN\x01\x00\x00\x00ne5p".to_vec();
-        file.resize(HEADER_LEN + 8, 0xab);
-        assert_eq!(widen(&file).unwrap(), file);
-        assert_eq!(narrow(&file), file);
+    fn type_1() -> Vec<u8> {
+        let mut c = Container::new("ne5p", location_of(3, 7), 4, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        c.header.unclaimed = [0xab; 16];
+        c.to_bytes().unwrap()
     }
 
-    /// Widening and narrowing are inverses, which is what makes a byte-exact round trip
-    /// of a type-0 file possible at all.
-    #[test]
-    fn a_type_0_file_survives_a_widen_and_a_narrow() {
-        let mut file = b"CBIN\x00\x00\x00\x00ne5p".to_vec();
-        file.resize(SHORT_HEADER_LEN, 0);
-        file.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
-        file.extend_from_slice(&crc16(&file).to_le_bytes());
-
-        let image = widen(&file).unwrap();
-        assert_eq!(image.len(), file.len() + SIZE_DELTA);
-        // The unclaimed bytes are synthesised, so they had better be the zeros `narrow`
-        // is entitled to drop.
-        assert_eq!(&image[0x1c..HEADER_LEN], &[0u8; 16]);
-        assert_eq!(narrow(&image), file);
+    fn type_0() -> Vec<u8> {
+        let mut c = Container::new("ne5p", location_of(3, 7), 4, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        c.header.header_type = TYPE_SHORT;
+        c.to_bytes().unwrap()
     }
 
-    /// A corrupted type-0 file is refused. The format's own crc32 assertion cannot
-    /// catch it — the crc32 is synthesised from whatever body arrived.
+    /// Both generations parse to the same header fields and the same body, and go back
+    /// out as the file they came from.
     #[test]
-    fn a_bad_type_0_checksum_is_refused() {
-        let mut file = b"CBIN\x00\x00\x00\x00ne5p".to_vec();
-        file.resize(SHORT_HEADER_LEN, 0);
-        file.extend_from_slice(&[1, 2, 3, 4]);
-        file.extend_from_slice(&crc16(&file).to_le_bytes());
+    fn either_generation_round_trips_byte_for_byte() {
+        for file in [type_1(), type_0()] {
+            let c = Container::parse(&file).unwrap();
+            assert_eq!(c.header.tag, "ne5p");
+            assert_eq!((c.bank(), c.slot()), (3, 7));
+            assert_eq!(c.header.version, 4);
+            assert_eq!(c.body, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+            assert_eq!(c.to_bytes().unwrap(), file);
+        }
+        assert_eq!(type_1().len(), type_0().len() + SIZE_DELTA);
+    }
 
-        let len = file.len();
-        file[len - 3] ^= 0xff;
-        assert!(widen(&file).is_err());
+    /// The 16 bytes no format claims are the file's, not this crate's to invent.
+    #[test]
+    fn the_unclaimed_bytes_survive_verbatim() {
+        let file = type_1();
+        assert_eq!(&file[0x1c..HEADER_LEN], &[0xab; 16]);
+        assert_eq!(
+            Container::parse(&file).unwrap().header.unclaimed,
+            [0xab; 16]
+        );
+    }
+
+    /// Each generation is checked against its own checksum — the crc32 over the body,
+    /// the crc16 over the whole file — so a corrupted file is refused either way.
+    #[test]
+    fn a_corrupted_file_is_refused_in_both_generations() {
+        for mut file in [type_1(), type_0()] {
+            let body_at = body_at(header_type(&file).unwrap());
+            file[body_at] ^= 0xff;
+            let err = Container::parse(&file).expect_err("a corrupted body must not parse");
+            assert!(err.to_string().contains("checksum"), "{err}");
+        }
+    }
+
+    /// A type-0 crc16 covers the header too, so a header edit invalidates it just as a
+    /// body edit does. Nothing else in the crate checks the header's bytes.
+    #[test]
+    fn a_type_0_checksum_covers_its_header() {
+        let mut file = type_0();
+        file[0x08] ^= 0xff;
+        assert!(Container::parse(&file).is_err());
     }
 
     /// A generation this build has no layout for is refused rather than decoded on a
@@ -215,8 +481,42 @@ mod tests {
         let mut file = b"CBIN\x02\x00\x00\x00ne5p".to_vec();
         file.resize(HEADER_LEN + 8, 0);
         assert!(matches!(
-            widen(&file),
+            Container::parse(&file),
             Err(ParseError::UnknownHeaderType(2))
+        ));
+    }
+
+    /// The checks a slotted format delegates, each with its own refusal.
+    #[test]
+    fn open_refuses_a_tag_a_version_a_trailer_and_a_slot() {
+        type Slot = crate::types::RangedU16Pair<8, 50>;
+        let ok = Container::parse(&type_1()).unwrap();
+        assert!(ok.open::<Slot>("ne5p", &[4]).is_ok());
+
+        assert!(matches!(
+            ok.open::<Slot>("ne5l", &[4]),
+            Err(Error::Parse(ParseError::WrongFormat { .. }))
+        ));
+        assert!(matches!(
+            ok.open::<Slot>("ne5p", &[5]),
+            Err(Error::Parse(ParseError::UnsupportedVersion {
+                version: 4,
+                ..
+            }))
+        ));
+
+        let mut odd = ok.clone();
+        odd.header.trailer = 0;
+        assert!(matches!(
+            odd.open::<Slot>("ne5p", &[4]),
+            Err(Error::Parse(ParseError::AssertFail(_)))
+        ));
+
+        let mut far = ok.clone();
+        far.location = location_of(99, 0);
+        assert!(matches!(
+            far.open::<Slot>("ne5p", &[4]),
+            Err(Error::Parse(ParseError::OutOfBounds { .. }))
         ));
     }
 }

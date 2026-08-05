@@ -1180,13 +1180,13 @@ mod cases {
             panic!("expected an electro5 live slot in {name}")
         };
 
-        // The tag is the whole difference. Retagged on the widened image and narrowed
-        // back, so the file is re-checksummed in whichever generation it came in:
+        // The tag is the whole difference. Retagged through the container, so the file
+        // is re-checksummed in whichever generation it came in:
         // ⚠️ a type-1 crc32 covers `0x2c..` and never sees the tag, but a type-0 crc16
         // covers the whole file, header included, so retagging one in place corrupts it.
-        let mut image = container::widen(&read(path).unwrap()).unwrap();
-        image[0x08..0x0c].copy_from_slice(electro5::program::FORMAT.as_bytes());
-        let bytes = container::narrow(&image);
+        let mut file = container::Container::parse(&read(path).unwrap()).unwrap();
+        file.header.tag = electro5::program::FORMAT.to_string();
+        let bytes = file.to_bytes().unwrap();
 
         let Entity::Program(nord_format::Program::Electro5(program)) =
             nord_format::from_stream(&mut Cursor::new(&bytes)).unwrap()

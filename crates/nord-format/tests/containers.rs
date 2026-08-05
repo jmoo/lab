@@ -147,7 +147,7 @@ mod containers {
     fn classify(path: &Path, bytes: &[u8]) -> (Class, Outcome, String) {
         let class = Class::of(bytes);
         let (outcome, why) = match class {
-            Class::Cbin(_) => match container::widen(bytes) {
+            Class::Cbin(_) => match container::Container::parse(bytes) {
                 Err(e) => (Outcome::Refused, e.to_string()),
                 Ok(_) => match nord_format::from_path(path) {
                     Ok(_) => (Outcome::Decoded, String::new()),

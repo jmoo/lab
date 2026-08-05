@@ -23,25 +23,21 @@
 mod common;
 
 use common::{all_programs, ne5_dir, read_program, rows};
-use nord_format::common::container;
-use nord_format::crc::MultipartCrc32;
-use nord_format::electro5::program::FILE_LEN;
+use nord_format::common::container::Container;
+use nord_format::electro5::program::BODY_LEN;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::read;
 use std::io::Cursor;
 
-/// First byte of the panel body — everything before it is the CBIN header.
+/// First byte of the panel body in a type-1 file.
 ///
-/// ⚠️ Every offset here is into the **type-1 image**, so specimens are widened before
-/// they are measured (see [`image`]). The body is the same 121 bytes in either
-/// generation; only the header around it differs, and a type-0 specimen read at these
-/// offsets would be measuring its header.
+/// ⚠️ Bits are counted from the start of the **body**, which is where the container
+/// hands it over; this offset is only how [`spell`] writes a bit down, in the absolute
+/// type-1 form the panel modules and the format notes use. A type-0 specimen holds the
+/// same 121-byte body 20 bytes earlier.
 const BODY: usize = 0x2c;
 /// Bits of body a program has. The measurement's denominator.
-const BODY_BITS: usize = (FILE_LEN - BODY) * 8;
-
-/// The bytes the CRC at `0x18..0x1c` covers. The body's last byte sits outside it.
-const CRC_REGION: (u64, u64) = (BODY as u64, 0xa4 - BODY as u64);
+const BODY_BITS: usize = BODY_LEN * 8;
 
 /// Base specimens to flip, one per shape of program the decode branches on.
 ///
@@ -63,10 +59,10 @@ const MIN_VARYING: usize = 556;
 const MIN_READ: usize = 536;
 const MAX_BLIND: usize = 68;
 
-/// One specimen as the type-1 image every offset here is written against.
-fn image(path: &std::path::Path) -> Vec<u8> {
+/// One specimen's container, in whichever generation it was stored in.
+fn container(path: &std::path::Path) -> Container {
     let bytes = read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    container::widen(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    Container::parse(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 /// `0x51[3]` — where a body bit sits, as a reader of the format notes would write it.
@@ -74,16 +70,12 @@ fn spell(bit: usize) -> String {
     format!("{:#04x}[{}]", BODY + bit / 8, bit % 8)
 }
 
-/// Flip one body bit and restamp the CRC, so the parse tests the field decode rather
-/// than the checksum.
-fn flip(base: &[u8], bit: usize) -> Vec<u8> {
-    let mut bytes = base.to_vec();
-    bytes[BODY + bit / 8] ^= 1 << (bit % 8);
-
-    let mut crc = MultipartCrc32::new(CRC_REGION.0, CRC_REGION.1);
-    crc.update(0, &bytes);
-    bytes[0x18..0x1c].copy_from_slice(&crc.checksum().to_le_bytes());
-    bytes
+/// Flip one body bit and re-emit the file. The container restamps its own checksum, so
+/// the parse tests the field decode rather than the checksum.
+fn flip(base: &Container, bit: usize) -> Vec<u8> {
+    let mut file = base.clone();
+    file.body[bit / 8] ^= 1 << (bit % 8);
+    file.to_bytes().unwrap()
 }
 
 /// The fields whose decode a flip moved, or `None` if the parser refused the file.
@@ -123,10 +115,10 @@ fn varying_bits() -> BTreeSet<usize> {
     let mut one = vec![false; BODY_BITS];
 
     for path in &programs {
-        let bytes = image(path);
-        assert_eq!(bytes.len(), FILE_LEN, "{} is not a program", path.display());
+        let body = container(path).body;
+        assert_eq!(body.len(), BODY_LEN, "{} is not a program", path.display());
         for bit in 0..BODY_BITS {
-            let set = bytes[BODY + bit / 8] >> (bit % 8) & 1 == 1;
+            let set = body[bit / 8] >> (bit % 8) & 1 == 1;
             zero[bit] |= !set;
             one[bit] |= set;
         }
@@ -152,11 +144,11 @@ fn every_body_bit_is_accounted_for() {
     for base in BASES {
         let path = root.join(base);
         assert!(path.is_file(), "base specimen {base} is missing");
-        let bytes = image(&path);
+        let base = container(&path);
         let baseline: Vec<String> = rows(&read_program(&path)).iter().map(render).collect();
 
         for bit in 0..BODY_BITS {
-            match moved(&baseline, &flip(&bytes, bit)) {
+            match moved(&baseline, &flip(&base, bit)) {
                 None => {
                     refused.insert(bit);
                 }

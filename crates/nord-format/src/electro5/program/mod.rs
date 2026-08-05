@@ -1,12 +1,12 @@
 //! The Electro 5 program format (`.ne5p`).
 //!
-//! Reads top-down: the format's constants, then [`Schema`] — the file as `binrw` sees
-//! it — then [`Program`], which is a `Schema` plus the slot it lives in. Each panel is a
-//! `#[bitpanel]` in its own module.
+//! Reads top-down: the format's constants, then [`Schema`] — the body as `binrw` sees
+//! it — then [`Program`], which is a `Schema` plus the container it came in. Each panel
+//! is a `#[bitpanel]` in its own module.
 //!
-//! [`Schema`] is generic over its slot space because the live buffer
-//! ([`crate::electro5::live`]) is this same body under the tag `ne5l`, addressed in three
-//! slots instead of eight banks of fifty.
+//! The live buffer ([`crate::electro5::live`]) is this same body under the tag `ne5l`,
+//! addressed in three slots instead of eight banks of fifty. Only the container differs,
+//! so both formats read one [`Schema`].
 
 mod center;
 mod effects;
@@ -20,10 +20,8 @@ pub use organ::{B3PercSpeed, B3Vib, Drawbars, FarfisaVib, OrganModel, OrganPanel
 pub use piano::{PianoCategory, PianoPanel};
 pub use sample::SamplePanel;
 
-use crate::common;
 use crate::common::{bank, container};
-use crate::crc::{CrcReader, CrcWriter};
-use crate::error::{Error, ParseError};
+use crate::error::Error;
 use crate::panel::{FieldError, Panel};
 use crate::types::RangedU16Pair;
 use binrw::{binrw, BinRead, BinWriterExt};
@@ -34,38 +32,34 @@ pub const FORMAT: &str = "ne5p";
 /// Schema versions this build's field offsets have been validated against. Every corpus
 /// program reports 4. See [`crate::error::ParseError::UnsupportedVersion`].
 pub const KNOWN_VERSIONS: &[u32] = &[4];
-/// Total file length: 44-byte CBIN header + 121-byte body.
-pub const FILE_LEN: usize = 165;
+/// What a newly authored program is stamped with. Reading a file overwrites it with
+/// whatever the file carried.
+pub const DEFAULT_VERSION: u32 = 4;
+/// The panel body, everything a `.ne5p` holds below its CBIN header.
+pub const BODY_LEN: usize = 121;
+/// Total file length: 44-byte CBIN header + the body.
+pub const FILE_LEN: usize = container::HEADER_LEN + BODY_LEN;
 pub const BANK_COUNT: u16 = 8;
 pub const SLOT_COUNT: u16 = 50;
 
 pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
-pub type Header = common::Header<Location>;
 pub type Bank = bank::Bank<Program, Location>;
 
-/// The 121-byte panel body, in whichever slot space `L` addresses it.
+/// The 121-byte panel body.
 ///
-/// `L` is the only thing the `ne5p` program and the `ne5l` live buffer disagree about:
-/// the bodies are byte-identical, confirmed on hardware. Everything below the header is
-/// fixed by the format, not by `L`.
+/// The `ne5p` program and the `ne5l` live buffer disagree about nothing below the
+/// header: the bodies are byte-identical, confirmed on hardware, and only the tag and
+/// slot space differ — both of which live on the container.
+///
+/// ⚠️ The offsets below are absolute in a **type-1 file**, the way the panel modules and
+/// the format notes write them; the body itself starts at [`container::HEADER_LEN`]. A
+/// type-0 file holds the same body 20 bytes earlier.
 #[binrw]
 #[derive(Debug)]
-#[br(little, stream = r, map_stream = CrcReader::new(0x2c, 0xa4 - 0x2c), assert(r.checksum() == crc32, "bad checksum: {:#x?} != {:#x?}", r.checksum(), crc32))]
-#[bw(little, stream = w, map_stream = CrcWriter::new(0x2c, 0xa4 - 0x2c))]
-pub struct Schema<L>
-where
-    L: bank::Location,
-{
-    pub header: common::Header<L>,
-
-    pub version: u32,
-
-    // 0x18..0x1a
-    #[bw(try_calc = w.checksum())]
-    crc32: u32,
-
+#[brw(little)]
+pub struct Schema {
     // 0x2c..0x2d
-    #[brw(big, pad_before = 16)]
+    #[brw(big)]
     program_version: u16,
 
     // 0x2e..0x34
@@ -134,16 +128,10 @@ pub(crate) fn describe<P: Panel>(prefix: &str, panel: &P) -> Vec<Field> {
         .collect()
 }
 
-impl<L: bank::Location> Schema<L> {
-    /// A schema of default panels, tagged `format` and addressed at `location`.
-    ///
-    /// ⚠️ `format` is not checked against `L`: the two travel together and only the
-    /// format modules pair them. Callers outside `electro5` want [`Program::new`] or
-    /// [`crate::electro5::Live::new`].
-    pub fn new(format: &str, location: L) -> Schema<L> {
+impl Schema {
+    /// A body of default panels.
+    pub fn new() -> Schema {
         Schema {
-            header: common::Header::new(1, format, location),
-            version: 4,
             pad1: [0; (0x39 - 0x34) as usize],
             pad2: [0; (0x45 - 0x41) as usize],
             program_version: 4,
@@ -191,30 +179,20 @@ impl<L: bank::Location> Schema<L> {
     }
 }
 
-/// Refuse a body whose CBIN tag is not `format`.
-///
-/// ⚠️ `ne5p` and `ne5l` decode through the same [`Schema`], so the decode itself cannot
-/// notice a mixed-up tag: a program read as a live slot parses cleanly and then writes
-/// back under the other tag. This is the only thing standing between the two.
-pub(crate) fn check_tag<L: bank::Location>(
-    format: &'static str,
-    schema: &Schema<L>,
-) -> Result<(), Error> {
-    if schema.header.preamble.format != format {
-        return Err(ParseError::WrongFormat {
-            expected: format,
-            got: schema.header.preamble.format.clone(),
-        }
-        .into());
+impl Default for Schema {
+    fn default() -> Schema {
+        Schema::new()
     }
-    Ok(())
 }
 
-/// The slot lives in one place: `schema.header.location`. Nothing beside the schema
-/// shadows it, which is why writes take `&self`.
+/// One program: its body, and the container that body arrived in.
 #[derive(Debug)]
 pub struct Program {
-    pub schema: Schema<Location>,
+    pub schema: Schema,
+    /// Carried verbatim so the file goes back out as the one that came in — its
+    /// generation, its version, and the 16 bytes no format claims.
+    header: container::Header,
+    location: Location,
     name: Option<String>,
 }
 
@@ -222,31 +200,32 @@ impl Program {
     pub fn new(location: Location) -> Program {
         Program {
             name: None,
-            schema: Schema::new(FORMAT, location),
+            schema: Schema::new(),
+            header: container::Header::new(FORMAT, DEFAULT_VERSION),
+            location,
         }
     }
 
     pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Program, Error> {
-        let image = container::read_fixed(reader, FILE_LEN)?;
-        let schema = Schema::read_be(&mut Cursor::new(image))?;
-        check_tag(FORMAT, &schema)?;
-        if !KNOWN_VERSIONS.contains(&schema.version) {
-            return Err(ParseError::UnsupportedVersion {
-                format: FORMAT,
-                version: schema.version,
-                supported: KNOWN_VERSIONS,
-            }
-            .into());
-        }
-
-        Ok(Program { name: None, schema })
+        let (header, location, body) =
+            container::Container::open_fixed(reader, FORMAT, KNOWN_VERSIONS, FILE_LEN)?;
+        Ok(Program {
+            name: None,
+            schema: Schema::read_be(&mut Cursor::new(body))?,
+            header,
+            location,
+        })
     }
 
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        let mut image = Cursor::new(Vec::new());
-        image.write_be(&self.schema)?;
-        writer.write_all(&container::narrow(&image.into_inner()))?;
-        Ok(())
+        let mut body = Cursor::new(Vec::new());
+        body.write_be(&self.schema)?;
+        container::Container {
+            header: self.header.clone(),
+            location: container::location_of(self.location.x(), self.location.y()),
+            body: body.into_inner(),
+        }
+        .write_to(writer)
     }
 }
 
@@ -260,11 +239,11 @@ impl bank::Item<Location> for Program {
     }
 
     fn location(&self) -> Location {
-        self.schema.header.location
+        self.location
     }
 
     fn set_location(&mut self, location: Location) {
-        self.schema.header.location = location;
+        self.location = location;
     }
 }
 
@@ -376,7 +355,7 @@ mod tests {
             "refused for the wrong reason: {front}",
         );
         assert!(
-            Schema::<Location>::read_be(&mut Cursor::new(&bytes)).is_err(),
+            Schema::read_be(&mut Cursor::new(&bytes[container::HEADER_LEN..])).is_err(),
             "`Schema::read_be` accepted an undecodable panel",
         );
         assert!(

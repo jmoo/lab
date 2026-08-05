@@ -88,7 +88,7 @@ fn drawbars(ui: &Ui, positions: &[u8]) -> String {
 ///
 /// The live buffer is the program body under another tag, so it is the same panel and
 /// gets the same rendering; only the `kind` line and the slot space differ.
-fn panels<L: Location>(ui: &Ui, kind: &str, at: L, p: &Schema<L>) {
+fn panels<L: Location>(ui: &Ui, kind: &str, at: L, p: &Schema) {
     let split = if p.center_panel.split {
         format!("yes @ {:?}", p.center_panel.split_point)
     } else {

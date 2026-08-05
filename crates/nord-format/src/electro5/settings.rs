@@ -12,11 +12,9 @@ pub use panel::{
     Setting, SettingsPanel, SustainPedalMode, SustainPedalType, TonewheelMode, TransposeAt,
 };
 
-use crate::common;
 use crate::common::container;
-use crate::crc::{CrcReader, CrcWriter};
 use crate::electro5::program;
-use crate::error::{Error, ParseError};
+use crate::error::Error;
 use crate::panel::{FieldError, Panel};
 use crate::types::RangedU16Pair;
 use binrw::{binrw, BinRead, BinWriterExt};
@@ -27,29 +25,26 @@ use std::io::{Cursor, Read, Seek, Write};
 pub const FORMAT: &str = "ne5s";
 /// Schema versions validated against the corpus. Every corpus settings file reports 0.
 pub const KNOWN_VERSIONS: &[u32] = &[0];
+/// What a newly authored settings file is stamped with. Reading one overwrites it with
+/// whatever the file carried.
+pub const DEFAULT_VERSION: u32 = 0;
 /// Total file length: 44-byte CBIN header + 34-byte body.
-pub const FILE_LEN: usize = 78;
+pub const FILE_LEN: usize = container::HEADER_LEN + BODY_LEN;
 
 pub type Location = RangedU16Pair<0, 0>;
-pub type Header = common::Header<Location>;
 
+/// The 34-byte settings body.
+///
+/// ⚠️ The offsets below are absolute in a **type-1 file**, as everywhere in this crate;
+/// the body itself starts at [`container::HEADER_LEN`].
 #[binrw]
 #[derive(Debug)]
-#[brw(assert(header.preamble.format == FORMAT))]
-#[br(little, stream = r, map_stream = CrcReader::new(0x2c, 0x4d - 0x2c), assert(r.checksum() == crc32, "bad checksum: {:#x?} != {:#x?}", r.checksum(), crc32))]
-#[bw(little, stream = w, map_stream = CrcWriter::new(0x2c, 0x4d - 0x2c))]
+#[brw(little)]
 pub struct Schema {
-    header: Header,
-
-    pub version: u32,
-
-    #[bw(try_calc = w.checksum())]
-    crc32: u32,
-
     // 0x2c..0x4d. Two panels share these bytes: the menu settings and the instrument's
     // selection state, interleaved rather than split (the set list song runs 30..=37 and
     // the first setting starts at 38), so the body is read once and decoded twice.
-    #[brw(big, pad_before = 16)]
+    #[brw(big)]
     #[br(temp)]
     #[bw(calc = panel::encode(panel, selection))]
     body: [u8; BODY_LEN],
@@ -97,41 +92,39 @@ impl Schema {
 #[derive(Debug)]
 pub struct Settings {
     pub schema: Schema,
+    /// The container this file arrived in — see [`program::Program`].
+    header: container::Header,
 }
 
 impl Settings {
     pub fn new() -> Settings {
         Settings {
             schema: Schema {
-                header: Header::new(1, FORMAT, (0, 0).try_into().unwrap()),
                 panel: SettingsPanel::default(),
                 selection: Selection::default(),
-                version: 0,
             },
+            header: container::Header::new(FORMAT, DEFAULT_VERSION),
         }
     }
 
     pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Settings, Error> {
-        let image = container::read_fixed(reader, FILE_LEN)?;
-        let schema = Schema::read_be(&mut Cursor::new(image))?;
-
-        if !KNOWN_VERSIONS.contains(&schema.version) {
-            return Err(ParseError::UnsupportedVersion {
-                format: FORMAT,
-                version: schema.version,
-                supported: KNOWN_VERSIONS,
-            }
-            .into());
-        }
-
-        Ok(Settings { schema })
+        let (header, _, body) =
+            container::Container::open_fixed::<Location>(reader, FORMAT, KNOWN_VERSIONS, FILE_LEN)?;
+        Ok(Settings {
+            schema: Schema::read_be(&mut Cursor::new(body))?,
+            header,
+        })
     }
 
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        let mut image = Cursor::new(Vec::new());
-        image.write_be(&self.schema)?;
-        writer.write_all(&container::narrow(&image.into_inner()))?;
-        Ok(())
+        let mut body = Cursor::new(Vec::new());
+        body.write_be(&self.schema)?;
+        container::Container {
+            header: self.header.clone(),
+            location: container::location_of(0, 0),
+            body: body.into_inner(),
+        }
+        .write_to(writer)
     }
 
     /// The settings body as stored, `0x2c..=0x4d`. Includes the bits no field claims.
@@ -149,6 +142,7 @@ impl Default for Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ParseError;
     use std::io::Cursor;
 
     /// A settings file writes out at its declared length and reads back.

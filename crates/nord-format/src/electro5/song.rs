@@ -2,12 +2,10 @@ use binrw::{binrw, BinRead, BinWriterExt};
 use std::io::{Cursor, Read, Seek, Write};
 
 use crate::common;
+use crate::common::bank;
 use crate::common::bank::Item;
 use crate::common::container;
-use crate::crc::{CrcReader, CrcWriter};
-use crate::error::{Error, ParseError};
-
-use crate::common::bank;
+use crate::error::Error;
 
 use crate::electro5::program;
 
@@ -17,40 +15,38 @@ pub const FORMAT: &str = "ne5t";
 /// Schema versions this build's field offsets have been validated against: 0 is the
 /// eight factory demo songs, 1 is everything user-written.
 pub const KNOWN_VERSIONS: &[u32] = &[0, 1];
-/// Total file length: 44-byte CBIN header + 18-byte body.
-pub const FILE_LEN: usize = 62;
+/// The 18-byte body: the four program references, and the run of zeros after them.
+pub const BODY_LEN: usize = 18;
+/// Total file length: 44-byte CBIN header + the body.
+pub const FILE_LEN: usize = container::HEADER_LEN + BODY_LEN;
 pub const PROGRAM_COUNT: usize = 4;
 pub const BANK_COUNT: u16 = 4;
 pub const SLOT_COUNT: u16 = 50;
 
 pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
-pub type Header = common::Header<Location>;
 pub type Bank = bank::Bank<Song, Location>;
 pub type Song = common::song::Song<PROGRAM_COUNT, Location, program::Location>;
 
+/// The song body. Offsets are absolute in a type-1 file, as everywhere in this crate;
+/// the body itself starts at [`container::HEADER_LEN`].
+///
+/// `version` is a write import rather than a field: the body only *echoes* the version,
+/// which the container holds.
 #[binrw]
-#[br(little, stream = r, map_stream = CrcReader::new(0x2c, 0x3d - 0x2c), assert(r.checksum() == crc32, "bad checksum: {:#x?} != {:#x?}", r.checksum(), crc32))]
-#[bw(little, stream = w, map_stream = CrcWriter::new(0x2c, 0x3d - 0x2c))]
+#[bw(import(version: u32))]
 struct Schema {
-    pub header: Header,
-
-    pub version: u32,
-
-    #[bw(try_calc = w.checksum())]
-    crc32: u32,
-
-    // Bits 48.. carry the version again. The container header is never transmitted
-    // over USB — the device sends only this body — so the version is echoed into the
-    // payload where the wire side can see it. ⚠️ It must be the *read* version, never a
-    // constant: the eight factory demo songs are version 0, and stamping 1 here
-    // silently rewrites them.
-    #[brw(big, pad_before = 16)]
+    // 0x2c..0x34. Bits 48.. carry the version again. The container header is never
+    // transmitted over USB — the device sends only this body — so the version is echoed
+    // into the payload where the wire side can see it. ⚠️ It must be the version the
+    // container carries, never a constant: the eight factory demo songs are version 0,
+    // and stamping 1 here silently rewrites them.
+    #[brw(big)]
     #[bw(calc = (
     ((* a).as_u16() as u64) << 39
     | ((* b).as_u16() as u64) << 30
     | ((* c).as_u16() as u64) << 21
     | ((* d).as_u16() as u64) << 12)
-    | ((* version as u64) << 48)
+    | ((version as u64) << 48)
     )]
     map: u64,
 
@@ -75,65 +71,38 @@ struct Schema {
     pub d: program::Location,
 }
 
-impl Schema {
-    pub fn new(
-        header_type: u32,
-        location: Location,
-        version: u32,
-        a: program::Location,
-        b: program::Location,
-        c: program::Location,
-        d: program::Location,
-    ) -> Schema {
-        Schema {
-            header: Header::new(header_type, FORMAT, location),
-            version,
-            a,
-            b,
-            c,
-            d,
-        }
-    }
-}
-
 impl Song {
     pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Song, Error> {
-        let image = container::read_fixed(reader, FILE_LEN)?;
-        let schema = Schema::read_be(&mut Cursor::new(image))?;
+        let (header, location, body) =
+            container::Container::open_fixed(reader, FORMAT, KNOWN_VERSIONS, FILE_LEN)?;
+        let schema = Schema::read_be(&mut Cursor::new(body))?;
 
-        if !KNOWN_VERSIONS.contains(&schema.version) {
-            return Err(ParseError::UnsupportedVersion {
-                format: FORMAT,
-                version: schema.version,
-                supported: KNOWN_VERSIONS,
-            }
-            .into());
-        }
-
-        let mut song = Song::new(
-            schema.header.location,
-            [schema.a, schema.b, schema.c, schema.d],
-        );
-        song.set_version(schema.version);
-        song.set_header_type(schema.header.preamble.version);
+        let mut song = Song::new(location, [schema.a, schema.b, schema.c, schema.d]);
+        song.set_header(header);
         Ok(song)
     }
 
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        let schema = Schema::new(
-            self.header_type(),
-            self.location(),
-            self.version(),
-            self.programs()[0],
-            self.programs()[1],
-            self.programs()[2],
-            self.programs()[3],
-        );
+        let schema = Schema {
+            a: self.programs()[0],
+            b: self.programs()[1],
+            c: self.programs()[2],
+            d: self.programs()[3],
+        };
 
-        let mut image = Cursor::new(Vec::new());
-        image.write_be(&schema)?;
-        writer.write_all(&container::narrow(&image.into_inner()))?;
-        Ok(())
+        let mut body = Cursor::new(Vec::new());
+        body.write_be_args(&schema, (self.version(),))?;
+
+        // The song carries everything but the tag; only this module knows which format
+        // it is.
+        let mut header = self.header().clone();
+        header.tag = FORMAT.to_string();
+        container::Container {
+            header,
+            location: container::location_of(self.location().x(), self.location().y()),
+            body: body.into_inner(),
+        }
+        .write_to(writer)
     }
 }
 

@@ -1,6 +1,6 @@
-use binrw::{BinRead, BinReaderExt};
+use binrw::BinReaderExt;
 
-use crate::common::header;
+use crate::common::container;
 
 use crate::error::{Error, ParseError};
 
@@ -48,16 +48,18 @@ pub fn peek(reader: &mut impl BinReaderExt) -> Result<Peek, Error> {
             file_type: FileType::Xml,
         }),
 
-        0x43 => match header::Preamble::read_be(reader) {
-            Ok(preamble) => {
-                let format = preamble.format;
-                Ok(Peek {
-                    format,
-                    file_type: FileType::Cbin,
-                })
-            }
-            Err(e) => Err(e.into()),
-        },
+        // The magic and the tag, which is as far as dispatch needs to look. The
+        // generation and the checksum are the container's to check, once a format module
+        // has said which file this is.
+        0x43 => {
+            let mut head = [0u8; 12];
+            reader.read_exact(&mut head)?;
+            container::header_type(&head)?;
+            Ok(Peek {
+                format: String::from_utf8_lossy(&head[8..12]).into_owned(),
+                file_type: FileType::Cbin,
+            })
+        }
 
         _ => Err(ParseError::UnknownFormat(format!("first_byte = {:0x}", head)).into()),
     };
