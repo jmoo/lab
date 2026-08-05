@@ -22,7 +22,7 @@ Playground for personal projects and NixOS / nix-darwin config for my machines.
 | 🌐 | [nord-web-demo](crates/nord-web-demo/README.md) | Browser page driving nord-usb's WebUSB backend on real hardware |
 | 🧩 | [vscode-nix-extensions](pkgs/vscode-nix-extensions/README.md) | Generate VS Code extensions from Nix expressions |
 
-The `nord-*` crates are tested against a specimen corpus in a separate private repo — see [`docs/nord-corpus.md`](docs/nord-corpus.md).
+The `nord-*` crates are tested against a specimen corpus in a separate private repo (`jmoo/nord-corpus`), pinned by revision in `overlay.nix`. Each crate's README says how to run its tests.
 
 ## Disclaimer
 

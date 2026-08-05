@@ -162,6 +162,24 @@ a local run is only as pinned as the checkout `NORD_CORPUS_DIR` names.
 `tests/corpus_guard.rs` runs under every feature set and fails when `NORD_CORPUS_DIR`
 is set without `--features corpus`, since that run verifies none of the decode.
 
+### Three ways to run
+
+| | Corpus | What it covers |
+|---|---|---|
+| `cargo test --workspace` | none | The crates' own unit tests and synthetic fixtures. The corpus suites compile out; the guards fail the run if `NORD_CORPUS_DIR` is set anyway. |
+| `nix build .#checks.<system>.nord-{format,usb}-corpus` | `pkgs.nord-corpus` — the git tier | Every committed specimen. Needs read access to the corpus repo and nothing else. |
+| `nix build .#corpus-full` | `pkgs.nord-corpus-full` — git tier **plus** the whole R2 tier | The above, and the vendor sample pool and the originals git cannot hold. Needs a seeded store. |
+
+The everything-run splices every object the corpus's `library.json` indexes into
+the assembly — the bundle archives, the untrimmed captures, and the vendor sample
+pool projected into the per-extension directories beside the committed specimens.
+Seed the store from a corpus checkout (`nix develop`, then `corpus nix-add`; the
+corpus README owns those mechanics), and `nix build .#corpus-full` runs both
+crates' full suites against it. Either leg builds alone as
+`.#nord-format-corpus-full` / `.#nord-usb-corpus-full`. It is deliberately a
+package rather than a check, so `nix flake check` stays runnable without the
+seeded store.
+
 ## Where this fits
 
 This project started in 2023 as my personal 'learn rust' project. The goal was to be able to read/write clavia files for my electro 5. After I got most of the ne5 formats RE'd, I got a new job that was pretty demanding and I didn't have much free time to continue.
