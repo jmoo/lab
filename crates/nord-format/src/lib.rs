@@ -3,13 +3,15 @@ pub mod common;
 pub mod crc;
 pub mod electro5;
 pub mod error;
+pub mod file;
 pub mod panel;
 pub mod types;
 pub mod util;
 
+pub use file::{File, Format};
+
 use crate::common::sample::Sample;
 use crate::common::{piano, sample};
-use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 use util::{peek, FileType};
@@ -96,7 +98,7 @@ pub fn from_stream(reader: &mut (impl Read + Seek + Sized)) -> Result<Entity, Er
 }
 
 pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Entity, Error> {
-    from_stream(&mut BufReader::new(File::open(path)?))
+    from_stream(&mut BufReader::new(std::fs::File::open(path)?))
 }
 
 /// Serialise an [`Entity`] back to the bytes of its file — the counterpart to
