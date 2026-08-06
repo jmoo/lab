@@ -3,7 +3,7 @@
 //! Everything here is *data*, so it goes to stdout: `nord inspect x.ne5p | grep transpose`
 //! has to work.
 
-use nord_format::common::bank::{Item, Location};
+use nord_format::common::bank::Location;
 use nord_format::common::sample::{stroke, Sample};
 use nord_format::electro5::program::Schema;
 use nord_format::electro5::{Instrument, OrganModel};
@@ -88,7 +88,7 @@ fn drawbars(ui: &Ui, positions: &[u8]) -> String {
 ///
 /// The live buffer is the program body under another tag, so it is the same panel and
 /// gets the same rendering; only the `kind` line and the slot space differ.
-fn panels<L: Location>(ui: &Ui, kind: &str, at: L, p: &Schema<L>) {
+fn panels<L: Location>(ui: &Ui, kind: &str, at: L, p: &Schema) {
     let split = if p.center_panel.split {
         format!("yes @ {:?}", p.center_panel.split_point)
     } else {
@@ -482,13 +482,13 @@ fn sample(ui: &Ui, s: &Sample) {
 pub fn print(ui: &Ui, entity: &Entity) {
     match entity {
         Entity::Program(Program::Electro5(p)) => {
-            panels(ui, "Electro 5 program (ne5p)", p.location(), &p.schema)
+            panels(ui, "Electro 5 program (ne5p)", p.location, &p.body)
         }
         Entity::Live(Live::Electro5(p)) => {
-            panels(ui, "Electro 5 live slot (ne5l)", p.location(), &p.schema)
+            panels(ui, "Electro 5 live slot (ne5l)", p.location, &p.body)
         }
         Entity::Song(Song::Electro5(s)) => {
-            let l = s.location();
+            let l = s.location;
             ui.out(field(ui, 2, "type", "Electro 5 song / set (ne5t)"));
             ui.out(field(ui, 2, "location", location(l.x(), l.y())));
             section(ui, "Programs");
@@ -508,7 +508,7 @@ pub fn print(ui: &Ui, entity: &Entity) {
             // Not a menu — where the instrument was when the object was written. The
             // Live slot and the program are each retained while the other is in use, so
             // both are shown whichever mode is active.
-            let sel = &s.schema.selection;
+            let sel = &s.body.selection;
             section(ui, "Selection");
             for (name, value) in [
                 ("program", location(sel.program.x(), sel.program.y())),
@@ -530,7 +530,7 @@ pub fn print(ui: &Ui, entity: &Entity) {
 
             // Grouped and ordered by the instrument's own menus, which is not the order
             // the fields sit in the file.
-            for (menu, fields) in s.schema.panel.by_menu() {
+            for (menu, fields) in s.body.panel.by_menu() {
                 section(ui, menu.title());
                 for f in fields {
                     ui.out(format!(

@@ -3,13 +3,15 @@ pub mod common;
 pub mod crc;
 pub mod electro5;
 pub mod error;
+pub mod file;
 pub mod panel;
 pub mod types;
 pub mod util;
 
+pub use file::{File, Format};
+
 use crate::common::sample::Sample;
 use crate::common::{piano, sample};
-use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 use util::{peek, FileType};
@@ -95,17 +97,61 @@ pub fn from_stream(reader: &mut (impl Read + Seek + Sized)) -> Result<Entity, Er
     }
 }
 
+/// One decoded entity from a bare wire body — the device transfers only bodies, so
+/// this is the read path that never fabricates a container to immediately re-parse it.
+///
+/// `format` and `version` are the tag and schema version the device reported for the
+/// slot, and `location` is the raw wire form of the slot it came from. Formats the
+/// wire does not transfer this way (bundles) are refused as unknown.
+pub fn from_wire(format: &str, location: u32, version: u32, body: &[u8]) -> Result<Entity, Error> {
+    use crate::file::Location;
+
+    fn at<L: Location>(location: u32) -> Result<L, Error> {
+        Ok(L::from_wire(location)?)
+    }
+
+    match format {
+        sample::FORMAT => Ok(Entity::Sample(sample::Sample::from_wire(
+            at(location)?,
+            version,
+            body,
+        )?)),
+        piano::FORMAT => Ok(Entity::Piano(piano::Piano::from_wire(
+            at(location)?,
+            version,
+            body,
+        )?)),
+        electro5::song::FORMAT => Ok(Entity::Song(Song::Electro5(electro5::Song::from_wire(
+            at(location)?,
+            version,
+            body,
+        )?))),
+        electro5::program::FORMAT => Ok(Entity::Program(Program::Electro5(
+            electro5::Program::from_wire(at(location)?, version, body)?,
+        ))),
+        electro5::live::FORMAT => Ok(Entity::Live(Live::Electro5(electro5::Live::from_wire(
+            at(location)?,
+            version,
+            body,
+        )?))),
+        electro5::settings::FORMAT => Ok(Entity::Settings(Settings::Electro5(
+            electro5::Settings::from_wire(at(location)?, version, body)?,
+        ))),
+        e => Err(ParseError::UnknownFormat(e.to_string()).into()),
+    }
+}
+
 pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Entity, Error> {
-    from_stream(&mut BufReader::new(File::open(path)?))
+    from_stream(&mut BufReader::new(std::fs::File::open(path)?))
 }
 
 /// Serialise an [`Entity`] back to the bytes of its file — the counterpart to
 /// [`from_stream`].
 ///
-/// Every concrete type has a `write_to`, but the enum had no way out, so a caller
-/// holding an `Entity` could not round-trip it without re-matching every variant and
-/// depending on `binrw` directly. Keeping that inside the crate is the point: `binrw`
-/// is an implementation detail.
+/// Every concrete type has a `to_bytes`, but the enum needs a way out too, so a caller
+/// holding an `Entity` can round-trip it without re-matching every variant. A
+/// fixed-length format's emitted length is checked inside [`File`]'s writer against
+/// what its module declares.
 ///
 /// For every format this crate decodes, `to_bytes(from_stream(x)) == x` byte-for-byte.
 /// That is the crate's central invariant — decoded values are read-only views over a
@@ -113,60 +159,19 @@ pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Entity, Error> {
 /// against real specimens.
 ///
 /// Bundles are unsupported: [`electro5::Bundle`] is a ZIP walk over other entities,
-/// not a `binrw` structure, so there is nothing to re-emit.
+/// not a re-emittable structure.
 pub fn to_bytes(entity: &Entity) -> Result<Vec<u8>, Error> {
-    use std::io::Cursor;
-
-    let mut out = Cursor::new(Vec::new());
-
-    // Fixed-size formats declare their file length, so a writer that emits the wrong
-    // number of bytes can be caught here rather than producing a file that looks
-    // plausible until something tries to load it. Pianos and samples are content of
-    // arbitrary size and have no such length.
-    let expected = match entity {
-        Entity::Program(Program::Electro5(p)) => {
-            p.write_to(&mut out)?;
-            Some((electro5::program::FORMAT, electro5::program::FILE_LEN))
-        }
-        Entity::Live(Live::Electro5(l)) => {
-            l.write_to(&mut out)?;
-            Some((electro5::live::FORMAT, electro5::live::FILE_LEN))
-        }
-        Entity::Song(Song::Electro5(s)) => {
-            s.write_to(&mut out)?;
-            Some((electro5::song::FORMAT, electro5::song::FILE_LEN))
-        }
-        Entity::Settings(Settings::Electro5(s)) => {
-            s.write_to(&mut out)?;
-            Some((electro5::settings::FORMAT, electro5::settings::FILE_LEN))
-        }
-        Entity::Piano(p) => {
-            p.write_to(&mut out)?;
-            None
-        }
-        Entity::Sample(s) => {
-            s.write_to(&mut out)?;
-            None
-        }
+    match entity {
+        Entity::Program(Program::Electro5(p)) => p.to_bytes(),
+        Entity::Live(Live::Electro5(l)) => l.to_bytes(),
+        Entity::Song(Song::Electro5(s)) => s.to_bytes(),
+        Entity::Settings(Settings::Electro5(s)) => s.to_bytes(),
+        Entity::Piano(p) => p.to_bytes(),
+        Entity::Sample(s) => s.to_bytes(),
         #[cfg(feature = "bundle")]
-        Entity::Bundle(_) => {
-            return Err(ParseError::UnknownFormat(
-                "bundle (an archive, not a re-emittable entity)".to_string(),
-            )
-            .into())
-        }
-    };
-
-    let bytes = out.into_inner();
-    if let Some((format, expected)) = expected {
-        if bytes.len() != expected {
-            return Err(ParseError::BadEncodedLength {
-                format,
-                got: bytes.len(),
-                expected,
-            }
-            .into());
-        }
+        Entity::Bundle(_) => Err(ParseError::UnknownFormat(
+            "bundle (an archive, not a re-emittable entity)".to_string(),
+        )
+        .into()),
     }
-    Ok(bytes)
 }

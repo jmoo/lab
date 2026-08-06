@@ -1,59 +1,61 @@
-use crate::common;
-
+use crate::common::container::Header;
 use crate::error::Error;
-use crate::types::RangedU16Pair;
-use binrw::{binrw, BinRead, BinWriterExt};
-use std::fmt;
-use std::fmt::Debug;
-use std::io::{Read, Seek, Write};
+use crate::file::{sealed, BodyReader, File, Format, Opaque, Verbatim};
+use std::io::{Seek, Write};
 
 pub const FORMAT: &str = "npno";
-pub const BANK_COUNT: u16 = 8;
-pub const SLOT_COUNT: u16 = 50;
 
-pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
-pub type Header = common::Header<Location>;
+/// The `npno` format: a piano library file.
+///
+/// Nothing below the CBIN header is mapped, so the body is held verbatim: enough to
+/// identify a file and hand it back unchanged, and no more. The header's version and
+/// location fields are library content of unknown meaning, preserved rather than
+/// checked.
+#[derive(Debug)]
+pub struct Npno;
 
-#[binrw]
-#[brw(assert(header.preamble.format == FORMAT))]
-struct Schema {
-    header: Header,
-}
+impl sealed::Sealed for Npno {}
 
-pub struct Piano {
-    schema: Schema,
-}
+impl Format for Npno {
+    const TAG: &'static str = FORMAT;
+    const KNOWN_VERSIONS: &'static [u32] = &[];
+    const FILE_LEN: Option<usize> = None;
+    type Location = Verbatim;
+    type Body = Opaque;
 
-impl Piano {
-    pub fn new() -> Piano {
-        Piano {
-            schema: Schema {
-                header: Header::new(0, FORMAT, (0, 0).try_into().unwrap()),
-            },
-        }
+    fn read_body(r: &mut BodyReader, _header: &Header) -> Result<Opaque, Error> {
+        Ok(Opaque(r.bytes()?))
     }
 
-    pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Piano, Error> {
-        let schema = Schema::read_be(reader)?;
-        Ok(Piano { schema })
+    fn write_body(
+        body: &Opaque,
+        _header: &Header,
+        w: &mut (impl Write + Seek),
+    ) -> Result<(), Error> {
+        w.write_all(&body.0)?;
+        Ok(())
     }
 
-    pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        writer.write_be(&self.schema)?;
+    // A library file, not a slot save: its trailer is its own, preserved verbatim.
+    fn check(_header: &Header) -> Result<(), crate::error::ParseError> {
         Ok(())
     }
 }
 
-impl Default for Piano {
-    fn default() -> Self {
-        Self::new()
+pub type Piano = File<Npno>;
+
+impl File<Npno> {
+    pub fn new() -> Piano {
+        File {
+            header: Header::new(FORMAT, 0),
+            location: Verbatim(0),
+            body: Opaque(Vec::new()),
+        }
     }
 }
 
-impl Debug for Piano {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("common::Piano")
-            .field("schema", &self.schema.header.preamble.format)
-            .finish()
+impl Default for File<Npno> {
+    fn default() -> Self {
+        Self::new()
     }
 }

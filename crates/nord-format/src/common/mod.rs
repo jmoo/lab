@@ -1,15 +1,11 @@
 pub mod bank;
 pub mod components;
+pub mod container;
 pub mod piano;
 pub mod sample;
 pub mod song;
 
-pub mod header;
-
 pub use components::{Level, PercSpeed, VibChorus};
-
-pub use header::Header;
-pub use header::Preamble;
 
 pub mod program;
 

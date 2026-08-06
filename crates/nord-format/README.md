@@ -2,8 +2,9 @@
 
 Parse and write **Clavia / Nord** keyboard binary file formats from Rust.
 
-This is the pure format-logic crate of the Nord toolkit: the `CBIN` container,
-the CRC-32 (ISO-HDLC) range checksum, and per-model entity layouts. It depends
+This is the pure format-logic crate of the Nord toolkit: the `CBIN` container in
+both of its header generations, their two checksums, and per-model entity
+layouts. It depends
 only on [`binrw`] (plus `zip` behind the `bundle` feature for backup bundles) and
 does no USB, OS, or I/O beyond `Read`/`Seek`/`Write` — so it's trivially testable
 against a specimen corpus and reusable by higher layers (a device/USB crate, a
@@ -22,6 +23,28 @@ CLI) without dragging in a transport stack.
 
 Everything that parses **round-trips byte-for-byte**, verified against a
 change-one-knob specimen corpus.
+
+### Both CBIN generations
+
+A file's header type sits at `0x04` and decides the container, not the body:
+
+| | type 1 | type 0 |
+|---|---|---|
+| header | 44 bytes | 24 bytes |
+| checksum | CRC-32 (ISO-HDLC) at `0x18`, over the body | CRC-16 (IBM-3740) in the last two bytes, over everything before them |
+| body starts | `0x2c` | `0x18` |
+
+so the same content is 18 bytes shorter as type 0. `common::container` reads and
+writes both, and every reader re-emits a file in the generation it arrived in.
+Type 0 is the commoner of the two across the corpus: the Electro 5 factory banks,
+the Electro 3 / 3 HP / 4 / 4D, both C2s, the Wave, the Stage Classic / EX / 2 /
+2 EX, the Nord Piano 1–3, the Lead 4 and A1, and the whole `.nsmp` sample
+generation. Type 1 is what the Electro 5 writes in the field, and what the
+Electro 6 and 7, the Stage 3 and 4, the Nord Piano 4 and 5, the Grand, the Organ
+3 and the Wave 2 ship.
+
+⚠️ A type-0 file's crc16 covers its **header** as well as its body, so patching a
+tag in place invalidates it where the type-1 crc32 would not notice.
 
 ## Usage
 
@@ -59,25 +82,114 @@ refinement — never a risk to the write path.
 - **`bundle`** — ZIP-based backup bundles (pulls in the `zip` stack). Off by
   default so parse-only consumers stay lean; enable with `--features bundle`.
 - **`corpus`** — *test-only*. Gates the corpus-backed integration tests
-  (`tests/ne5.rs`); see below.
+  (`tests/corpus_cases.rs` and friends); see below.
 
 ## Tests
 
-Unit tests live inline (`#[cfg(test)] mod tests`) and run on a plain
-`cargo test`. The **corpus integration suite** (`tests/ne5.rs`) is gated behind
-the `corpus` feature because it needs the specimen corpus, which lives in a
-separate private repo (`jmoo/nord-corpus`)
+Unit tests live inline (`#[cfg(test)] mod tests`) and run on a plain `cargo test`,
+alongside `tests/fixtures.rs` — a set of small **synthetic** specimens in
+`tests/fixtures/`, emitted by this crate's own writers, which give a fresh clone a
+parse / round-trip / checksum suite with no corpus at all. Their filenames are the
+oracle, and `cargo test -p nord-format --test fixtures -- --ignored bless` rewrites
+the bytes from the generator.
+
+The **corpus integration suite** is gated behind the `corpus` feature because it needs
+the specimen corpus, which lives in a separate private repo (`jmoo/nord-corpus`).
+`tests/corpus_cases.rs` is a `libtest-mimic` harness reporting one case per specimen
+(`<check>/<path under the corpus root>`), so a failure names the file, all failures
+surface in one run, and a `.skip.` specimen shows up as an ignored case. Its
+`corpus_wide/` trials hold the two assertions a per-specimen harness cannot express:
+the dependency-id bijection over every program in the backup, and the set of live
+slots the corpus covers.
+
+Its `decode` sweep reads the corpus's **oracle sidecars**. Every specimen the corpus
+can say something about ships a `<filename>.oracle.json` beside it, pinning field
+paths to the values its capture fixed — `"center_panel.lower_part": "Organ"`, a
+numeric knob with a tolerance, a sibling its bytes must equal, or a stated reason for
+pinning nothing. Nothing in this crate knows what a knob or a panel directory is: the
+oracle names the field, `Schema::fields()` answers, and a specimen joins the sweep by
+gaining a sidecar in the corpus. The schema is defined in nord-corpus's README, which
+owns it.
+
+`tests/containers.rs` is the sweep across **every** instrument the corpus covers —
+32 model directories and the shared sample library, ten thousand specimens in the
+git tier and 12,646 with the whole R2 tier spliced in. Each file gets two labels.
+
+Its **class** is what the first four bytes say it is, and is a property of the
+material: `cbin-type0` / `cbin-type1`, or `midi`, `sysex`, `zip`, `cn3`, `smac`
+for the corpus's non-CBIN material — six model directories hold no CBIN at all —
+or `unknown`. Its **outcome** is how far this build gets:
+
+| | |
+|---|---|
+| `decoded` | a schema accounts for the body and it re-emits byte for byte |
+| `container` | the container reads and checksums, the body is one unknown region |
+| `unsupported` | the magic is recognised and this build does not read the format |
+| `refused` | a CBIN file whose container does not read — **the regression signal** |
+| `unidentified` | the magic names nothing |
+
+Class counts and outcomes are floored per model and per class, and the floors
+ratchet up only. An unknown format is a classification, not a failure, and
+`unsupported` is a permanent answer rather than a TODO: the CBIN container and
+its two checksums are the whole of what this crate knows, and none of it applies
+to a MIDI dump. What fails is a file sliding *down* a class — or an `unknown`
+count going *up*, which is the one number here that is capped rather than
+floored.
+
+### Differential and factory specimens
+
+The corpus holds two kinds of file, and its rule is machine-checkable: **a path
+with a `factory/` component is vendor material and carries no filename oracle**.
+Everything else in a model directory is differential — a change-one-knob patch
+whose filename encodes its settings.
+
+So the panel sweeps filter on `is_factory` (`tests/common/mod.rs`) and the
+`coverage/oracles_are_a_decision` trial asserts no `factory/` path carries a sidecar,
+no differential specimen is missing one, and no sidecar has outlived its specimen —
+while round-trip and container sweeps take the whole tree. Nothing here needs a
+hand-maintained exclusion list, and a new model directory cannot break one.
+
+`NORD_CORPUS_DIR` names the **corpus root** — the directory holding `ne5/`,
+`ne6/`, … and the sample-pool directories `nsmp/`, `nsmp3/`, `nsmp4/` — not one
+model. A suite that is about one instrument joins its own directory (`ne5_dir()`).
 
 ```sh
 cargo test -p nord-format                       # minimal suite (inline unit tests)
 
-# Full corpus sweep — point NORD_CORPUS_DIR at a nord-corpus/ne5 checkout:
-NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+# Full corpus sweep — point NORD_CORPUS_DIR at a nord-corpus checkout root:
+NORD_CORPUS_DIR=/path/to/nord-corpus \
   cargo test -p nord-format --features corpus
+
+# Everything both crates have, which is what a change should be run against:
+NORD_CORPUS_DIR=/path/to/nord-corpus \
+  cargo test --workspace --features nord-usb/corpus,nord-format/corpus
 
 # With nix
 nix build .#checks.<system>.nord-format-corpus
 ```
+
+The Nix check runs against the corpus revision pinned in the flake's `overlay.nix`;
+a local run is only as pinned as the checkout `NORD_CORPUS_DIR` names.
+`tests/corpus_guard.rs` runs under every feature set and fails when `NORD_CORPUS_DIR`
+is set without `--features corpus`, since that run verifies none of the decode.
+
+### Three ways to run
+
+| | Corpus | What it covers |
+|---|---|---|
+| `cargo test --workspace` | none | The crates' own unit tests and synthetic fixtures. The corpus suites compile out; the guards fail the run if `NORD_CORPUS_DIR` is set anyway. |
+| `nix build .#checks.<system>.nord-{format,usb}-corpus` | `pkgs.nord-corpus` — the git tier | Every committed specimen. Needs read access to the corpus repo and nothing else. |
+| `nix build .#corpus-full` | `pkgs.nord-corpus-full` — git tier **plus** the whole R2 tier | The above, and the vendor sample pool and the originals git cannot hold. Needs a seeded store. |
+
+The everything-run splices every object the corpus's `library.json` indexes into
+the assembly — the bundle archives, the untrimmed captures, and the vendor sample
+pool projected into the per-extension directories beside the committed specimens.
+Seed the store from a corpus checkout (`nix develop`, then `corpus nix-add`; the
+corpus README owns those mechanics), and `nix build .#corpus-full` runs both
+crates' full suites against it. Either leg builds alone as
+`.#nord-format-corpus-full` / `.#nord-usb-corpus-full`. It is deliberately a
+package rather than a check, so `nix flake check` stays runnable without the
+seeded store.
 
 ## Where this fits
 

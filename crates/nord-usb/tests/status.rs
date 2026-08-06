@@ -10,17 +10,13 @@
 
 #![cfg(feature = "replay")]
 
+mod common;
+
+use common::{block_on, hex};
 use nord_usb::op;
 use nord_usb::transport::{Direction, ReplayTransport, Step};
 use nord_usb::wire::ObjectClass;
 use nord_usb::Session;
-
-fn hex(s: &str) -> Vec<u8> {
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-        .collect()
-}
 
 fn step(d: Direction, s: &str) -> Step {
     Step {
@@ -53,29 +49,6 @@ fn program_status_script() -> Vec<Step> {
         step(Out, "0000001200000006000000010000000226e3"),
         step(In, "0000001600000006000000010000000300000000006f"),
     ]
-}
-
-/// Minimal executor — the crate is async but deliberately runtime-agnostic, and a
-/// replayed exchange never actually pends, so a busy-poll is sufficient and keeps
-/// tokio out of the dependency tree.
-fn block_on<F: std::future::Future>(mut fut: F) -> F::Output {
-    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-    fn vtable() -> &'static RawWakerVTable {
-        &RawWakerVTable::new(
-            |_| RawWaker::new(std::ptr::null(), vtable()),
-            |_| {},
-            |_| {},
-            |_| {},
-        )
-    }
-    let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), vtable())) };
-    let mut cx = Context::from_waker(&waker);
-    let mut fut = unsafe { std::pin::Pin::new_unchecked(&mut fut) };
-    loop {
-        if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
-            return v;
-        }
-    }
 }
 
 #[test]

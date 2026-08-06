@@ -24,6 +24,12 @@ pub enum ParseError {
     #[error("{0}")]
     AssertFail(String),
 
+    /// A CBIN header generation this build has no layout for. The generation decides
+    /// where the body starts, so decoding one unrecognised would read every field from
+    /// the wrong offset and still produce values that look like values.
+    #[error("CBIN header type {0} is not supported (known: 0, 1)")]
+    UnknownHeaderType(u32),
+
     /// A file whose schema version this build has never been validated against.
     ///
     /// Field offsets are only known to be right for the versions in the corpus.

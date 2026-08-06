@@ -83,18 +83,18 @@ pub async fn info<T: Transport, C>(
     ProgramInfo::decode(&resp)
 }
 
-/// Read one program off the instrument, returning the bytes of a `.ne5p` file.
+/// Read one object off the instrument: its metadata and its bare wire body, with the
+/// device's own CRC-32 checked against the bytes when the device supplies one.
 ///
-/// **Read-only.** The body is wrapped in a `CBIN` header ([`envelope`]) so the result
-/// is a real file, and the device's own CRC-32 is checked against it when the device
-/// supplies one.
-pub async fn read_program<T: Transport, C>(
+/// **Read-only.** This is the transfer as the wire actually has it — no container is
+/// built. A caller wanting a decoded entity hands `(format, version, body)` to
+/// `nord-format`'s wire constructor; one wanting a file on disk takes
+/// [`read_program`].
+pub async fn read_entity<T: Transport, C>(
     session: &mut Session<'_, T, C>,
     at: Location,
-) -> Result<Vec<u8>> {
+) -> Result<(ProgramInfo, Vec<u8>)> {
     let (meta, body) = transfer_out(session, at).await?;
-
-    let file = envelope::wrap(&meta.format, at, meta.version, &body)?;
     if let Some(expected) = meta.crc32 {
         let actual = envelope::crc32(&body);
         if expected != actual {
@@ -103,7 +103,19 @@ pub async fn read_program<T: Transport, C>(
             )));
         }
     }
-    Ok(file)
+    Ok((meta, body))
+}
+
+/// Read one program off the instrument, returning the bytes of a `.ne5p` file.
+///
+/// **Read-only.** [`read_entity`], wrapped in a `CBIN` header ([`envelope`]) so the
+/// result is a real file — the call for paths that save or diff file bytes.
+pub async fn read_program<T: Transport, C>(
+    session: &mut Session<'_, T, C>,
+    at: Location,
+) -> Result<Vec<u8>> {
+    let (meta, body) = read_entity(session, at).await?;
+    envelope::wrap(&meta.format, at, meta.version, &body)
 }
 
 /// Read an entity's body off the instrument **without** wrapping it in a CBIN header.

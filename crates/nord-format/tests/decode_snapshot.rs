@@ -20,25 +20,18 @@
 //! snapshot was bought for.
 //!
 //! ```sh
-//! NORD_CORPUS_DIR=/path/to/nord-corpus/ne5 \
+//! NORD_CORPUS_DIR=/path/to/nord-corpus \
 //!   cargo test -p nord-format --features corpus --test decode_snapshot
 //! ```
 
-use nord_format::electro5::program::OrganPanel;
-use nord_format::electro5::{OrganModel, Program};
-use nord_format::panel::Panel;
+mod common;
+
+use common::{all_programs, files_with, ne5_dir, packed, read_program, rows};
 use nord_format::{electro5, Entity};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// Root of the Electro 5 specimen corpus — see `tests/ne5.rs`.
-fn corpus_dir() -> PathBuf {
-    std::env::var_os("NORD_CORPUS_DIR")
-        .map(PathBuf::from)
-        .expect("set NORD_CORPUS_DIR to a nord-corpus/ne5 checkout for --features corpus")
-}
 
 /// The files pinned field-by-field by [`specimens`]: one per `programs/` subdirectory,
 /// each with a non-default value in the panel it was captured for, plus one factory
@@ -53,242 +46,6 @@ const PINNED: &[&str] = &[
     "programs/sample/100_01_000_s064.ne5p",
     "usb/backup/full_backup/contents/Program/Bank 1/Amped Vox.ne5p",
 ];
-
-/// One field's decode: a panel-qualified key, where its bits sit, the bits themselves,
-/// and what they decoded to.
-struct Row {
-    key: String,
-    placement: String,
-    /// The field's bits shifted down to bit 0, carrying no type — so this survives a
-    /// field being retyped and pins the placement on its own. `None` where the bits are
-    /// not reachable: some organ accessors return a decoded value with no way to ask for
-    /// the pattern behind it.
-    raw: Option<u64>,
-    value: String,
-}
-
-impl Row {
-    fn new(
-        key: String,
-        placement: impl Into<String>,
-        raw: impl Into<Option<u64>>,
-        value: impl Into<String>,
-    ) -> Row {
-        Row {
-            key,
-            placement: placement.into(),
-            raw: raw.into(),
-            value: value.into(),
-        }
-    }
-
-    fn raw_str(&self) -> String {
-        match self.raw {
-            Some(raw) => raw.to_string(),
-            None => "—".to_string(),
-        }
-    }
-}
-
-/// Every field of a `#[bitpanel]` panel, in declaration order.
-fn packed<P: Panel>(p: &P) -> Vec<Row> {
-    p.field_values()
-        .into_iter()
-        .map(|f| {
-            Row::new(
-                format!("{}.{}", P::NAME, f.name),
-                f.placement,
-                f.raw,
-                f.value,
-            )
-        })
-        .collect()
-}
-
-/// Where one organ model's state sits, as absolute Electro 5 file offsets.
-///
-/// Restated here rather than read from `nord-format`: the panel's own copy of these
-/// offsets is what is under test, and a snapshot compared against the numbers it came
-/// from would pin nothing.
-struct Bytes {
-    model: OrganModel,
-    /// Nine-nibble drawbar block, preset 1 then preset 2.
-    drawbars: (usize, usize),
-    /// Holds the selected preset in bit 6.
-    preset: usize,
-    /// Per-preset vibrato/percussion byte. Pipe has neither.
-    effect: Option<(usize, usize)>,
-    /// Holds the model's vib/chorus type in bits 7..5, shared across presets.
-    vib_type: Option<usize>,
-}
-
-const ORGAN_BYTES: [Bytes; 4] = [
-    Bytes {
-        model: OrganModel::B3,
-        drawbars: (0x55, 0x5c),
-        preset: 0x53,
-        effect: Some((0x59, 0x60)),
-        vib_type: Some(0x51),
-    },
-    Bytes {
-        model: OrganModel::Vox,
-        drawbars: (0x67, 0x6d),
-        preset: 0x65,
-        effect: Some((0x6b, 0x71)),
-        vib_type: Some(0x63),
-    },
-    Bytes {
-        model: OrganModel::Farfisa,
-        drawbars: (0x77, 0x7d),
-        preset: 0x75,
-        effect: Some((0x7b, 0x81)),
-        vib_type: Some(0x73),
-    },
-    Bytes {
-        model: OrganModel::Pipe,
-        drawbars: (0x87, 0x8d),
-        preset: 0x85,
-        effect: None,
-        vib_type: None,
-    },
-];
-
-/// The organ panel through its accessors, in the same shape as [`packed`].
-///
-/// Hand-written on purpose: walking the panel's own [`Panel`] metadata would pin the
-/// declaration against itself. The accessors and the offsets above are a second,
-/// independent statement of where the organ's state lives.
-fn organ(o: &OrganPanel) -> Vec<Row> {
-    let mut rows = Vec::new();
-    let key = |what: &str| format!("OrganPanel.{what}");
-
-    for b in ORGAN_BYTES {
-        let model = b.model;
-
-        for (preset, at) in [(1u8, b.drawbars.0), (2, b.drawbars.1)] {
-            // No raw column: the nibbles are stored identity, so the decoded array *is*
-            // the bits.
-            rows.push(Row::new(
-                key(&format!("drawbars({model:?},{preset})")),
-                format!("{:#04x}..{:#04x}", at, at + 4),
-                None,
-                format!("{:?}", o.drawbars(model, preset)),
-            ));
-        }
-
-        rows.push(Row::new(
-            key(&format!("preset({model:?})")),
-            format!("{:#04x}[6:6]", b.preset),
-            u64::from(o.preset(model) == 2),
-            o.preset(model).to_string(),
-        ));
-
-        // The 3-bit type indexes a per-model table and the index itself is not reachable
-        // from outside, so only the decoded value is pinned.
-        rows.push(Row::new(
-            key(&format!("vib_type({model:?})")),
-            match b.vib_type {
-                Some(at) => format!("{at:#04x}[7:5]"),
-                None => "—".to_string(),
-            },
-            None,
-            format!("{:?}", o.vib_type(model)),
-        ));
-
-        if let Some((e1, e2)) = b.effect {
-            for (preset, at) in [(1u8, e1), (2, e2)] {
-                rows.push(Row::new(
-                    key(&format!("vib_on({model:?},{preset})")),
-                    format!("{at:#04x}[3:3]"),
-                    u64::from(o.vib_on(model, preset)),
-                    o.vib_on(model, preset).to_string(),
-                ));
-            }
-        }
-    }
-
-    for preset in [1u8, 2] {
-        rows.push(Row::new(
-            key(&format!("b3_perc_on({preset})")),
-            format!("{:#04x}[2:2]", if preset == 2 { 0x60 } else { 0x59 }),
-            u64::from(o.b3_perc_on(preset)),
-            o.b3_perc_on(preset).to_string(),
-        ));
-    }
-    rows.push(Row::new(
-        key("b3_perc_third"),
-        "0x51[4:4]",
-        u64::from(o.b3_perc_third()),
-        o.b3_perc_third().to_string(),
-    ));
-    rows.push(Row::new(
-        key("b3_perc_speed"),
-        "0x51[3:2]",
-        None,
-        format!("{:?}", o.b3_perc_speed()),
-    ));
-
-    // The bass manual's two bars live outside the nibble block — see
-    // `OrganPanel::b3_bass_drawbars`.
-    rows.push(Row::new(
-        key("b3_bass_drawbars"),
-        "0x59[3:0]+0x5a[7:0]",
-        None,
-        format!("{:?}", o.b3_bass_drawbars()),
-    ));
-
-    rows
-}
-
-/// Every field of every panel of one program, in file order.
-fn rows(p: &Program) -> Vec<Row> {
-    let s = &p.schema;
-    let mut rows = packed(&s.center_panel);
-    rows.extend(packed(&s.piano_panel));
-    rows.extend(packed(&s.sample_panel));
-    rows.extend(organ(&s.organ_panel));
-    rows.extend(packed(&s.effects_panel));
-    rows
-}
-
-fn read_program(path: &Path) -> Program {
-    match nord_format::from_path(path)
-        .unwrap_or_else(|e| panic!("{} failed to parse: {e}", path.display()))
-    {
-        Entity::Program(nord_format::Program::Electro5(p)) => p as electro5::Program,
-        other => panic!("{} is not an Electro 5 program: {other:?}", path.display()),
-    }
-}
-
-/// `pending/` is a staging area of untracked local files, not corpus content — the
-/// snapshots would otherwise record whatever happened to be sitting in one checkout.
-const UNTRACKED: &str = "pending";
-
-/// Every `.ne5p` the corpus ships, in a stable order.
-fn all_programs(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                if path.file_name().is_some_and(|n| n != UNTRACKED) {
-                    stack.push(path);
-                }
-            } else if path.extension().is_some_and(|e| e == "ne5p") {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    assert!(
-        found.len() > 100,
-        "found only {} programs under {} — is this a nord-corpus/ne5 checkout?",
-        found.len(),
-        root.display()
-    );
-    found
-}
 
 /// How many distinct values a snapshot line lists before it just counts them.
 const SHOWN: usize = 10;
@@ -305,7 +62,7 @@ fn summarise(seen: &BTreeSet<String>) -> String {
 
 #[test]
 fn fields() {
-    let root = corpus_dir();
+    let root = ne5_dir();
     let programs = all_programs(&root);
 
     // Insertion-ordered by first sighting, which is declaration order within each panel.
@@ -370,7 +127,7 @@ fn fields() {
 
 #[test]
 fn specimens() {
-    let root = corpus_dir();
+    let root = ne5_dir();
     let mut out = String::new();
     out.push_str(
         "# Every field of a fixed handful of specimens. The companion to\n\
@@ -401,21 +158,16 @@ fn specimens() {
 }
 
 /// Every `.ne5s` the corpus ships, in a stable order.
+///
+/// The whole tree, not the `settings/` directory: this snapshot records what values the
+/// corpus has been seen to hold, and the baseline captured in a backup or shipped in a
+/// factory bank is as much a sighting as a change-one-knob specimen. No filename is read
+/// here, so nothing needs the oracle the vendor files lack.
 fn all_settings(root: &Path) -> Vec<PathBuf> {
-    let mut found = vec![
-        root.join("settings.ne5s"),
-        root.join("usb/backup/full_backup/contents/Settings/Settings/Settings.ne5s"),
-    ];
-    for entry in fs::read_dir(root.join("settings")).expect("settings corpus") {
-        let path = entry.unwrap().path();
-        if path.extension().is_some_and(|e| e == "ne5s") {
-            found.push(path);
-        }
-    }
-    found.sort();
+    let found = files_with(root, "ne5s");
     assert!(
         found.len() > 100,
-        "found only {} settings files under {} — is this a nord-corpus/ne5 checkout?",
+        "found only {} settings files under {} — is this the ne5 tree of a nord-corpus checkout?",
         found.len(),
         root.display()
     );
@@ -438,7 +190,7 @@ fn read_settings(path: &Path) -> electro5::Settings {
 /// field by field.
 #[test]
 fn settings() {
-    let root = corpus_dir();
+    let root = ne5_dir();
     let paths = all_settings(&root);
 
     let mut order = Vec::new();
@@ -450,9 +202,9 @@ fn settings() {
         let settings = read_settings(path);
         // Both panels over the body, so the selection state is recorded next to the
         // menu settings rather than going unwatched.
-        let rows = packed(&settings.schema.panel)
+        let rows = packed(&settings.body.panel)
             .into_iter()
-            .chain(packed(&settings.schema.selection));
+            .chain(packed(&settings.body.selection));
         for row in rows {
             let raw = row.raw_str();
             if placements.insert(row.key.clone(), row.placement).is_none() {
@@ -488,7 +240,7 @@ fn settings() {
     // concrete place to show itself as well as an aggregate one.
     let baseline = root.join("settings/baseline.ne5s");
     let _ = write!(out, "\n=== settings/baseline.ne5s\n");
-    for row in packed(&read_settings(&baseline).schema.panel) {
+    for row in packed(&read_settings(&baseline).body.panel) {
         let _ = writeln!(
             out,
             "{:<44} {:<12} raw {:<6} {}",
