@@ -78,7 +78,7 @@ pub fn get(
 
     match (body, out) {
         (true, Some(out)) => {
-            std::fs::write(&out, wire_body).map_err(|e| format!("{}: {e}", out.display()))?;
+            std::fs::write(&out, &wire_body).map_err(|e| format!("{}: {e}", out.display()))?;
             ui.note(format!(
                 "unwrapped the {format} body of {} -> {} ({} bytes)",
                 path.display(),

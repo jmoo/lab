@@ -241,7 +241,7 @@ pub async fn write_program<T: Transport>(
     at.write_to(&mut data);
     data.extend_from_slice(&0u32.to_be_bytes()); // offset
     data.extend_from_slice(&(body.len() as u32).to_be_bytes());
-    data.extend_from_slice(body);
+    data.extend_from_slice(&body);
     session
         .request(Service::Program, 10, cmd::WRITE_DATA, &data)
         .await?;
