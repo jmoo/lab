@@ -1,3 +1,4 @@
+use crate::cbin::Generation;
 use crate::common::bank::{Item, Location};
 use std::fmt::Debug;
 
@@ -15,6 +16,9 @@ where
     /// everything user-written is version 1, and re-emitting a 0 as a 1 silently
     /// rewrites the file.
     version: u32,
+    /// Container generation, carried for the same reason as `version`: the factory
+    /// set lists are type-0 files, and re-emitting one as type-1 silently rewrites it.
+    generation: Generation,
 }
 
 impl<const C: usize, S, P> Song<C, S, P>
@@ -28,6 +32,7 @@ where
             location,
             programs,
             version: Self::DEFAULT_VERSION,
+            generation: Generation::V1,
         }
     }
 
@@ -42,6 +47,15 @@ where
 
     pub fn set_version(&mut self, version: u32) {
         self.version = version;
+    }
+
+    /// Container generation — see the field docs.
+    pub fn generation(&self) -> Generation {
+        self.generation
+    }
+
+    pub fn set_generation(&mut self, generation: Generation) {
+        self.generation = generation;
     }
 
     pub fn get(&self, slot: u16) -> P {

@@ -2,24 +2,22 @@
 //!
 //! Confirmed on hardware: the live buffer is the `ne5p` program body under another tag.
 //! The same panel state read as object class 6 slot `1:1` and as program `5:40` gives
-//! byte-identical 121-byte bodies, so this module is [`program::Schema`] in the live slot
-//! space and every program field applies here unchanged.
+//! byte-identical 121-byte bodies, so this module is [`program::ProgramBody`] in the
+//! live slot space and every program field applies here unchanged.
 
-use binrw::{BinRead, BinWriterExt};
 use std::io::{Read, Seek, Write};
 
-use crate::common;
+use crate::cbin::{self, Cbin, Header};
 use crate::common::bank;
 use crate::electro5::program;
-use crate::error::{Error, ParseError};
+use crate::error::Error;
 use crate::types::RangedU16Pair;
 
 pub const FORMAT: &str = "ne5l";
 /// Schema versions this build's field offsets have been validated against. Every corpus
 /// live slot reports 4, as every program does.
 pub const KNOWN_VERSIONS: &[u32] = &[4];
-/// Total file length: 44-byte CBIN header + 121-byte body — the program length, because
-/// it is the program body.
+/// Type-1 file length — the program length, because it is the program body.
 pub const FILE_LEN: usize = program::FILE_LEN;
 
 /// Highest bank: the live buffer is one bank, wire-addressed `0`.
@@ -28,8 +26,7 @@ pub const BANK_MAX: u16 = 0;
 pub const SLOT_MAX: u16 = 2;
 
 pub type Location = RangedU16Pair<BANK_MAX, SLOT_MAX>;
-pub type Header = common::Header<Location>;
-pub type Schema = program::Schema<Location>;
+pub type Schema = program::Schema;
 
 /// One of the three live slots.
 #[derive(Debug)]
@@ -42,28 +39,22 @@ impl Live {
     pub fn new(location: Location) -> Live {
         Live {
             name: None,
-            schema: Schema::new(FORMAT, location),
+            schema: Cbin {
+                header: Header::new(FORMAT, location.inner(), 4),
+                body: program::ProgramBody::default(),
+            },
         }
     }
 
     pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Live, Error> {
-        let schema = Schema::read_be(reader)?;
-        program::check_tag(FORMAT, &schema)?;
-        if !KNOWN_VERSIONS.contains(&schema.version) {
-            return Err(ParseError::UnsupportedVersion {
-                format: FORMAT,
-                version: schema.version,
-                supported: KNOWN_VERSIONS,
-            }
-            .into());
-        }
-
+        let schema: Schema = cbin::read(reader, FORMAT)?;
+        program::known_version(FORMAT, schema.header.version, KNOWN_VERSIONS)?;
+        program::location::<Location>(&schema.header)?;
         Ok(Live { name: None, schema })
     }
 
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        writer.write_be(&self.schema)?;
-        Ok(())
+        self.schema.write_to(writer)
     }
 }
 
@@ -77,11 +68,12 @@ impl bank::Item<Location> for Live {
     }
 
     fn location(&self) -> Location {
-        self.schema.header.location
+        program::location(&self.schema.header)
+            .expect("a Live's location is validated at construction")
     }
 
     fn set_location(&mut self, location: Location) {
-        self.schema.header.location = location;
+        self.schema.header.set_slot(location.inner());
     }
 }
 
@@ -89,6 +81,7 @@ impl bank::Item<Location> for Live {
 mod tests {
     use super::*;
     use crate::common::bank::Item;
+    use crate::error::ParseError;
     use std::io::Cursor;
 
     /// A live slot writes out at the program's length and reads back where it was.

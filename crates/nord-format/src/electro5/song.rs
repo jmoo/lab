@@ -1,132 +1,94 @@
-use binrw::{binrw, BinRead, BinWriterExt};
+//! The Electro 5 set list format (`.ne5t`).
+
 use std::io::{Read, Seek, Write};
 
+use crate::cbin::{self, BodyReader, BodyWriter, Cbin, Header};
 use crate::common;
-use crate::common::bank::Item;
-use crate::crc::{CrcReader, CrcWriter};
-use crate::error::{Error, ParseError};
-
 use crate::common::bank;
-
+use crate::common::bank::Item;
 use crate::electro5::program;
-
+use crate::error::Error;
 use crate::types::RangedU16Pair;
 
 pub const FORMAT: &str = "ne5t";
 /// Schema versions this build's field offsets have been validated against: 0 is the
 /// eight factory demo songs, 1 is everything user-written.
 pub const KNOWN_VERSIONS: &[u32] = &[0, 1];
-/// Total file length: 44-byte CBIN header + 18-byte body.
-pub const FILE_LEN: usize = 62;
+/// The body after the container header: the 8-byte program map and 10 zero bytes.
+pub const BODY_LEN: usize = 18;
+/// Type-1 file length: 44-byte CBIN header + 18-byte body.
+pub const FILE_LEN: usize = 0x2c + BODY_LEN;
 pub const PROGRAM_COUNT: usize = 4;
 pub const BANK_COUNT: u16 = 4;
 pub const SLOT_COUNT: u16 = 50;
 
 pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
-pub type Header = common::Header<Location>;
 pub type Bank = bank::Bank<Song, Location>;
 pub type Song = common::song::Song<PROGRAM_COUNT, Location, program::Location>;
 
-#[binrw]
-#[br(little, stream = r, map_stream = CrcReader::new(0x2c, 0x3d - 0x2c), assert(r.checksum() == crc32, "bad checksum: {:#x?} != {:#x?}", r.checksum(), crc32))]
-#[bw(little, stream = w, map_stream = CrcWriter::new(0x2c, 0x3d - 0x2c))]
-struct Schema {
-    pub header: Header,
-
-    pub version: u32,
-
-    #[bw(try_calc = w.checksum())]
-    crc32: u32,
-
-    // Bits 48.. carry the version again. The container header is never transmitted
-    // over USB — the device sends only this body — so the version is echoed into the
-    // payload where the wire side can see it. ⚠️ It must be the *read* version, never a
-    // constant: the eight factory demo songs are version 0, and stamping 1 here
-    // silently rewrites them.
-    #[brw(big, pad_before = 16)]
-    #[bw(calc = (
-    ((* a).as_u16() as u64) << 39
-    | ((* b).as_u16() as u64) << 30
-    | ((* c).as_u16() as u64) << 21
-    | ((* d).as_u16() as u64) << 12)
-    | ((* version as u64) << 48)
-    )]
-    map: u64,
-
-    /// These bytes are part of the crc check so they cannot be skipped with the pad_after directive
-    #[bw(calc = [0; 10])]
-    pad: [u8; 10],
-
-    #[br(try_calc = ((map >> 39 & 0b111111111) as u16).try_into())]
-    #[bw(ignore)]
-    pub a: program::Location,
-
-    #[br(try_calc = ((map >> 30 & 0b111111111) as u16).try_into())]
-    #[bw(ignore)]
-    pub b: program::Location,
-
-    #[br(try_calc = ((map >> 21 & 0b111111111) as u16).try_into())]
-    #[bw(ignore)]
-    pub c: program::Location,
-
-    #[br(try_calc = ((map >> 12 & 0b111111111) as u16).try_into())]
-    #[bw(ignore)]
-    pub d: program::Location,
+/// The 18-byte body: four 9-bit program references packed into a big-endian u64.
+///
+/// Bits 48.. carry the version again. The container header is never transmitted
+/// over USB — the device sends only this body — so the version is echoed into the
+/// payload where the wire side can see it. ⚠️ It must be the *read* version, never a
+/// constant: the eight factory demo songs are version 0, and stamping 1 here
+/// silently rewrites them.
+struct SongBody {
+    version: u32,
+    programs: [program::Location; PROGRAM_COUNT],
 }
 
-impl Schema {
-    pub fn new(
-        location: Location,
-        version: u32,
-        a: program::Location,
-        b: program::Location,
-        c: program::Location,
-        d: program::Location,
-    ) -> Schema {
-        Schema {
-            header: Header::new(1, FORMAT, location),
-            version,
-            a,
-            b,
-            c,
-            d,
-        }
+impl cbin::Body for SongBody {
+    const LEN: Option<u64> = Some(BODY_LEN as u64);
+
+    fn read<R: Read + Seek>(r: &mut BodyReader<'_, R>, _: &Header) -> Result<Self, Error> {
+        let mut raw = [0u8; BODY_LEN];
+        r.read_exact(&mut raw)?;
+        let map = u64::from_be_bytes(raw[0..8].try_into().unwrap());
+        let slot = |shift: u32| -> Result<program::Location, Error> {
+            Ok(((map >> shift & 0b1_1111_1111) as u16).try_into()?)
+        };
+        Ok(SongBody {
+            version: (map >> 48) as u32,
+            programs: [slot(39)?, slot(30)?, slot(21)?, slot(12)?],
+        })
+    }
+
+    fn write<W: Write + Seek>(&self, w: &mut BodyWriter<'_, W>) -> Result<(), Error> {
+        let [a, b, c, d] = self.programs;
+        let map = (self.version as u64) << 48
+            | (a.as_u16() as u64) << 39
+            | (b.as_u16() as u64) << 30
+            | (c.as_u16() as u64) << 21
+            | (d.as_u16() as u64) << 12;
+        w.write_all(&map.to_be_bytes())?;
+        w.write_all(&[0u8; BODY_LEN - 8])?;
+        Ok(())
     }
 }
 
 impl Song {
     pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Song, Error> {
-        let schema = Schema::read_be(reader)?;
+        let file: Cbin<SongBody> = cbin::read(reader, FORMAT)?;
+        program::known_version(FORMAT, file.header.version, KNOWN_VERSIONS)?;
 
-        if !KNOWN_VERSIONS.contains(&schema.version) {
-            return Err(ParseError::UnsupportedVersion {
-                format: FORMAT,
-                version: schema.version,
-                supported: KNOWN_VERSIONS,
-            }
-            .into());
-        }
-
-        let mut song = Song::new(
-            schema.header.location,
-            [schema.a, schema.b, schema.c, schema.d],
-        );
-        song.set_version(schema.version);
+        let mut song = Song::new(program::location(&file.header)?, file.body.programs);
+        song.set_version(file.header.version);
+        song.set_generation(file.header.generation);
         Ok(song)
     }
 
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        let schema = Schema::new(
-            self.location(),
-            self.version(),
-            self.programs()[0],
-            self.programs()[1],
-            self.programs()[2],
-            self.programs()[3],
-        );
-
-        writer.write_be(&schema)?;
-        Ok(())
+        let mut header = Header::new(FORMAT, self.location().inner(), self.version());
+        header.generation = self.generation();
+        let file = Cbin {
+            header,
+            body: SongBody {
+                version: self.version(),
+                programs: *self.programs(),
+            },
+        };
+        file.write_to(writer)
     }
 }
 
@@ -175,9 +137,9 @@ mod tests {
     /// A version-0 song must come back out as version 0.
     ///
     /// The eight factory demo songs are version 0 and everything user-written is
-    /// version 1. The writer used to hardcode `version: 1` and a constant `1 << 48` in
-    /// the map word, so re-emitting a factory song silently promoted it — a real
-    /// difference at offset `0x14` and again in the body, on every one of the eight.
+    /// version 1. A writer stamping a constant into the header or the map's echo
+    /// silently promotes them — a real difference at offset `0x14` and again in the
+    /// body, on every one of the eight.
     #[test]
     fn version_survives_a_round_trip() -> Result<(), Error> {
         for version in [0u32, 1] {

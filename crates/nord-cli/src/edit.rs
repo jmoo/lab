@@ -10,7 +10,6 @@
 
 use std::path::Path;
 
-use nord_format::common::bank;
 use nord_format::electro5;
 use nord_format::electro5::program::{Field, Schema};
 use nord_format::panel::FieldError;
@@ -28,21 +27,21 @@ trait Editable {
     fn set_field(&mut self, path: &str, value: &str) -> Result<(), FieldError>;
 }
 
-impl<L: bank::Location> Editable for Schema<L> {
+impl Editable for Schema {
     fn fields(&self) -> Vec<Field> {
-        Schema::fields(self)
+        self.body.fields()
     }
     fn set_field(&mut self, path: &str, value: &str) -> Result<(), FieldError> {
-        Schema::set_field(self, path, value)
+        self.body.set_field(path, value)
     }
 }
 
 impl Editable for electro5::settings::Schema {
     fn fields(&self) -> Vec<Field> {
-        electro5::settings::Schema::fields(self)
+        self.body.fields()
     }
     fn set_field(&mut self, path: &str, value: &str) -> Result<(), FieldError> {
-        electro5::settings::Schema::set_field(self, path, value)
+        self.body.set_field(path, value)
     }
 }
 

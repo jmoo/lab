@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::fs::read;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 /// Root of the Electro 5 specimen corpus, taken from `NORD_CORPUS_DIR` (point it
@@ -864,7 +864,7 @@ fn test_ne5_program_read_write_center_panel() {
                 }
                 _ => panic!("expected electro5 song in file {}", path),
             }
-        } else if !path.contains("README.md") {
+        } else if !path.contains("README.md") && !path.ends_with(".oracle.json") {
             panic!("invalid file name: {}", path)
         }
     }
@@ -917,7 +917,7 @@ fn test_ne5_program_read_write_gain() {
                 }
                 _ => panic!("expected electro5 song in file {}", path),
             }
-        } else if !path.contains("README.md") {
+        } else if !path.contains("README.md") && !path.ends_with(".oracle.json") {
             panic!("invalid file name: {}", path)
         }
     }
@@ -1143,7 +1143,7 @@ fn test_ne5_program_read_write_fx() {
                 }
                 _ => panic!("expected electro5 song in file {}", path),
             }
-        } else if !path.contains("README.md") {
+        } else if !path.contains("README.md") && !path.ends_with(".oracle.json") {
             panic!("invalid file name: {}", path)
         }
     }
@@ -1195,7 +1195,7 @@ fn test_ne5_program_read_write_equalizer() {
                 }
                 _ => panic!("expected electro5 song in file {}", path),
             }
-        } else if !path.contains("README.md") {
+        } else if !path.contains("README.md") && !path.ends_with(".oracle.json") {
             panic!("invalid file name: {}", path)
         }
     }
@@ -1251,7 +1251,7 @@ fn test_ne5_program_read_sample() {
                 }
                 _ => panic!("expected electro5 song in file {}", path),
             }
-        } else if !path.contains("README.md") {
+        } else if !path.contains("README.md") && !path.ends_with(".oracle.json") {
             panic!("invalid file name: {}", path)
         }
     }
@@ -1339,7 +1339,7 @@ fn test_ne5_program_read_write_organ() {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        if name == "README.md" || name.contains(".skip.") {
+        if name == "README.md" || name.contains(".skip.") || name.ends_with(".oracle.json") {
             continue;
         }
         let path = entry.path();
@@ -2259,10 +2259,16 @@ fn test_ne5_a_live_body_decodes_as_a_program() {
             panic!("expected an electro5 live slot in {name}")
         };
 
-        // The tag is the whole difference: the CRC covers `0x2c..` and never sees the
-        // header, so retagging in place leaves a valid file.
+        // The tag is the whole difference. On a type-1 file the crc32 covers the body
+        // and never sees the header, so the retag alone leaves a valid file; a type-0
+        // file's trailing crc16 covers the header too, so it gets restamped.
         let mut bytes = read(&path).unwrap();
         bytes[0x08..0x0c].copy_from_slice(electro5::program::FORMAT.as_bytes());
+        if bytes[0x04] == 0 {
+            let at = bytes.len() - 2;
+            let crc = nord_format::crc::crc16(&bytes[..at]);
+            bytes[at..].copy_from_slice(&crc.to_le_bytes());
+        }
 
         let Entity::Program(nord_format::Program::Electro5(program)) =
             nord_format::from_stream(&mut Cursor::new(&bytes)).unwrap()
@@ -2319,9 +2325,12 @@ fn read_sample(path: &PathBuf) -> Sample {
 fn test_nsmp_round_trip() {
     for (path, stem) in sample_specimens() {
         let sample = read_sample(&path);
-        assert_eq!(sample.header.format, nord_format::common::sample::FORMAT);
         assert_eq!(
-            sample.to_bytes(),
+            &sample.header.tag,
+            nord_format::common::sample::FORMAT.as_bytes()
+        );
+        assert_eq!(
+            sample.to_bytes().unwrap(),
             read(&path).unwrap(),
             "{stem} did not round-trip byte-exactly"
         );
@@ -2448,7 +2457,7 @@ fn test_nsmp_edits_reproduce_the_editors_own_output() {
     sample.set_zone_top_note(1, 60).unwrap();
 
     assert_eq!(
-        sample.to_bytes(),
+        sample.to_bytes().unwrap(),
         read(dir.join("D7-upperkey.nsmp")).unwrap(),
         "rename + remap did not reproduce the editor's own file"
     );
@@ -2462,7 +2471,7 @@ fn test_nsmp_retune_touches_one_byte() {
     let mut sample = read_sample(&dir.join("D1-one-zone.nsmp"));
 
     sample.set_root_key(0, 48).unwrap();
-    let after = sample.to_bytes();
+    let after = sample.to_bytes().unwrap();
 
     let differing: Vec<usize> = (0..before.len())
         .filter(|&i| before[i] != after[i])
@@ -2493,4 +2502,83 @@ fn test_nsmp_bad_checksum_is_refused() {
     let last = bytes.len() - 1;
     bytes[last] ^= 0xff;
     assert!(nord_format::from_stream(&mut Cursor::new(&bytes)).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// The type-0 container (`CBIN` header type 0)
+// ---------------------------------------------------------------------------
+
+/// Every file under a directory tree whose first four bytes are `CBIN`.
+fn cbin_files(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if fs::read(&path).is_ok_and(|b| b.starts_with(b"CBIN")) {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Parse → write reproduces every factory program byte-exactly.
+///
+/// The factory banks are type-0 containers — 147 bytes against the differential
+/// specimens' 165 — so this sweep is what proves the v0 header layout and the
+/// trailing crc16 against Clavia's own files, not just our synthesized ones.
+#[test]
+fn test_ne5_factory_programs_round_trip() {
+    let paths = cbin_files(&corpus_dir().join("factory"));
+    assert!(
+        paths.len() > 100,
+        "found only {} factory files — is the corpus present?",
+        paths.len()
+    );
+
+    let mut type0 = 0usize;
+    for path in &paths {
+        let bytes = read(path).unwrap();
+        let entity = nord_format::from_stream(&mut Cursor::new(&bytes))
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let out =
+            nord_format::to_bytes(&entity).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert_eq!(
+            out,
+            bytes,
+            "{} did not round-trip byte-exactly",
+            path.display()
+        );
+        if bytes[0x04] == 0 {
+            type0 += 1;
+        }
+    }
+    assert!(
+        type0 > 100,
+        "only {type0} type-0 files in the factory sweep — the axis this test exists for"
+    );
+}
+
+/// `cbin::inspect` verifies the container of every CBIN file the ne5 tree ships —
+/// both generations, program-sized and library-sized, decoded formats and not.
+#[test]
+fn test_inspect_verifies_every_cbin_container() {
+    let paths = cbin_files(&corpus_dir());
+    assert!(paths.len() > 200, "found only {} CBIN files", paths.len());
+
+    for path in &paths {
+        let mut f = std::fs::File::open(path).unwrap();
+        let info = nord_format::cbin::inspect(&mut f)
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert!(
+            info.checksum_ok,
+            "{}: checksum mismatch ({:?})",
+            path.display(),
+            info.header,
+        );
+    }
 }
