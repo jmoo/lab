@@ -32,7 +32,7 @@
 
 use crate::crc::{Crc16, Crc32, CrcWriter, MultipartCrc16, MultipartCrc32, Width};
 use crate::error::{Error, ParseError};
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Seek, Write};
 
 /// Length of a type-1 header: through the crc32 and the 16 unclaimed bytes after it.
 pub const HEADER_LEN: usize = 0x2c;
@@ -234,91 +234,6 @@ impl Container {
         })
     }
 
-    /// Read one fixed-length entity of either generation, from the type-1 length its
-    /// module declares.
-    ///
-    /// Consumes exactly the bytes the file occupies in its own generation, so the reader
-    /// is left where the next entity would start.
-    pub fn read_fixed(
-        reader: &mut (impl Read + Seek),
-        type1_len: usize,
-    ) -> Result<Container, Error> {
-        let start = reader.stream_position()?;
-        let mut head = [0u8; TYPE_AT + 4];
-        reader.read_exact(&mut head)?;
-        reader.seek(SeekFrom::Start(start))?;
-
-        let mut bytes = vec![0u8; stored_len(header_type(&head)?, type1_len)];
-        reader.read_exact(&mut bytes)?;
-        Ok(Container::parse(&bytes)?)
-    }
-
-    /// Read the rest of a stream as one container, for the formats whose body length is
-    /// not known until the file has been read.
-    pub fn read_all(reader: &mut (impl Read + Seek)) -> Result<Container, Error> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes)?;
-        Ok(Container::parse(&bytes)?)
-    }
-
-    /// Everything a format addressed by slot asks of its container before it will read
-    /// the body, answered with the slot in that format's own space.
-    ///
-    /// ⚠️ The tag check is the only thing separating formats that share a body layout:
-    /// `ne5p` and `ne5l` decode through one schema, so a program read as a live slot
-    /// parses cleanly and then writes itself back under the other tag.
-    pub fn open<L>(&self, tag: &'static str, versions: &'static [u32]) -> Result<L, Error>
-    where
-        L: TryFrom<(u16, u16)>,
-    {
-        if self.header.tag != tag {
-            return Err(ParseError::WrongFormat {
-                expected: tag,
-                got: self.header.tag.clone(),
-            }
-            .into());
-        }
-        if !versions.contains(&self.header.version) {
-            return Err(ParseError::UnsupportedVersion {
-                format: tag,
-                version: self.header.version,
-                supported: versions,
-            }
-            .into());
-        }
-        if self.header.trailer != SLOT_TRAILER {
-            return Err(ParseError::AssertFail(format!(
-                "{tag}: header trailer is {:#010x}, expected {SLOT_TRAILER:#010x}",
-                self.header.trailer
-            ))
-            .into());
-        }
-        L::try_from((self.bank(), self.slot())).map_err(|_| {
-            ParseError::OutOfBounds {
-                value: format!("{} {}", self.bank(), self.slot()),
-                bound: format!("a {tag} slot"),
-            }
-            .into()
-        })
-    }
-
-    /// Read one fixed-length file and take it apart on a slotted format's behalf:
-    /// [`Container::read_fixed`] and then [`Container::open`], leaving the caller the
-    /// header to carry, the typed slot, and the body to decode.
-    pub fn open_fixed<L>(
-        reader: &mut (impl Read + Seek),
-        tag: &'static str,
-        versions: &'static [u32],
-        type1_len: usize,
-    ) -> Result<(Header, L, Vec<u8>), Error>
-    where
-        L: TryFrom<(u16, u16)>,
-    {
-        let file = Container::read_fixed(reader, type1_len)?;
-        let location = file.open(tag, versions)?;
-        Ok((file.header, location, file.body))
-    }
-
     /// Emit the file, in its own generation, with the checksum computed over the bytes
     /// as they go out.
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
@@ -483,40 +398,6 @@ mod tests {
         assert!(matches!(
             Container::parse(&file),
             Err(ParseError::UnknownHeaderType(2))
-        ));
-    }
-
-    /// The checks a slotted format delegates, each with its own refusal.
-    #[test]
-    fn open_refuses_a_tag_a_version_a_trailer_and_a_slot() {
-        type Slot = crate::types::RangedU16Pair<8, 50>;
-        let ok = Container::parse(&type_1()).unwrap();
-        assert!(ok.open::<Slot>("ne5p", &[4]).is_ok());
-
-        assert!(matches!(
-            ok.open::<Slot>("ne5l", &[4]),
-            Err(Error::Parse(ParseError::WrongFormat { .. }))
-        ));
-        assert!(matches!(
-            ok.open::<Slot>("ne5p", &[5]),
-            Err(Error::Parse(ParseError::UnsupportedVersion {
-                version: 4,
-                ..
-            }))
-        ));
-
-        let mut odd = ok.clone();
-        odd.header.trailer = 0;
-        assert!(matches!(
-            odd.open::<Slot>("ne5p", &[4]),
-            Err(Error::Parse(ParseError::AssertFail(_)))
-        ));
-
-        let mut far = ok.clone();
-        far.location = location_of(99, 0);
-        assert!(matches!(
-            far.open::<Slot>("ne5p", &[4]),
-            Err(Error::Parse(ParseError::OutOfBounds { .. }))
         ));
     }
 }

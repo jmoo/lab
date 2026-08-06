@@ -20,13 +20,14 @@ pub use organ::{B3PercSpeed, B3Vib, Drawbars, FarfisaVib, OrganModel, OrganPanel
 pub use piano::{PianoCategory, PianoPanel};
 pub use sample::SamplePanel;
 
-use crate::common::{bank, container};
+use crate::common::container::{self, Header};
 use crate::error::Error;
+use crate::file::{sealed, BodyReader, File, Format};
 use crate::panel::{FieldError, Panel};
 use crate::types::RangedU16Pair;
 use binrw::{binrw, BinRead, BinWriterExt};
 
-use std::io::{Cursor, Read, Seek, Write};
+use std::io::{Cursor, Seek, Write};
 
 pub const FORMAT: &str = "ne5p";
 /// Schema versions this build's field offsets have been validated against. Every corpus
@@ -43,7 +44,6 @@ pub const BANK_COUNT: u16 = 8;
 pub const SLOT_COUNT: u16 = 50;
 
 pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
-pub type Bank = bank::Bank<Program, Location>;
 
 /// The 121-byte panel body.
 ///
@@ -185,65 +185,42 @@ impl Default for Schema {
     }
 }
 
-/// One program: its body, and the container that body arrived in.
+/// The `ne5p` format: one program — the [`Schema`] body in the eight-bank slot space.
 #[derive(Debug)]
-pub struct Program {
-    pub schema: Schema,
-    /// Carried verbatim so the file goes back out as the one that came in — its
-    /// generation, its version, and the 16 bytes no format claims.
-    header: container::Header,
-    location: Location,
-    name: Option<String>,
+pub struct Ne5p;
+
+impl sealed::Sealed for Ne5p {}
+
+impl Format for Ne5p {
+    const TAG: &'static str = FORMAT;
+    const KNOWN_VERSIONS: &'static [u32] = KNOWN_VERSIONS;
+    const FILE_LEN: Option<usize> = Some(FILE_LEN);
+    type Location = Location;
+    type Body = Schema;
+
+    fn read_body(r: &mut BodyReader, _header: &Header) -> Result<Schema, Error> {
+        Ok(Schema::read_be(&mut Cursor::new(r.bytes()?))?)
+    }
+
+    fn write_body(
+        body: &Schema,
+        _header: &Header,
+        w: &mut (impl Write + Seek),
+    ) -> Result<(), Error> {
+        w.write_be(body)?;
+        Ok(())
+    }
 }
 
-impl Program {
+pub type Program = File<Ne5p>;
+
+impl File<Ne5p> {
     pub fn new(location: Location) -> Program {
-        Program {
-            name: None,
-            schema: Schema::new(),
-            header: container::Header::new(FORMAT, DEFAULT_VERSION),
+        File {
+            header: Header::new(FORMAT, DEFAULT_VERSION),
             location,
+            body: Schema::new(),
         }
-    }
-
-    pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Program, Error> {
-        let (header, location, body) =
-            container::Container::open_fixed(reader, FORMAT, KNOWN_VERSIONS, FILE_LEN)?;
-        Ok(Program {
-            name: None,
-            schema: Schema::read_be(&mut Cursor::new(body))?,
-            header,
-            location,
-        })
-    }
-
-    pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        let mut body = Cursor::new(Vec::new());
-        body.write_be(&self.schema)?;
-        container::Container {
-            header: self.header.clone(),
-            location: container::location_of(self.location.x(), self.location.y()),
-            body: body.into_inner(),
-        }
-        .write_to(writer)
-    }
-}
-
-impl bank::Item<Location> for Program {
-    fn name(&self) -> Option<String> {
-        self.name.clone()
-    }
-
-    fn set_name(&mut self, name: String) {
-        self.name = Some(name);
-    }
-
-    fn location(&self) -> Location {
-        self.location
-    }
-
-    fn set_location(&mut self, location: Location) {
-        self.location = location;
     }
 }
 
@@ -304,10 +281,10 @@ mod tests {
         }
 
         let program = Program::new((0, 0).try_into().unwrap());
-        total::<_, [u8; 7]>(&program.schema.center_panel);
-        total::<_, [u8; 8]>(&program.schema.piano_panel);
-        total::<_, [u8; 8]>(&program.schema.sample_panel);
-        total::<_, [u8; 18]>(&program.schema.effects_panel);
+        total::<_, [u8; 7]>(&program.body.center_panel);
+        total::<_, [u8; 8]>(&program.body.piano_panel);
+        total::<_, [u8; 8]>(&program.body.sample_panel);
+        total::<_, [u8; 18]>(&program.body.effects_panel);
     }
 
     /// Re-stamp the body CRC after corrupting a byte, so a decode test exercises the
@@ -372,10 +349,10 @@ mod tests {
         program.write_to(&mut Cursor::new(&mut before)).unwrap();
 
         program
-            .schema
+            .body
             .set_field("center_panel.transpose", "-5")
             .unwrap();
-        assert_eq!(program.schema.center_panel.transpose.inner(), -5);
+        assert_eq!(program.body.center_panel.transpose.inner(), -5);
 
         let mut after = Vec::new();
         program.write_to(&mut Cursor::new(&mut after)).unwrap();
@@ -398,7 +375,7 @@ mod tests {
             ("nonesuch.transpose", "nonesuch"),
             ("transpose", "transpose"),
         ] {
-            let err = program.schema.set_field(path, "0").unwrap_err().to_string();
+            let err = program.body.set_field(path, "0").unwrap_err().to_string();
             assert!(err.contains(wanted), "{path}: {err}");
         }
     }
@@ -407,7 +384,7 @@ mod tests {
     #[test]
     fn every_declared_field_is_settable_by_its_listed_name() {
         let mut program = Program::new((0, 0).try_into().unwrap());
-        let fields = program.schema.fields();
+        let fields = program.body.fields();
         assert!(
             fields.iter().any(|f| f.path == "center_panel.transpose"),
             "the worked example is missing from the registry",
@@ -418,7 +395,7 @@ mod tests {
         for f in fields {
             let (path, value) = (f.path.clone(), f.value.clone());
             program
-                .schema
+                .body
                 .set_field(&path, &value)
                 .unwrap_or_else(|e| panic!("{path} = {value:?}: {e}"));
         }
@@ -430,16 +407,16 @@ mod tests {
     fn a_wide_field_is_spelled_by_its_stored_bits() {
         let mut program = Program::new((0, 0).try_into().unwrap());
         program
-            .schema
+            .body
             .set_field("organ_panel.b3_preset1_drawbars", "0x087654321")
             .unwrap();
         assert_eq!(
-            program.schema.organ_panel.drawbars(OrganModel::B3, 1),
+            program.body.organ_panel.drawbars(OrganModel::B3, 1),
             [0, 8, 7, 6, 5, 4, 3, 2, 1],
         );
 
         let listed = program
-            .schema
+            .body
             .fields()
             .into_iter()
             .find(|f| f.path == "organ_panel.b3_preset1_drawbars")

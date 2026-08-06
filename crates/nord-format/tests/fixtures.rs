@@ -120,17 +120,17 @@ fn generate(name: &str, spec: &Spec) -> Vec<u8> {
             match extension(name) {
                 "ne5l" => {
                     let mut live = electro5::Live::new((0, 0).try_into().unwrap());
-                    apply(&mut |p, v| live.schema.set_field(p, v).map_err(|e| e.to_string()));
+                    apply(&mut |p, v| live.body.set_field(p, v).map_err(|e| e.to_string()));
                     Entity::Live(Live::Electro5(live))
                 }
                 "ne5p" => {
                     let mut program = electro5::Program::new((0, 0).try_into().unwrap());
-                    apply(&mut |p, v| program.schema.set_field(p, v).map_err(|e| e.to_string()));
+                    apply(&mut |p, v| program.body.set_field(p, v).map_err(|e| e.to_string()));
                     Entity::Program(Program::Electro5(program))
                 }
                 "ne5s" => {
                     let mut settings = electro5::Settings::new();
-                    apply(&mut |p, v| settings.schema.set_field(p, v).map_err(|e| e.to_string()));
+                    apply(&mut |p, v| settings.body.set_field(p, v).map_err(|e| e.to_string()));
                     Entity::Settings(Settings::Electro5(settings))
                 }
                 other => panic!("{name}: no constructor for .{other}"),
@@ -206,9 +206,9 @@ fn every_fixture_decodes_to_its_name() {
             }
             (Fields(edits), _) => {
                 let fields = match &entity {
-                    Entity::Live(Live::Electro5(l)) => l.schema.fields(),
-                    Entity::Program(Program::Electro5(p)) => p.schema.fields(),
-                    Entity::Settings(Settings::Electro5(s)) => s.schema.fields(),
+                    Entity::Live(Live::Electro5(l)) => l.body.fields(),
+                    Entity::Program(Program::Electro5(p)) => p.body.fields(),
+                    Entity::Settings(Settings::Electro5(s)) => s.body.fields(),
                     other => panic!("{name} decoded as {other:?}"),
                 };
                 for (path, value) in *edits {

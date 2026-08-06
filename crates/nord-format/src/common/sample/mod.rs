@@ -1,7 +1,7 @@
 //! Sample instruments (`.nsmp`) — the Nord Sample Library format.
 //!
 //! Shared across the Nord line rather than specific to one model, which is why this sits
-//! in [`crate::common`]. The body inside the usual [`container`] is a chain of tagged
+//! in [`crate::common`]. The body inside the usual CBIN container is a chain of tagged
 //! [`section`]s: an `hdr` carrying the name, a `cat` of category strings, a `map` ending
 //! in the [`zone`] table, one [`stroke`] per zone, and a trailing `sty`.
 //!
@@ -17,10 +17,11 @@ pub use section::Section;
 pub use stroke::Stroke;
 pub use zone::Zone;
 
-use crate::common::container::{self, Container};
+use crate::common::container::Header;
 use crate::error::{Error, ParseError};
+use crate::file::{sealed, BodyReader, File, Format, Verbatim};
 use std::fmt;
-use std::io::{Read, Seek, Write};
+use std::io::{Cursor, Seek, Write};
 
 pub const FORMAT: &str = "nsmp";
 
@@ -35,72 +36,67 @@ const NAME_AT: usize = 12;
 /// field we cannot see, so refuse instead. Reading is unrestricted.
 pub const MAX_NAME_LEN: usize = 14;
 
-/// A sample instrument.
-///
-/// Sections are held in file order, including repeats — `stk` appears once per zone.
-pub struct Sample {
-    /// The container header as read. Its `version` is content as
-    /// `format * 100 + revision`, so a 2.0 instrument reads 200 — not a schema revision
-    /// and not gated, since it moves with the library's own content.
-    ///
-    /// ⚠️ Its `trailer` is `0x000f0000` on every specimen, where every slotted format
-    /// holds [`container::SLOT_TRAILER`]. Meaning unknown; preserved verbatim.
-    pub header: container::Header,
+/// A sample instrument's body: its sections in file order, including repeats — `stk`
+/// appears once per zone.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Sections(pub Vec<Section>);
 
-    /// Where a slotted format holds bank and slot. `0xFFFFFFFF` on every specimen — a
-    /// library sample has no slot until an instrument gives it one.
-    pub location: u32,
-
-    pub sections: Vec<Section>,
+impl fmt::Debug for Sections {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(&self.0).finish()
+    }
 }
 
-impl Sample {
-    /// Reads a whole instrument, verifying its checksum.
-    pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Sample, Error> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes)?;
-        Sample::from_bytes(&bytes)
+/// The `nsmp` format: a sample instrument.
+///
+/// A library file, not a slot save, so nothing about its header is gated:
+///
+/// * Its `version` is content as `format * 100 + revision` — a 2.0 instrument reads
+///   200 — not a schema revision, since it moves with the library's own content.
+/// * ⚠️ Its `trailer` is `0x000f0000` on every specimen, where every slotted format
+///   holds the slot trailer. Meaning unknown; preserved verbatim.
+/// * Its location is `0xFFFFFFFF` on every specimen — a library sample has no slot
+///   until an instrument gives it one.
+#[derive(Debug)]
+pub struct Nsmp;
+
+impl sealed::Sealed for Nsmp {}
+
+impl Format for Nsmp {
+    const TAG: &'static str = FORMAT;
+    const KNOWN_VERSIONS: &'static [u32] = &[];
+    const FILE_LEN: Option<usize> = None;
+    type Location = Verbatim;
+    type Body = Sections;
+
+    fn read_body(r: &mut BodyReader, _header: &Header) -> Result<Sections, Error> {
+        Ok(Sections(section::read_chain(&r.bytes()?, 0)?))
     }
 
+    fn write_body(
+        body: &Sections,
+        _header: &Header,
+        w: &mut (impl Write + Seek),
+    ) -> Result<(), Error> {
+        let mut out = Vec::new();
+        for s in &body.0 {
+            s.write_into(&mut out);
+        }
+        w.write_all(&out)?;
+        Ok(())
+    }
+
+    fn check(_header: &Header) -> Result<(), ParseError> {
+        Ok(())
+    }
+}
+
+pub type Sample = File<Nsmp>;
+
+impl File<Nsmp> {
     /// Decodes an instrument of either CBIN generation.
     pub fn from_bytes(bytes: &[u8]) -> Result<Sample, Error> {
-        let file = Container::parse(bytes)?;
-        if file.header.tag != FORMAT {
-            return Err(ParseError::WrongFormat {
-                expected: FORMAT,
-                got: file.header.tag,
-            }
-            .into());
-        }
-        let sections = section::read_chain(&file.body, 0)?;
-        Ok(Sample {
-            header: file.header,
-            location: file.location,
-            sections,
-        })
-    }
-
-    pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        self.container().write_to(writer)
-    }
-
-    /// Serialises, recomputing the checksum over the body it just produced.
-    pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        self.container().to_bytes()
-    }
-
-    /// The instrument as its container: the header it was read with, around the section
-    /// chain as it now stands.
-    fn container(&self) -> Container {
-        let mut body = Vec::new();
-        for s in &self.sections {
-            s.write_into(&mut body);
-        }
-        Container {
-            header: self.header.clone(),
-            location: self.location,
-            body,
-        }
+        Sample::read_from(&mut Cursor::new(bytes))
     }
 
     /// Instrument name, as the Nord display shows it.
@@ -125,7 +121,7 @@ impl Sample {
             }
             .into());
         }
-        let hdr = section::find_mut(&mut self.sections, section::HDR)
+        let hdr = section::find_mut(&mut self.body.0, section::HDR)
             .ok_or_else(|| ParseError::AssertFail("no hdr section".into()))?;
         let field = hdr
             .payload
@@ -143,13 +139,13 @@ impl Sample {
 
     /// Sets one zone's top note. The strokes are untouched.
     pub fn set_zone_top_note(&mut self, index: usize, note: u8) -> Result<(), Error> {
-        let map = section::find_mut(&mut self.sections, section::MAP)
+        let map = section::find_mut(&mut self.body.0, section::MAP)
             .ok_or_else(|| ParseError::AssertFail("no map section".into()))?;
         zone::set_top_note(&mut map.payload, index, note)?;
         Ok(())
     }
 
-    /// One stroke per zone, in the same high-to-low order as [`Sample::zones`].
+    /// One stroke per zone, in the same high-to-low order as [`File::zones`].
     pub fn strokes(&self) -> Result<Vec<Stroke>, Error> {
         let zones = zone::count(&self.map()?.payload)?;
         self.stroke_sections()
@@ -161,7 +157,8 @@ impl Sample {
     /// Retunes one zone by moving the note its sample plays untransposed at.
     pub fn set_root_key(&mut self, index: usize, note: u8) -> Result<(), Error> {
         let section = self
-            .sections
+            .body
+            .0
             .iter_mut()
             .filter(|s| s.is(section::STK))
             .nth(index)
@@ -172,7 +169,7 @@ impl Sample {
 
     /// Category labels, as stored in `cat`: length-prefixed strings.
     pub fn categories(&self) -> Vec<String> {
-        let Some(cat) = section::find(&self.sections, section::CAT) else {
+        let Some(cat) = section::find(&self.body.0, section::CAT) else {
             return Vec::new();
         };
         let mut out = Vec::new();
@@ -194,27 +191,16 @@ impl Sample {
     }
 
     fn stroke_sections(&self) -> impl Iterator<Item = &Section> {
-        self.sections.iter().filter(|s| s.is(section::STK))
+        self.body.0.iter().filter(|s| s.is(section::STK))
     }
 
     fn hdr(&self) -> Result<&Section, Error> {
-        section::find(&self.sections, section::HDR)
+        section::find(&self.body.0, section::HDR)
             .ok_or_else(|| ParseError::AssertFail("no hdr section".into()).into())
     }
 
     fn map(&self) -> Result<&Section, Error> {
-        section::find(&self.sections, section::MAP)
+        section::find(&self.body.0, section::MAP)
             .ok_or_else(|| ParseError::AssertFail("no map section".into()).into())
-    }
-}
-
-impl fmt::Debug for Sample {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Sample")
-            .field("name", &self.name().unwrap_or_default())
-            .field("version", &self.header.version)
-            .field("zones", &self.zones().map(|z| z.len()).unwrap_or(0))
-            .field("sections", &self.sections)
-            .finish()
     }
 }

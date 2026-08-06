@@ -1,54 +1,61 @@
-use crate::common::container::Container;
-use crate::error::{Error, ParseError};
-use std::fmt;
-use std::fmt::Debug;
-use std::io::{Read, Seek, Write};
+use crate::common::container::Header;
+use crate::error::Error;
+use crate::file::{sealed, BodyReader, File, Format, Opaque, Verbatim};
+use std::io::{Seek, Write};
 
 pub const FORMAT: &str = "npno";
 
-/// A piano library file.
+/// The `npno` format: a piano library file.
 ///
-/// Nothing below the CBIN header is mapped, so this is the container and its body held
-/// verbatim: enough to identify a file and hand it back unchanged, and no more.
-pub struct Piano {
-    container: Container,
+/// Nothing below the CBIN header is mapped, so the body is held verbatim: enough to
+/// identify a file and hand it back unchanged, and no more. The header's version and
+/// location fields are library content of unknown meaning, preserved rather than
+/// checked.
+#[derive(Debug)]
+pub struct Npno;
+
+impl sealed::Sealed for Npno {}
+
+impl Format for Npno {
+    const TAG: &'static str = FORMAT;
+    const KNOWN_VERSIONS: &'static [u32] = &[];
+    const FILE_LEN: Option<usize> = None;
+    type Location = Verbatim;
+    type Body = Opaque;
+
+    fn read_body(r: &mut BodyReader, _header: &Header) -> Result<Opaque, Error> {
+        Ok(Opaque(r.bytes()?))
+    }
+
+    fn write_body(
+        body: &Opaque,
+        _header: &Header,
+        w: &mut (impl Write + Seek),
+    ) -> Result<(), Error> {
+        w.write_all(&body.0)?;
+        Ok(())
+    }
+
+    // A library file, not a slot save: its trailer is its own, preserved verbatim.
+    fn check(_header: &Header) -> Result<(), crate::error::ParseError> {
+        Ok(())
+    }
 }
 
-impl Piano {
+pub type Piano = File<Npno>;
+
+impl File<Npno> {
     pub fn new() -> Piano {
-        Piano {
-            container: Container::new(FORMAT, 0, 0, Vec::new()),
+        File {
+            header: Header::new(FORMAT, 0),
+            location: Verbatim(0),
+            body: Opaque(Vec::new()),
         }
-    }
-
-    pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Piano, Error> {
-        let container = Container::read_all(reader)?;
-        if container.header.tag != FORMAT {
-            return Err(ParseError::WrongFormat {
-                expected: FORMAT,
-                got: container.header.tag,
-            }
-            .into());
-        }
-        Ok(Piano { container })
-    }
-
-    pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        self.container.write_to(writer)
     }
 }
 
-impl Default for Piano {
+impl Default for File<Npno> {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Debug for Piano {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("common::Piano")
-            .field("format", &self.container.header.tag)
-            .field("body", &self.container.body.len())
-            .finish()
     }
 }

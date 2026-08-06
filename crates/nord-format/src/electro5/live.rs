@@ -2,15 +2,18 @@
 //!
 //! Confirmed on hardware: the live buffer is the `ne5p` program body under another tag.
 //! The same panel state read as object class 6 slot `1:1` and as program `5:40` gives
-//! byte-identical 121-byte bodies, so this module is [`program::Schema`] in the live slot
-//! space and every program field applies here unchanged.
+//! byte-identical 121-byte bodies, so this format shares [`program::Schema`] — the same
+//! `Body` type, under its own marker — and every program field applies here unchanged.
+//! Only the tag and the slot space differ, both of which live on the container.
+
+use std::io::{Cursor, Seek, Write};
 
 use binrw::{BinRead, BinWriterExt};
-use std::io::{Cursor, Read, Seek, Write};
 
-use crate::common::{bank, container};
+use crate::common::container::Header;
 use crate::electro5::program;
 use crate::error::Error;
+use crate::file::{sealed, BodyReader, File, Format};
 use crate::types::RangedU16Pair;
 
 pub const FORMAT: &str = "ne5l";
@@ -29,71 +32,48 @@ pub const SLOT_MAX: u16 = 2;
 pub type Location = RangedU16Pair<BANK_MAX, SLOT_MAX>;
 pub type Schema = program::Schema;
 
-/// One of the three live slots.
+/// The `ne5l` format: the program body in the live buffer's three-slot space.
 #[derive(Debug)]
-pub struct Live {
-    pub schema: Schema,
-    /// The container this slot arrived in — see [`program::Program`].
-    header: container::Header,
-    location: Location,
-    name: Option<String>,
+pub struct Ne5l;
+
+impl sealed::Sealed for Ne5l {}
+
+impl Format for Ne5l {
+    const TAG: &'static str = FORMAT;
+    const KNOWN_VERSIONS: &'static [u32] = KNOWN_VERSIONS;
+    const FILE_LEN: Option<usize> = Some(FILE_LEN);
+    type Location = Location;
+    type Body = Schema;
+
+    fn read_body(r: &mut BodyReader, _header: &Header) -> Result<Schema, Error> {
+        Ok(Schema::read_be(&mut Cursor::new(r.bytes()?))?)
+    }
+
+    fn write_body(
+        body: &Schema,
+        _header: &Header,
+        w: &mut (impl Write + Seek),
+    ) -> Result<(), Error> {
+        w.write_be(body)?;
+        Ok(())
+    }
 }
 
-impl Live {
+pub type Live = File<Ne5l>;
+
+impl File<Ne5l> {
     pub fn new(location: Location) -> Live {
-        Live {
-            name: None,
-            schema: Schema::new(),
-            header: container::Header::new(FORMAT, program::DEFAULT_VERSION),
+        File {
+            header: Header::new(FORMAT, program::DEFAULT_VERSION),
             location,
+            body: Schema::new(),
         }
-    }
-
-    pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Live, Error> {
-        let (header, location, body) =
-            container::Container::open_fixed(reader, FORMAT, KNOWN_VERSIONS, FILE_LEN)?;
-        Ok(Live {
-            name: None,
-            schema: Schema::read_be(&mut Cursor::new(body))?,
-            header,
-            location,
-        })
-    }
-
-    pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        let mut body = Cursor::new(Vec::new());
-        body.write_be(&self.schema)?;
-        container::Container {
-            header: self.header.clone(),
-            location: container::location_of(self.location.x(), self.location.y()),
-            body: body.into_inner(),
-        }
-        .write_to(writer)
-    }
-}
-
-impl bank::Item<Location> for Live {
-    fn name(&self) -> Option<String> {
-        self.name.clone()
-    }
-
-    fn set_name(&mut self, name: String) {
-        self.name = Some(name);
-    }
-
-    fn location(&self) -> Location {
-        self.location
-    }
-
-    fn set_location(&mut self, location: Location) {
-        self.location = location;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::bank::Item;
     use crate::error::ParseError;
     use std::io::Cursor;
 
@@ -107,7 +87,7 @@ mod tests {
         assert_eq!(&bytes[0x08..0x0c], FORMAT.as_bytes());
 
         let back = Live::read_from(&mut Cursor::new(&mut bytes)).unwrap();
-        assert_eq!(back.location(), (0, 2));
+        assert_eq!(back.location.inner(), (0, 2));
     }
 
     /// There are three live slots, and the type will not name a fourth.

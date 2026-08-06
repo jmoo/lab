@@ -1,4 +1,3 @@
-use crate::common::bank::Item;
 use crate::common::piano::Piano;
 use crate::common::sample::Sample;
 use crate::electro5::{program, song};
@@ -8,8 +7,10 @@ use std::io::{Read, Seek};
 
 #[derive(Debug)]
 pub struct Bundle {
-    programs: program::Bank,
-    songs: song::Bank,
+    /// Programs with the archive member name each arrived under — the only place a
+    /// name exists, since the files themselves store none.
+    programs: Vec<(String, program::Program)>,
+    songs: Vec<(String, song::Song)>,
     pianos: Vec<Piano>,
     samples: Vec<Sample>,
     /// Entries the walk could not place: `(archive member name, why)`. Kept on the
@@ -22,8 +23,8 @@ pub struct Bundle {
 impl Bundle {
     pub fn new() -> Self {
         Self {
-            programs: program::Bank::new(),
-            songs: song::Bank::new(),
+            programs: Vec::new(),
+            songs: Vec::new(),
             pianos: Vec::new(),
             samples: Vec::new(),
             skipped: Vec::new(),
@@ -46,13 +47,11 @@ impl Bundle {
 
             match from_stream(&mut cursor) {
                 Ok(entity) => match entity {
-                    Entity::Program(Program::Electro5(mut program)) => {
-                        program.set_name(name.clone());
-                        bundle.programs.replace(program);
+                    Entity::Program(Program::Electro5(program)) => {
+                        bundle.programs.push((name, program));
                     }
-                    Entity::Song(Song::Electro5(mut song)) => {
-                        song.set_name(name.clone());
-                        bundle.songs.replace(song);
+                    Entity::Song(Song::Electro5(song)) => {
+                        bundle.songs.push((name, song));
                     }
                     Entity::Piano(piano) => {
                         bundle.pianos.push(piano);
@@ -79,11 +78,11 @@ impl Bundle {
         self.name = Some(name);
     }
 
-    pub fn programs(&self) -> &program::Bank {
+    pub fn programs(&self) -> &[(String, program::Program)] {
         &self.programs
     }
 
-    pub fn songs(&self) -> &song::Bank {
+    pub fn songs(&self) -> &[(String, song::Song)] {
         &self.songs
     }
 

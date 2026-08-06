@@ -12,15 +12,16 @@ pub use panel::{
     Setting, SettingsPanel, SustainPedalMode, SustainPedalType, TonewheelMode, TransposeAt,
 };
 
-use crate::common::container;
+use crate::common::container::{self, Header};
 use crate::electro5::program;
 use crate::error::Error;
+use crate::file::{sealed, BodyReader, File, Format};
 use crate::panel::{FieldError, Panel};
 use crate::types::RangedU16Pair;
 use binrw::{binrw, BinRead, BinWriterExt};
 use panel::BODY_LEN;
 use std::fmt::Debug;
-use std::io::{Cursor, Read, Seek, Write};
+use std::io::{Cursor, Seek, Write};
 
 pub const FORMAT: &str = "ne5s";
 /// Schema versions validated against the corpus. Every corpus settings file reports 0.
@@ -85,55 +86,58 @@ impl Schema {
     }
 }
 
-/// Electro 5 global settings (`ne5s`): the System, MIDI and Sound menus.
+/// The `ne5s` format: Electro 5 global settings — the System, MIDI and Sound menus.
 ///
-/// The whole file is one panel plus its CBIN header; there is no slot to speak of, since
-/// the instrument holds exactly one of these.
+/// The whole file is one panel plus its CBIN header; there is no slot to speak of,
+/// since the instrument holds exactly one of these. Every corpus specimen carries
+/// location `0:0`, which the single-location [`Location`] type is exactly.
 #[derive(Debug)]
-pub struct Settings {
-    pub schema: Schema,
-    /// The container this file arrived in — see [`program::Program`].
-    header: container::Header,
+pub struct Ne5s;
+
+impl sealed::Sealed for Ne5s {}
+
+impl Format for Ne5s {
+    const TAG: &'static str = FORMAT;
+    const KNOWN_VERSIONS: &'static [u32] = KNOWN_VERSIONS;
+    const FILE_LEN: Option<usize> = Some(FILE_LEN);
+    type Location = Location;
+    type Body = Schema;
+
+    fn read_body(r: &mut BodyReader, _header: &Header) -> Result<Schema, Error> {
+        Ok(Schema::read_be(&mut Cursor::new(r.bytes()?))?)
+    }
+
+    fn write_body(
+        body: &Schema,
+        _header: &Header,
+        w: &mut (impl Write + Seek),
+    ) -> Result<(), Error> {
+        w.write_be(body)?;
+        Ok(())
+    }
 }
 
-impl Settings {
+pub type Settings = File<Ne5s>;
+
+impl File<Ne5s> {
     pub fn new() -> Settings {
-        Settings {
-            schema: Schema {
+        File {
+            header: Header::new(FORMAT, DEFAULT_VERSION),
+            location: (0, 0).try_into().expect("the single location"),
+            body: Schema {
                 panel: SettingsPanel::default(),
                 selection: Selection::default(),
             },
-            header: container::Header::new(FORMAT, DEFAULT_VERSION),
         }
-    }
-
-    pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Settings, Error> {
-        let (header, _, body) =
-            container::Container::open_fixed::<Location>(reader, FORMAT, KNOWN_VERSIONS, FILE_LEN)?;
-        Ok(Settings {
-            schema: Schema::read_be(&mut Cursor::new(body))?,
-            header,
-        })
-    }
-
-    pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        let mut body = Cursor::new(Vec::new());
-        body.write_be(&self.schema)?;
-        container::Container {
-            header: self.header.clone(),
-            location: container::location_of(0, 0),
-            body: body.into_inner(),
-        }
-        .write_to(writer)
     }
 
     /// The settings body as stored, `0x2c..=0x4d`. Includes the bits no field claims.
-    pub fn body(&self) -> [u8; BODY_LEN] {
-        panel::encode(&self.schema.panel, &self.schema.selection)
+    pub fn encoded(&self) -> [u8; BODY_LEN] {
+        panel::encode(&self.body.panel, &self.body.selection)
     }
 }
 
-impl Default for Settings {
+impl Default for File<Ne5s> {
     fn default() -> Self {
         Self::new()
     }
@@ -160,7 +164,7 @@ mod tests {
         assert_eq!(bytes.len(), FILE_LEN);
 
         let back = Settings::read_from(&mut Cursor::new(&mut bytes)).unwrap();
-        assert_eq!(back.body(), settings.body());
+        assert_eq!(back.encoded(), settings.encoded());
     }
 
     /// Bits no field claims are kept, so a body the decoder accepts survives verbatim.
@@ -170,18 +174,18 @@ mod tests {
         // Bit 18 is the only bit inside the decoded run that belongs to no field — the
         // third bit of `0x2e` — and `0x3e` onwards is past the last field, which ends at
         // bit 141. Both have to come back untouched.
-        let mut body = settings.body();
+        let mut body = settings.encoded();
         body[0x2e - 0x2c] = 0x20;
         body[0x3e - 0x2c] = 0x5a;
-        settings.schema.panel = SettingsPanel::try_from(body).unwrap();
-        settings.schema.selection = Selection::try_from(body).unwrap();
+        settings.body.panel = SettingsPanel::try_from(body).unwrap();
+        settings.body.selection = Selection::try_from(body).unwrap();
 
         let mut bytes = Vec::new();
         settings.write_to(&mut Cursor::new(&mut bytes)).unwrap();
         assert_eq!(bytes.len(), FILE_LEN);
 
         let back = Settings::read_from(&mut Cursor::new(&mut bytes)).unwrap();
-        assert_eq!(back.body(), body);
+        assert_eq!(back.encoded(), body);
     }
 
     /// Both panels share the body, so editing one must not revert the other.
@@ -192,17 +196,17 @@ mod tests {
     #[test]
     fn the_two_panels_do_not_overwrite_each_other() {
         let mut settings = Settings::new();
-        settings.schema.panel.b3_tonewheel_mode = TonewheelMode::Vintage3;
-        settings.schema.selection.live_mode = true;
-        settings.schema.selection.program = (4, 2).try_into().unwrap();
+        settings.body.panel.b3_tonewheel_mode = TonewheelMode::Vintage3;
+        settings.body.selection.live_mode = true;
+        settings.body.selection.program = (4, 2).try_into().unwrap();
 
         let mut bytes = Vec::new();
         settings.write_to(&mut Cursor::new(&mut bytes)).unwrap();
         let back = Settings::read_from(&mut Cursor::new(&mut bytes)).unwrap();
 
-        assert_eq!(back.schema.panel.b3_tonewheel_mode, TonewheelMode::Vintage3);
-        assert!(back.schema.selection.live_mode);
-        assert_eq!(back.schema.selection.program.inner(), (4, 2));
+        assert_eq!(back.body.panel.b3_tonewheel_mode, TonewheelMode::Vintage3);
+        assert!(back.body.selection.live_mode);
+        assert_eq!(back.body.selection.program.inner(), (4, 2));
     }
 
     /// Fields are addressed the way `--set` spells them, and both members answer.
@@ -210,31 +214,26 @@ mod tests {
     fn fields_are_set_through_schema_paths() {
         let mut settings = Settings::new();
         settings
-            .schema
+            .body
             .set_field("panel.global_transpose", "+3")
             .unwrap();
         settings
-            .schema
+            .body
             .set_field("selection.live_mode", "on")
             .unwrap();
 
         let mut bytes = Vec::new();
         settings.write_to(&mut Cursor::new(&mut bytes)).unwrap();
         let back = Settings::read_from(&mut Cursor::new(&mut bytes)).unwrap();
-        assert_eq!(back.schema.panel.global_transpose.inner(), 3);
-        assert!(back.schema.selection.live_mode);
+        assert_eq!(back.body.panel.global_transpose.inner(), 3);
+        assert!(back.body.selection.live_mode);
 
-        let paths: Vec<String> = settings
-            .schema
-            .fields()
-            .into_iter()
-            .map(|f| f.path)
-            .collect();
+        let paths: Vec<String> = settings.body.fields().into_iter().map(|f| f.path).collect();
         assert!(paths.contains(&"panel.global_transpose".to_string()));
         assert!(paths.contains(&"selection.program".to_string()));
 
-        assert!(settings.schema.set_field("panel.no_such", "1").is_err());
-        assert!(settings.schema.set_field("global_transpose", "1").is_err());
+        assert!(settings.body.set_field("panel.no_such", "1").is_err());
+        assert!(settings.body.set_field("global_transpose", "1").is_err());
     }
 
     /// An unknown schema version is refused at read rather than decoded on a guess: a

@@ -1,11 +1,10 @@
 use binrw::{binrw, BinRead, BinWriterExt};
-use std::io::{Cursor, Read, Seek, Write};
+use std::io::{Cursor, Seek, Write};
 
 use crate::common;
-use crate::common::bank;
-use crate::common::bank::Item;
-use crate::common::container;
+use crate::common::container::{self, Header};
 use crate::error::Error;
+use crate::file::{sealed, BodyReader, File, Format};
 
 use crate::electro5::program;
 
@@ -15,6 +14,9 @@ pub const FORMAT: &str = "ne5t";
 /// Schema versions this build's field offsets have been validated against: 0 is the
 /// eight factory demo songs, 1 is everything user-written.
 pub const KNOWN_VERSIONS: &[u32] = &[0, 1];
+/// What a newly authored song is written as. Reading a file overwrites it with
+/// whatever the file carried.
+pub const DEFAULT_VERSION: u32 = 1;
 /// The 18-byte body: the four program references, and the run of zeros after them.
 pub const BODY_LEN: usize = 18;
 /// Total file length: 44-byte CBIN header + the body.
@@ -24,8 +26,7 @@ pub const BANK_COUNT: u16 = 4;
 pub const SLOT_COUNT: u16 = 50;
 
 pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
-pub type Bank = bank::Bank<Song, Location>;
-pub type Song = common::song::Song<PROGRAM_COUNT, Location, program::Location>;
+pub type Setlist = common::song::Setlist<PROGRAM_COUNT, program::Location>;
 
 /// The song body. Offsets are absolute in a type-1 file, as everywhere in this crate;
 /// the body itself starts at [`container::HEADER_LEN`].
@@ -71,45 +72,74 @@ struct Schema {
     pub d: program::Location,
 }
 
-impl Song {
-    pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Song, Error> {
-        let (header, location, body) =
-            container::Container::open_fixed(reader, FORMAT, KNOWN_VERSIONS, FILE_LEN)?;
-        let schema = Schema::read_be(&mut Cursor::new(body))?;
+/// The `ne5t` format: a set list of four program slots, in its own four-bank space.
+#[derive(Debug)]
+pub struct Ne5t;
 
-        let mut song = Song::new(location, [schema.a, schema.b, schema.c, schema.d]);
-        song.set_header(header);
-        Ok(song)
+impl sealed::Sealed for Ne5t {}
+
+impl Format for Ne5t {
+    const TAG: &'static str = FORMAT;
+    const KNOWN_VERSIONS: &'static [u32] = KNOWN_VERSIONS;
+    const FILE_LEN: Option<usize> = Some(FILE_LEN);
+    type Location = Location;
+    type Body = Setlist;
+
+    fn read_body(r: &mut BodyReader, _header: &Header) -> Result<Setlist, Error> {
+        let schema = Schema::read_be(&mut Cursor::new(r.bytes()?))?;
+        Ok(Setlist::new([schema.a, schema.b, schema.c, schema.d]))
     }
 
-    pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
+    // The version echo in the map word is the header's — see [`Schema::map`].
+    fn write_body(
+        body: &Setlist,
+        header: &Header,
+        w: &mut (impl Write + Seek),
+    ) -> Result<(), Error> {
+        let programs = body.programs();
         let schema = Schema {
-            a: self.programs()[0],
-            b: self.programs()[1],
-            c: self.programs()[2],
-            d: self.programs()[3],
+            a: programs[0],
+            b: programs[1],
+            c: programs[2],
+            d: programs[3],
         };
+        w.write_be_args(&schema, (header.version,))?;
+        Ok(())
+    }
+}
 
-        let mut body = Cursor::new(Vec::new());
-        body.write_be_args(&schema, (self.version(),))?;
+pub type Song = File<Ne5t>;
 
-        // The song carries everything but the tag; only this module knows which format
-        // it is.
-        let mut header = self.header().clone();
-        header.tag = FORMAT.to_string();
-        container::Container {
-            header,
-            location: container::location_of(self.location().x(), self.location().y()),
-            body: body.into_inner(),
+impl File<Ne5t> {
+    pub fn new(location: Location, programs: [program::Location; PROGRAM_COUNT]) -> Song {
+        File {
+            header: Header::new(FORMAT, DEFAULT_VERSION),
+            location,
+            body: Setlist::new(programs),
         }
-        .write_to(writer)
+    }
+
+    pub fn get(&self, slot: u16) -> program::Location {
+        self.body.get(slot)
+    }
+
+    pub fn set(&mut self, slot: u16, location: program::Location) {
+        self.body.set(slot, location);
+    }
+
+    /// Container schema version — see [`KNOWN_VERSIONS`].
+    pub fn version(&self) -> u32 {
+        self.header.version
+    }
+
+    pub fn set_version(&mut self, version: u32) {
+        self.header.version = version;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Song;
-    use crate::common::bank::Item;
     use crate::error::Error;
     use std::io::Cursor;
 
@@ -126,7 +156,7 @@ mod tests {
         );
 
         // Assert song was created with correct values
-        assert_eq!(song.location(), (0, 1));
+        assert_eq!(song.location, (0, 1));
         assert_eq!(song.get(0), (1, 2));
         assert_eq!(song.get(1), (2, 3));
         assert_eq!(song.get(2), (3, 4));
@@ -139,7 +169,7 @@ mod tests {
         let result = Song::read_from(&mut Cursor::new(&mut write_result)).unwrap();
 
         // Assert those values are the same after writing and reading
-        assert_eq!(song.location(), result.location());
+        assert_eq!(song.location, result.location);
         assert_eq!(song.get(0), result.get(0));
         assert_eq!(song.get(1), result.get(1));
         assert_eq!(song.get(2), result.get(2));
@@ -208,7 +238,7 @@ mod tests {
         song.set(1, (5, 20).try_into()?);
 
         // Assert song was updated with correct values
-        assert_eq!(song.location(), (0, 1));
+        assert_eq!(song.location, (0, 1));
         assert_eq!(song.get(0), (1, 2));
         assert_eq!(song.get(1), (5, 20));
         assert_eq!(song.get(2), (3, 4));
@@ -221,7 +251,7 @@ mod tests {
         let result = Song::read_from(&mut Cursor::new(&mut write_result)).unwrap();
 
         // Assert those values are the same after writing and reading
-        assert_eq!(song.location(), result.location());
+        assert_eq!(song.location, result.location);
         assert_eq!(song.get(0), result.get(0));
         assert_eq!(song.get(1), result.get(1));
         assert_eq!(song.get(2), result.get(2));

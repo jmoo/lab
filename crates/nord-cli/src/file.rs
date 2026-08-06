@@ -176,10 +176,8 @@ pub fn deps(ui: &Ui, path: &Path, class: ObjectClass) -> Result<(), String> {
     // The two bodies are byte-identical but sit in different slot spaces, so the ids
     // are pulled out per variant rather than through one schema reference.
     let (piano, sample) = match &entity {
-        Entity::Program(Program::Electro5(p)) => {
-            (p.schema.piano_panel.id, p.schema.sample_panel.id)
-        }
-        Entity::Live(Live::Electro5(l)) => (l.schema.piano_panel.id, l.schema.sample_panel.id),
+        Entity::Program(Program::Electro5(p)) => (p.body.piano_panel.id, p.body.sample_panel.id),
+        Entity::Live(Live::Electro5(l)) => (l.body.piano_panel.id, l.body.sample_panel.id),
         Entity::Song(_) => {
             return Err("a set list names program slots, not library objects; \
                  `nord setlist deps BANK:SLOT` asks the instrument, which resolves them"

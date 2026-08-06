@@ -759,9 +759,8 @@ mod shapes {
             panic!("{name}: wrapped as a set list, decoded as {entity:?}")
         };
         {
-            use nord_format::common::bank::Item;
             assert_eq!(
-                song.location().inner(),
+                song.location.inner(),
                 ((bank - 1) as u16, (slot - 1) as u16),
                 "{name}: the slot the envelope stamped did not survive the decode",
             );

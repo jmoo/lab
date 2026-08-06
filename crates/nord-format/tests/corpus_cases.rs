@@ -44,7 +44,6 @@ mod cases {
         sidecars, specimen_of, Oracle, DIR_SIDECAR,
     };
     use libtest_mimic::{Arguments, Trial};
-    use nord_format::common::bank::Item;
     use nord_format::common::container;
     use nord_format::electro5::{EqualizerPart, PianoCategory};
     use nord_format::{electro5, Entity};
@@ -213,7 +212,7 @@ mod cases {
             // genuinely being read from elsewhere.
             "b3_bass_manual" => {
                 use nord_format::electro5::OrganModel;
-                let organ = read_program(path).schema.organ_panel;
+                let organ = read_program(path).body.organ_panel;
                 let bass = organ.b3_bass_drawbars();
                 let main = organ.drawbars(OrganModel::B3, 1);
                 assert!(
@@ -249,52 +248,52 @@ mod cases {
             (
                 "center_panel.gain",
                 0x2e..=0x34,
-                |p| p.schema.center_panel.gain = 96u8.try_into().unwrap(),
-                |p| assert_eq!(p.schema.center_panel.gain, 96),
+                |p| p.body.center_panel.gain = 96u8.try_into().unwrap(),
+                |p| assert_eq!(p.body.center_panel.gain, 96),
             ),
             (
                 "piano_panel.touch",
                 0x3a..=0x41,
-                |p| p.schema.piano_panel.touch = 3u8.try_into().unwrap(),
-                |p| assert_eq!(p.schema.piano_panel.touch, 3),
+                |p| p.body.piano_panel.touch = 3u8.try_into().unwrap(),
+                |p| assert_eq!(p.body.piano_panel.touch, 3),
             ),
             (
                 "sample_panel.number",
                 0x46..=0x4d,
-                |p| p.schema.sample_panel.number = 211,
-                |p| assert_eq!(p.schema.sample_panel.number, 211),
+                |p| p.body.sample_panel.number = 211,
+                |p| assert_eq!(p.body.sample_panel.number, 211),
             ),
             (
                 "organ_panel.b3_perc_third",
                 0x4e..=0x92,
-                |p| p.schema.organ_panel.set_b3_perc_third(true),
-                |p| assert!(p.schema.organ_panel.b3_perc_third()),
+                |p| p.body.organ_panel.set_b3_perc_third(true),
+                |p| assert!(p.body.organ_panel.b3_perc_third()),
             ),
             (
                 "effects_panel.fx3_compression",
                 0x93..=0x9f,
-                |p| p.schema.effects_panel.fx3_compression = 101u8.try_into().unwrap(),
-                |p| assert_eq!(p.schema.effects_panel.fx3_compression, 101),
+                |p| p.body.effects_panel.fx3_compression = 101u8.try_into().unwrap(),
+                |p| assert_eq!(p.body.effects_panel.fx3_compression, 101),
             ),
             (
                 // Three bits in 0x9a, four in 0x9b.
                 "effects_panel.equalizer_freq_gain",
                 0x93..=0x9f,
-                |p| p.schema.effects_panel.equalizer_freq_gain = 0x55u8.try_into().unwrap(),
-                |p| assert_eq!(p.schema.effects_panel.equalizer_freq_gain, 0x55),
+                |p| p.body.effects_panel.equalizer_freq_gain = 0x55u8.try_into().unwrap(),
+                |p| assert_eq!(p.body.effects_panel.equalizer_freq_gain, 0x55),
             ),
             (
                 // Five bits in 0x9e, two in 0x9f.
                 "effects_panel.fx5_moisture",
                 0x93..=0x9f,
-                |p| p.schema.effects_panel.fx5_moisture = 0x2au8.try_into().unwrap(),
-                |p| assert_eq!(p.schema.effects_panel.fx5_moisture, 0x2a),
+                |p| p.body.effects_panel.fx5_moisture = 0x2au8.try_into().unwrap(),
+                |p| assert_eq!(p.body.effects_panel.fx5_moisture, 0x2a),
             ),
             (
                 "effects_panel.equalizer_part",
                 0xa1..=0xa4,
-                |p| p.schema.effects_panel.equalizer_part = EqualizerPart::Both,
-                |p| assert_eq!(p.schema.effects_panel.equalizer_part, EqualizerPart::Both),
+                |p| p.body.effects_panel.equalizer_part = EqualizerPart::Both,
+                |p| assert_eq!(p.body.effects_panel.equalizer_part, EqualizerPart::Both),
             ),
         ]
     }
@@ -337,7 +336,7 @@ mod cases {
         let original = read(path).unwrap();
         let mut program = read_program(path);
 
-        let organ = &mut program.schema.organ_panel;
+        let organ = &mut program.body.organ_panel;
         for model in [B3, Vox, Farfisa, Pipe] {
             for preset in [1u8, 2] {
                 let bars = organ.drawbars(model, preset);
@@ -366,9 +365,9 @@ mod cases {
     fn program_values(path: &Path) {
         let p = read_program(path);
         let (c, pi, fx) = (
-            &p.schema.center_panel,
-            &p.schema.piano_panel,
-            &p.schema.effects_panel,
+            &p.body.center_panel,
+            &p.body.piano_panel,
+            &p.body.effects_panel,
         );
 
         let mut unknowns: BTreeMap<&'static str, u64> = BTreeMap::new();
@@ -428,7 +427,7 @@ mod cases {
     fn settings_values(path: &Path) {
         use nord_format::panel::Panel;
 
-        let schema = read_settings(path).schema;
+        let schema = read_settings(path).body;
         // Both panels over the body — the selection's `live_slot` can hold an
         // unrecognized value too.
         let unknowns: BTreeMap<String, u64> = schema
@@ -479,11 +478,11 @@ mod cases {
         let named = |fields: Vec<electro5::program::Field>| -> Vec<(String, String)> {
             fields.into_iter().map(|f| (f.path, f.display)).collect()
         };
-        let fields = named(live.schema.fields());
+        let fields = named(live.body.fields());
         assert!(!fields.is_empty(), "no fields to compare");
         assert_eq!(
             fields,
-            named(program.schema.fields()),
+            named(program.body.fields()),
             "live and program decodes disagree on {name}",
         );
     }
@@ -572,7 +571,7 @@ mod cases {
                 else {
                     panic!("expected an electro5 live slot in {name}")
                 };
-                let slot = live.location();
+                let slot = live.location;
                 assert_eq!(slot.x(), 0, "live slot outside bank 0 in {name}");
                 seen.insert(slot.inner());
             }
@@ -632,7 +631,7 @@ mod cases {
 
         for path in files_with(&backup.join("contents/Program"), "ne5p") {
             let name = path.display().to_string();
-            let schema = read_program(&path).schema;
+            let schema = read_program(&path).body;
             let (piano, sample) = (&schema.piano_panel, &schema.sample_panel);
 
             if piano.id != 0 {

@@ -65,11 +65,11 @@ pub fn run(ui: &Ui, args: EditArgs, class: ObjectClass) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let staged = match (&mut entity, class) {
         (Entity::Program(Program::Electro5(p)), ObjectClass::Program) => {
-            stage(ui, &args, &mut p.schema)?
+            stage(ui, &args, &mut p.body)?
         }
-        (Entity::Live(Live::Electro5(l)), ObjectClass::Live) => stage(ui, &args, &mut l.schema)?,
+        (Entity::Live(Live::Electro5(l)), ObjectClass::Live) => stage(ui, &args, &mut l.body)?,
         (Entity::Settings(Settings::Electro5(s)), ObjectClass::Settings) => {
-            stage(ui, &args, &mut s.schema)?
+            stage(ui, &args, &mut s.body)?
         }
         _ => return Err(mismatch(&entity, class)),
     };

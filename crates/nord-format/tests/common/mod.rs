@@ -5,7 +5,6 @@
 //! so an item no single target uses is still live.
 #![allow(dead_code)]
 
-use nord_format::common::bank::Item;
 use nord_format::electro5::program::OrganPanel;
 use nord_format::electro5::{OrganModel, Program};
 use nord_format::panel::Panel;
@@ -223,7 +222,7 @@ pub fn organ(o: &OrganPanel) -> Vec<Row> {
 
 /// Every field of every panel of one program, in file order.
 pub fn rows(p: &Program) -> Vec<Row> {
-    let s = &p.schema;
+    let s = &p.body;
     let mut rows = packed(&s.center_panel);
     rows.extend(packed(&s.piano_panel));
     rows.extend(packed(&s.sample_panel));
@@ -499,20 +498,20 @@ pub fn oracle_view(path: &Path) -> BTreeMap<String, [String; 2]> {
         .unwrap_or_else(|e| panic!("{} failed to parse: {e}", path.display()))
     {
         Entity::Program(nord_format::Program::Electro5(p)) => {
-            put("location".into(), format!("{:?}", p.location().inner()));
-            program_view(&p.schema, &mut view);
+            put("location".into(), format!("{:?}", p.location.inner()));
+            program_view(&p.body, &mut view);
         }
         Entity::Live(nord_format::Live::Electro5(l)) => {
-            put("location".into(), format!("{:?}", l.location().inner()));
-            program_view(&l.schema, &mut view);
+            put("location".into(), format!("{:?}", l.location.inner()));
+            program_view(&l.body, &mut view);
         }
         Entity::Settings(nord_format::Settings::Electro5(s)) => {
-            for f in s.schema.fields() {
+            for f in s.body.fields() {
                 view.insert(f.path, [f.display, f.value]);
             }
         }
         Entity::Song(nord_format::Song::Electro5(s)) => {
-            put("location".into(), format!("{:?}", s.location().inner()));
+            put("location".into(), format!("{:?}", s.location.inner()));
             let programs: Vec<(u16, u16)> = (0..4).map(|i| s.get(i).inner()).collect();
             put("programs".into(), format!("{programs:?}"));
         }

@@ -127,7 +127,7 @@ mod tests {
         );
 
         let mut program = Program::new((0, 0).try_into().unwrap());
-        program.schema.center_panel.gain = 96u8.try_into().unwrap();
+        program.body.center_panel.gain = 96u8.try_into().unwrap();
 
         let mut bytes = Vec::new();
         program

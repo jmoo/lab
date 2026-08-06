@@ -202,9 +202,9 @@ fn settings() {
         let settings = read_settings(path);
         // Both panels over the body, so the selection state is recorded next to the
         // menu settings rather than going unwatched.
-        let rows = packed(&settings.schema.panel)
+        let rows = packed(&settings.body.panel)
             .into_iter()
-            .chain(packed(&settings.schema.selection));
+            .chain(packed(&settings.body.selection));
         for row in rows {
             let raw = row.raw_str();
             if placements.insert(row.key.clone(), row.placement).is_none() {
@@ -240,7 +240,7 @@ fn settings() {
     // concrete place to show itself as well as an aggregate one.
     let baseline = root.join("settings/baseline.ne5s");
     let _ = write!(out, "\n=== settings/baseline.ne5s\n");
-    for row in packed(&read_settings(&baseline).schema.panel) {
+    for row in packed(&read_settings(&baseline).body.panel) {
         let _ = writeln!(
             out,
             "{:<44} {:<12} raw {:<6} {}",
