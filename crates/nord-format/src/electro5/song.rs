@@ -26,7 +26,9 @@ pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
 pub type Bank = bank::Bank<Song, Location>;
 pub type Song = common::song::Song<PROGRAM_COUNT, Location, program::Location>;
 
-/// The 18-byte body: four 9-bit program references packed into a big-endian u64.
+/// The 18-byte body: four 9-bit program references packed into a big-endian u64 —
+/// sub-byte fields, so this is bit territory rather than `#[bitbody]`'s byte
+/// segments, and the codec is by hand.
 ///
 /// Bits 48.. carry the version again. The container header is never transmitted
 /// over USB — the device sends only this body — so the version is echoed into the

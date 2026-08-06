@@ -20,7 +20,7 @@ pub use organ::{B3PercSpeed, B3Vib, Drawbars, FarfisaVib, OrganModel, OrganPanel
 pub use piano::{PianoCategory, PianoPanel};
 pub use sample::SamplePanel;
 
-use crate::cbin::{self, BodyReader, BodyWriter, Cbin, Header};
+use crate::cbin::{self, Cbin, Header};
 use crate::common::bank;
 use crate::error::{Error, ParseError};
 use crate::panel::{FieldError, Panel};
@@ -46,64 +46,33 @@ pub type Bank = bank::Bank<Program, Location>;
 /// the body is the schema, and `Cbin` derefs to it.
 pub type Schema = Cbin<ProgramBody>;
 
-/// The 121-byte panel body. Offsets below are body-relative; add `0x2c` (type 1)
-/// or `0x18` (type 0) for the file offset a hex dump shows.
-#[derive(Debug)]
+/// The 121-byte panel body.
+#[nord_bits_derive::bitbody(121)]
 pub struct ProgramBody {
-    // 0x00..0x02, big-endian. Every specimen echoes the header's schema version.
+    /// Every specimen echoes the header's schema version.
+    #[at(0x00..0x02, be)]
     program_version: u16,
 
-    // 0x02..0x09
+    #[at(0x02..0x09)]
     pub center_panel: CenterPanel,
 
-    // 0x09..0x0e
+    #[at(0x09..0x0e)]
     pad1: [u8; 5],
 
-    // 0x0e..0x16
+    #[at(0x0e..0x16)]
     pub piano_panel: PianoPanel,
 
-    // 0x16..0x1a
+    #[at(0x16..0x1a)]
     pad2: [u8; 4],
 
-    // 0x1a..0x22
+    #[at(0x1a..0x22)]
     pub sample_panel: SamplePanel,
 
-    // 0x22..0x67
+    #[at(0x22..0x67)]
     pub organ_panel: OrganPanel,
 
-    // 0x67..0x79
+    #[at(0x67..0x79)]
     pub effects_panel: EffectsPanel,
-}
-
-impl ProgramBody {
-    fn decode(raw: &[u8; BODY_LEN]) -> Result<ProgramBody, Error> {
-        let slice = |lo: usize, hi: usize| &raw[lo..hi];
-        Ok(ProgramBody {
-            program_version: u16::from_be_bytes(raw[0x00..0x02].try_into().unwrap()),
-            center_panel: CenterPanel::try_from(<[u8; 7]>::try_from(slice(0x02, 0x09)).unwrap())?,
-            pad1: raw[0x09..0x0e].try_into().unwrap(),
-            piano_panel: PianoPanel::try_from(<[u8; 8]>::try_from(slice(0x0e, 0x16)).unwrap())?,
-            pad2: raw[0x16..0x1a].try_into().unwrap(),
-            sample_panel: SamplePanel::try_from(<[u8; 8]>::try_from(slice(0x1a, 0x22)).unwrap())?,
-            organ_panel: OrganPanel::try_from(<[u8; 69]>::try_from(slice(0x22, 0x67)).unwrap())?,
-            effects_panel: EffectsPanel::try_from(
-                <[u8; 18]>::try_from(slice(0x67, 0x79)).unwrap(),
-            )?,
-        })
-    }
-
-    fn encode(&self) -> [u8; BODY_LEN] {
-        let mut out = [0u8; BODY_LEN];
-        out[0x00..0x02].copy_from_slice(&self.program_version.to_be_bytes());
-        out[0x02..0x09].copy_from_slice(&<[u8; 7]>::from(&self.center_panel));
-        out[0x09..0x0e].copy_from_slice(&self.pad1);
-        out[0x0e..0x16].copy_from_slice(&<[u8; 8]>::from(&self.piano_panel));
-        out[0x16..0x1a].copy_from_slice(&self.pad2);
-        out[0x1a..0x22].copy_from_slice(&<[u8; 8]>::from(&self.sample_panel));
-        out[0x22..0x67].copy_from_slice(&<[u8; 69]>::from(&self.organ_panel));
-        out[0x67..0x79].copy_from_slice(&<[u8; 18]>::from(&self.effects_panel));
-        out
-    }
 }
 
 impl Default for ProgramBody {
@@ -118,21 +87,6 @@ impl Default for ProgramBody {
             organ_panel: OrganPanel::default(),
             effects_panel: EffectsPanel::default(),
         }
-    }
-}
-
-impl cbin::Body for ProgramBody {
-    const LEN: Option<u64> = Some(BODY_LEN as u64);
-
-    fn read<R: Read + Seek>(r: &mut BodyReader<'_, R>, _: &Header) -> Result<Self, Error> {
-        let mut raw = [0u8; BODY_LEN];
-        r.read_exact(&mut raw)?;
-        ProgramBody::decode(&raw)
-    }
-
-    fn write<W: Write + Seek>(&self, w: &mut BodyWriter<'_, W>) -> Result<(), Error> {
-        w.write_all(&self.encode())?;
-        Ok(())
     }
 }
 
@@ -486,6 +440,34 @@ mod tests {
                 assert_eq!(<[u8; 7]>::from(&panel), raw);
             }
         }
+    }
+
+    /// The layout the macro publishes is the layout the codec uses: full
+    /// coverage of the 121 bytes, and the panel segments chain into the same
+    /// field registry `fields()` serves.
+    #[test]
+    fn the_program_body_layout_is_published_as_data() {
+        use crate::layout::{BodyLayout, SegmentKind};
+
+        let segments = ProgramBody::layout();
+        let mut cursor = 0;
+        for s in segments {
+            assert_eq!(s.start, cursor, "{}: gap or overlap", s.name);
+            cursor = s.end;
+        }
+        assert_eq!(cursor, BODY_LEN, "the segments do not cover the body");
+
+        let center = segments
+            .iter()
+            .find(|s| s.name == "center_panel")
+            .expect("declared");
+        let SegmentKind::Panel { field_specs } = &center.kind else {
+            panic!("center_panel is not a panel segment");
+        };
+        assert!(
+            field_specs().iter().any(|f| f.name == "transpose"),
+            "the segment does not chain into the panel's fields",
+        );
     }
 
     /// A program re-tagged type 0 is the same 121-byte body behind the shorter

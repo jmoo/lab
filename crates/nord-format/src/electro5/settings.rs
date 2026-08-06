@@ -33,7 +33,8 @@ pub type Schema = Cbin<SettingsBody>;
 /// The 34-byte settings body. Two panels share these bytes: the menu settings and
 /// the instrument's selection state, interleaved rather than split (the set list
 /// song runs 30..=37 and the first setting starts at 38), so the body is read once
-/// and decoded twice.
+/// and decoded twice — an overlay `#[bitbody]`'s one-segment-per-byte model does
+/// not express, which is why this codec is by hand.
 #[derive(Debug)]
 pub struct SettingsBody {
     pub panel: SettingsPanel,

@@ -4,6 +4,7 @@ pub mod common;
 pub mod crc;
 pub mod electro5;
 pub mod error;
+pub mod layout;
 pub mod panel;
 pub mod types;
 pub mod util;
