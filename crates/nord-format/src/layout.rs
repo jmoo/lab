@@ -1,67 +1,55 @@
 //! Body layouts as data.
 //!
 //! `#[bitbody]` generates an implementation of [`BodyLayout`] alongside the codec,
-//! so a body's byte map exists once in the source and is readable at runtime —
-//! for generated documentation, for `nord inspect`, for anything that wants to
-//! answer "which bytes does this field own" without re-stating the layout.
-//!
-//! A [`Segment`] is one contiguous byte range of the body. Panel segments chain
-//! down into their [`FieldSpec`]s, so the full map — file offset to bit — is one
-//! walk: body segments, then each panel's fields.
-//!
-//! [`FieldSpec`]: crate::panel::FieldSpec
+//! so a body's bit map exists once in the source and is readable at runtime — for
+//! generated documentation, for `nord inspect`, for anything that wants to answer
+//! "which bits does this field own" without re-stating the layout. Nested bodies
+//! chain to their own layouts, so the whole map is one recursive walk.
 
-/// One contiguous byte range of a body, half-open and body-relative.
-///
-/// For the file offset a hex dump shows, add the container's body start — `0x2c`
-/// on a type-1 file, `0x18` on a type-0.
+/// One field's placement: an inclusive bit range, MSB-first from byte 0 of the
+/// body that declares it. For the file offset a hex dump shows, add the enclosing
+/// placements and the container's body start — `0x2c` on a type-1 file, `0x18` on
+/// a type-0.
 #[derive(Clone)]
-pub struct Segment {
-    /// The field's name in the body struct.
-    pub name: &'static str,
-    /// First byte of the segment.
-    pub start: usize,
-    /// One past the last byte.
-    pub end: usize,
+pub struct LayoutField {
+    /// The field's registry path within its body — group-qualified for a grouped
+    /// leaf, the field's own name otherwise. A walker prefixes nested children
+    /// with this path and a dot.
+    pub path: &'static str,
     /// The field's Rust type, as written.
     pub ty: &'static str,
-    pub kind: SegmentKind,
+    pub lo: u32,
+    pub hi: u32,
+    /// The nested body's own layout, for an `#[at]` field; `None` for a leaf.
+    pub nested: Option<fn() -> &'static [LayoutField]>,
 }
 
-#[derive(Clone)]
-pub enum SegmentKind {
-    /// Bytes kept verbatim through a re-encode: padding and unmapped ranges.
-    Verbatim,
-    /// An unsigned integer.
-    Uint { big_endian: bool },
-    /// A bit-packed panel; `field_specs` lists its fields.
-    Panel {
-        field_specs: fn() -> Vec<crate::panel::FieldSpec>,
-    },
-}
-
-/// A body whose byte map is declared once, by `#[bitbody]`.
+/// A structure whose bit map is declared once, by `#[bitbody]`.
 pub trait BodyLayout {
-    /// The segments, in file order, covering every body byte exactly once —
-    /// the macro refuses to compile a layout with a gap or an overlap.
-    fn layout() -> &'static [Segment];
+    /// Every placed field, in declaration order. Bits no field claims are
+    /// preserved by the codec but have no entry here — there is no name to
+    /// report them under.
+    fn layout() -> &'static [LayoutField];
 }
 
-impl std::fmt::Debug for Segment {
+impl std::fmt::Debug for LayoutField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let kind = match &self.kind {
-            SegmentKind::Verbatim => "verbatim".to_string(),
-            SegmentKind::Uint { big_endian: true } => "uint be".to_string(),
-            SegmentKind::Uint { big_endian: false } => "uint le".to_string(),
-            SegmentKind::Panel { field_specs } => {
-                format!("panel ({} fields)", field_specs().len())
-            }
-        };
-        write!(
-            f,
-            "{:#04x}..{:#04x} {} ({}, {kind})",
-            self.start, self.end, self.name, self.ty
-        )
+        if self.nested.is_some() {
+            write!(
+                f,
+                "{} bytes {:#04x}..{:#04x} ({})",
+                self.path,
+                self.lo / 8,
+                (self.hi + 1) / 8,
+                self.ty,
+            )
+        } else {
+            write!(
+                f,
+                "{} bits {}..={} ({})",
+                self.path, self.lo, self.hi, self.ty
+            )
+        }
     }
 }
 
@@ -69,58 +57,59 @@ impl std::fmt::Debug for Segment {
 mod tests {
     use super::*;
     use crate::cbin::{self, Cbin, Header};
-    use nord_bits_derive::{bitbody, bitpanel};
+    use nord_bits_derive::bitbody;
     use std::io::Cursor;
 
-    #[bitpanel(2)]
+    /// A nested body: one flag, the rest of its two bytes unclaimed.
+    #[bitbody(2)]
     #[derive(Default)]
-    struct TestPanel {
+    struct Inner {
         #[bits(0..=0)]
-        flag: bool,
+        pub flag: bool,
         #[bits(4..=11)]
-        level: u8,
+        pub level: u8,
     }
 
-    /// Every segment kind the macro knows: a big-endian word, a verbatim pad, a
-    /// panel, and a little-endian tail.
-    #[bitbody(10)]
-    struct TestBody {
-        #[at(0x00..0x02, be)]
+    /// A body exercising both placements: a private leaf word, a nested body,
+    /// and a grouped public leaf, with unclaimed bits in between.
+    #[bitbody(6)]
+    struct Outer {
+        #[bits(0..=15)]
         word: u16,
+
         #[at(0x02..0x04)]
-        pad: [u8; 2],
-        #[at(0x04..0x06)]
-        panel: TestPanel,
-        #[at(0x06..0x0a, le)]
-        tail: u32,
+        pub inner: Inner,
+
+        #[group(tail)]
+        #[bits(40..=47)]
+        pub level: u8,
     }
 
-    fn body() -> TestBody {
-        TestBody {
-            word: 0x0102,
-            pad: [0xaa, 0xbb],
-            panel: TestPanel::try_from([0x80, 0x40]).unwrap(),
-            tail: 0xdead_beef,
-        }
+    fn body() -> Outer {
+        let mut b = Outer::try_from([0xab, 0xcd, 0x0f, 0xf0, 0xff, 0x00]).unwrap();
+        b.word = 0x0102;
+        b.inner.level = 0x55;
+        b.level = 7;
+        b
     }
 
-    /// The one declaration serves both directions, byte for byte.
+    /// Both placement kinds serve both directions, and unclaimed bits ride along
+    /// at every level.
     #[test]
     fn the_codec_is_the_declaration() {
-        let raw = <[u8; 10]>::from(&body());
-        assert_eq!(
-            raw,
-            [0x01, 0x02, 0xaa, 0xbb, 0x80, 0x40, 0xef, 0xbe, 0xad, 0xde],
-        );
-        let back = TestBody::try_from(raw).unwrap();
-        assert_eq!(<[u8; 10]>::from(&back), raw);
+        let raw = <[u8; 6]>::from(&body());
+        // word rewritten; inner: flag clear (bit 0 of 0x0f), level 0x55 over bits
+        // 4..=11, inner's unclaimed bits 1..=3 kept from 0x0f; byte 4 unclaimed
+        // at the outer level, kept verbatim; tail level rewritten.
+        assert_eq!(raw, [0x01, 0x02, 0x05, 0x50, 0xff, 0x07]);
+        let back = Outer::try_from(raw).unwrap();
         assert_eq!(back.word, 0x0102);
-        assert_eq!(back.tail, 0xdead_beef);
-        assert!(back.panel.flag);
+        assert_eq!(back.inner.level, 0x55);
+        assert_eq!(back.level, 7);
     }
 
-    /// The generated `Body` impl carries a bitbody through the container whole:
-    /// fixed length enforced, checksum stamped, both generations.
+    /// The generated `Body` impl carries a bitbody through the container whole,
+    /// both generations.
     #[test]
     fn a_bitbody_rides_the_container() {
         for generation in [cbin::Generation::V1, cbin::Generation::V0] {
@@ -133,44 +122,52 @@ mod tests {
             let mut bytes = Cursor::new(Vec::new());
             file.write_to(&mut bytes).unwrap();
             let mut bytes = Cursor::new(bytes.into_inner());
-            let back: Cbin<TestBody> = cbin::read(&mut bytes, "tstb").unwrap();
+            let back: Cbin<Outer> = cbin::read(&mut bytes, "tstb").unwrap();
             assert_eq!(back.header.slot(), (2, 5));
-            assert_eq!(<[u8; 10]>::from(&back.body), <[u8; 10]>::from(&body()));
+            assert_eq!(<[u8; 6]>::from(&back.body), <[u8; 6]>::from(&body()));
         }
     }
 
-    /// The layout is data: every byte accounted for, in order, and a panel
-    /// segment chains down into its own field specs.
+    /// Paths: a nested field prefixes its children with its own name, a grouped
+    /// leaf takes the group in force, and private fields stay unregistered.
+    #[test]
+    fn paths_recurse_through_nested_bodies() {
+        let b = body();
+        let paths: Vec<String> = b.fields().into_iter().map(|f| f.path).collect();
+        assert_eq!(paths, ["inner.flag", "inner.level", "tail.level"]);
+
+        let mut b = body();
+        b.set_field("inner.level", "3").unwrap();
+        assert_eq!(b.inner.level, 3);
+        b.set_field("tail.level", "9").unwrap();
+        assert_eq!(b.level, 9);
+        assert!(b.set_field("word", "1").is_err(), "private is not a path");
+        assert!(
+            b.set_field("level", "1").is_err(),
+            "a bare name is not a path"
+        );
+    }
+
+    /// The layout publishes every placement — including the unregistered word —
+    /// and a nested entry chains to the nested body's own layout.
     #[test]
     fn the_layout_is_readable_as_data() {
-        let segments = TestBody::layout();
-        let names: Vec<_> = segments.iter().map(|s| s.name).collect();
-        assert_eq!(names, ["word", "pad", "panel", "tail"]);
+        let fields = Outer::layout();
+        let rendered: Vec<String> = fields.iter().map(|f| format!("{f:?}")).collect();
+        assert_eq!(
+            rendered,
+            [
+                "word bits 0..=15 (u16)",
+                "inner bytes 0x02..0x04 (Inner)",
+                "tail.level bits 40..=47 (u8)",
+            ],
+        );
 
-        let mut cursor = 0;
-        for s in segments {
-            assert_eq!(s.start, cursor, "{}: gap or overlap", s.name);
-            cursor = s.end;
-        }
-        assert_eq!(cursor, 10, "the segments do not cover the body");
-
-        let SegmentKind::Panel { field_specs } = &segments[2].kind else {
-            panic!("`panel` is not a panel segment: {:?}", segments[2]);
-        };
-        let fields: Vec<_> = field_specs().into_iter().map(|f| f.name).collect();
-        assert_eq!(fields, ["flag", "level"]);
-        assert!(matches!(
-            segments[0].kind,
-            SegmentKind::Uint { big_endian: true }
-        ));
-        assert!(matches!(segments[1].kind, SegmentKind::Verbatim));
-    }
-
-    /// Verbatim segments survive a round trip but stay out of `Debug`.
-    #[test]
-    fn pads_round_trip_but_do_not_print() {
-        let printed = format!("{:?}", body());
-        assert!(printed.contains("word"), "{printed}");
-        assert!(!printed.contains("pad"), "{printed}");
+        let nested = fields[1].nested.expect("inner is nested");
+        let rendered: Vec<String> = nested().iter().map(|f| format!("{f:?}")).collect();
+        assert_eq!(
+            rendered,
+            ["flag bits 0..=0 (bool)", "level bits 4..=11 (u8)"]
+        );
     }
 }

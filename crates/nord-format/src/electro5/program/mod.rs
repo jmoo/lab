@@ -2,7 +2,9 @@
 //!
 //! Reads top-down: the format's constants, then [`ProgramBody`] — the 121 bytes
 //! after the container header — then [`Program`], which is that body in a `Cbin`
-//! plus a slot check. Each panel is a `#[bitpanel]` in its own module.
+//! plus a slot check. Each panel is a nested `#[bitbody]` in its own module,
+//! placed here by byte range; the registry paths (`center_panel.transpose`)
+//! follow the field names.
 //!
 //! The live buffer ([`crate::electro5::live`]) is this same body under the tag
 //! `ne5l`, addressed in three slots instead of eight banks of fifty; the two
@@ -20,10 +22,11 @@ pub use organ::{B3PercSpeed, B3Vib, Drawbars, FarfisaVib, OrganModel, OrganPanel
 pub use piano::{PianoCategory, PianoPanel};
 pub use sample::SamplePanel;
 
+pub use crate::panel::Field;
+
 use crate::cbin::{self, Cbin, Header};
 use crate::common::bank;
 use crate::error::{Error, ParseError};
-use crate::panel::{FieldError, Panel};
 use crate::types::RangedU16Pair;
 
 use std::io::{Read, Seek, Write};
@@ -46,24 +49,19 @@ pub type Bank = bank::Bank<Program, Location>;
 /// the body is the schema, and `Cbin` derefs to it.
 pub type Schema = Cbin<ProgramBody>;
 
-/// The 121-byte panel body.
+/// The 121-byte panel body: five panels behind a version echo. The pads between
+/// the panels are unclaimed bits, kept verbatim.
 #[nord_bits_derive::bitbody(121)]
 pub struct ProgramBody {
     /// Every specimen echoes the header's schema version.
-    #[at(0x00..0x02, be)]
+    #[bits(0..=15)]
     program_version: u16,
 
     #[at(0x02..0x09)]
     pub center_panel: CenterPanel,
 
-    #[at(0x09..0x0e)]
-    pad1: [u8; 5],
-
     #[at(0x0e..0x16)]
     pub piano_panel: PianoPanel,
-
-    #[at(0x16..0x1a)]
-    pad2: [u8; 4],
 
     #[at(0x1a..0x22)]
     pub sample_panel: SamplePanel,
@@ -78,82 +76,13 @@ pub struct ProgramBody {
 impl Default for ProgramBody {
     fn default() -> ProgramBody {
         ProgramBody {
+            raw: [0; BODY_LEN],
             program_version: 4,
             center_panel: CenterPanel::default(),
-            pad1: [0; 5],
             piano_panel: PianoPanel::default(),
-            pad2: [0; 4],
             sample_panel: SamplePanel::default(),
             organ_panel: OrganPanel::default(),
             effects_panel: EffectsPanel::default(),
-        }
-    }
-}
-
-/// One settable field, addressed the way `--set` addresses it.
-pub struct Field {
-    /// `center_panel.transpose`.
-    pub path: String,
-    pub spec: crate::panel::FieldSpec,
-    /// What the field currently holds, spelled the way [`ProgramBody::set_field`]
-    /// takes it. Feeding this straight back is always a no-op.
-    pub value: String,
-    /// The same value as `nord inspect` renders it. Differs from `value` only for a
-    /// field too wide to have named values, where the rendering is a list and the
-    /// spelling is the stored bits.
-    pub display: String,
-}
-
-/// Describe one panel's fields under their qualified paths.
-///
-/// `field_specs` and `field_values` are emitted in declaration order and describe the
-/// same fields, so the positional zip is sound — see `nord_bits_derive`.
-pub(crate) fn describe<P: Panel>(prefix: &str, panel: &P) -> Vec<Field> {
-    P::field_specs()
-        .into_iter()
-        .zip(panel.field_values())
-        .map(|(spec, value)| Field {
-            path: format!("{prefix}.{}", spec.name),
-            value: crate::panel::settable_form(spec.width, &value.value, value.bits),
-            display: value.value,
-            spec,
-        })
-        .collect()
-}
-
-impl ProgramBody {
-    /// Every settable field of a program, in panel then declaration order.
-    pub fn fields(&self) -> Vec<Field> {
-        let mut out = describe("center_panel", &self.center_panel);
-        out.extend(describe("piano_panel", &self.piano_panel));
-        out.extend(describe("sample_panel", &self.sample_panel));
-        out.extend(describe("organ_panel", &self.organ_panel));
-        out.extend(describe("effects_panel", &self.effects_panel));
-        out
-    }
-
-    /// Set one field, addressed as `panel.field`.
-    ///
-    /// ⚠️ The panel names are the one part of a path spelled by hand, so a panel added to
-    /// the body needs a line here and in [`Self::fields`]. Field names come from
-    /// `#[bitpanel]` and cannot go stale.
-    pub fn set_field(&mut self, path: &str, value: &str) -> Result<(), FieldError> {
-        let (panel, field) = path
-            .split_once('.')
-            .ok_or_else(|| FieldError::UnknownField {
-                panel: "a program",
-                name: path.to_string(),
-            })?;
-        match panel {
-            "center_panel" => self.center_panel.set_field(field, value),
-            "piano_panel" => self.piano_panel.set_field(field, value),
-            "sample_panel" => self.sample_panel.set_field(field, value),
-            "organ_panel" => self.organ_panel.set_field(field, value),
-            "effects_panel" => self.effects_panel.set_field(field, value),
-            other => Err(FieldError::UnknownField {
-                panel: "a program",
-                name: other.to_string(),
-            }),
         }
     }
 }
@@ -442,32 +371,36 @@ mod tests {
         }
     }
 
-    /// The layout the macro publishes is the layout the codec uses: full
-    /// coverage of the 121 bytes, and the panel segments chain into the same
-    /// field registry `fields()` serves.
+    /// The layout the macro publishes is the layout the codec uses: the panels
+    /// sit where the declaration says, and a nested entry chains into the
+    /// panel's own field placements.
     #[test]
     fn the_program_body_layout_is_published_as_data() {
-        use crate::layout::{BodyLayout, SegmentKind};
+        use crate::layout::BodyLayout;
 
-        let segments = ProgramBody::layout();
-        let mut cursor = 0;
-        for s in segments {
-            assert_eq!(s.start, cursor, "{}: gap or overlap", s.name);
-            cursor = s.end;
-        }
-        assert_eq!(cursor, BODY_LEN, "the segments do not cover the body");
-
-        let center = segments
+        let fields = ProgramBody::layout();
+        let center = fields
             .iter()
-            .find(|s| s.name == "center_panel")
+            .find(|f| f.path == "center_panel")
             .expect("declared");
-        let SegmentKind::Panel { field_specs } = &center.kind else {
-            panic!("center_panel is not a panel segment");
-        };
+        assert_eq!((center.lo / 8, (center.hi + 1) / 8), (0x02, 0x09));
+        let nested = center.nested.expect("a panel chains to its own layout");
         assert!(
-            field_specs().iter().any(|f| f.name == "transpose"),
-            "the segment does not chain into the panel's fields",
+            nested().iter().any(|f| f.path == "transpose"),
+            "the nested layout does not list the panel's fields",
         );
+
+        // The registry walks the same structure: full paths, panel by panel.
+        let program = Program::new((0, 0).try_into().unwrap());
+        let paths: Vec<String> = program
+            .schema
+            .fields()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert!(paths.contains(&"center_panel.transpose".to_string()));
+        assert!(paths.contains(&"piano_panel.id".to_string()));
+        assert!(paths.contains(&"sample_panel.id".to_string()));
     }
 
     /// A program re-tagged type 0 is the same 121-byte body behind the shorter

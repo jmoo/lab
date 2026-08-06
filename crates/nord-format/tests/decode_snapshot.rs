@@ -26,7 +26,6 @@
 
 use nord_format::electro5::program::OrganPanel;
 use nord_format::electro5::{OrganModel, Program};
-use nord_format::panel::Panel;
 use nord_format::{electro5, Entity};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -90,17 +89,19 @@ impl Row {
     }
 }
 
-/// Every field of a `#[bitpanel]` panel, in declaration order.
-fn packed<P: Panel>(p: &P) -> Vec<Row> {
-    p.field_values()
+/// One `#[bitbody]` registry's fields, in declaration order, keyed by `prefix`
+/// plus the field's own path (which is already group- or panel-qualified when
+/// the body qualifies it).
+fn packed(prefix: &str, values: Vec<nord_format::panel::FieldValue>) -> Vec<Row> {
+    values
         .into_iter()
         .map(|f| {
-            Row::new(
-                format!("{}.{}", P::NAME, f.name),
-                f.placement,
-                f.raw,
-                f.value,
-            )
+            let key = if prefix.is_empty() {
+                f.name.clone()
+            } else {
+                format!("{prefix}.{}", f.name)
+            };
+            Row::new(key, f.placement, f.raw, f.value)
         })
         .collect()
 }
@@ -243,11 +244,11 @@ fn organ(o: &OrganPanel) -> Vec<Row> {
 /// Every field of every panel of one program, in file order.
 fn rows(p: &Program) -> Vec<Row> {
     let s = &p.schema;
-    let mut rows = packed(&s.center_panel);
-    rows.extend(packed(&s.piano_panel));
-    rows.extend(packed(&s.sample_panel));
+    let mut rows = packed("CenterPanel", s.center_panel.field_values());
+    rows.extend(packed("PianoPanel", s.piano_panel.field_values()));
+    rows.extend(packed("SamplePanel", s.sample_panel.field_values()));
     rows.extend(organ(&s.organ_panel));
-    rows.extend(packed(&s.effects_panel));
+    rows.extend(packed("EffectsPanel", s.effects_panel.field_values()));
     rows
 }
 
@@ -448,11 +449,9 @@ fn settings() {
 
     for path in &paths {
         let settings = read_settings(path);
-        // Both panels over the body, so the selection state is recorded next to the
-        // menu settings rather than going unwatched.
-        let rows = packed(&settings.schema.panel)
-            .into_iter()
-            .chain(packed(&settings.schema.selection));
+        // The flat body registers both vocabularies, so the selection state is
+        // recorded next to the menu settings rather than going unwatched.
+        let rows = packed("", settings.schema.field_values());
         for row in rows {
             let raw = row.raw_str();
             if placements.insert(row.key.clone(), row.placement).is_none() {
@@ -488,7 +487,7 @@ fn settings() {
     // concrete place to show itself as well as an aggregate one.
     let baseline = root.join("settings/baseline.ne5s");
     let _ = write!(out, "\n=== settings/baseline.ne5s\n");
-    for row in packed(&read_settings(&baseline).schema.panel) {
+    for row in packed("", read_settings(&baseline).schema.field_values()) {
         let _ = writeln!(
             out,
             "{:<44} {:<12} raw {:<6} {}",

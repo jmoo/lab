@@ -2,7 +2,7 @@
 
 use std::io::{Read, Seek, Write};
 
-use crate::cbin::{self, BodyReader, BodyWriter, Cbin, Header};
+use crate::cbin::{self, Cbin, Header};
 use crate::common;
 use crate::common::bank;
 use crate::common::bank::Item;
@@ -26,47 +26,24 @@ pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
 pub type Bank = bank::Bank<Song, Location>;
 pub type Song = common::song::Song<PROGRAM_COUNT, Location, program::Location>;
 
-/// The 18-byte body: four 9-bit program references packed into a big-endian u64 —
-/// sub-byte fields, so this is bit territory rather than `#[bitbody]`'s byte
-/// segments, and the codec is by hand.
+/// The 18-byte body: four 9-bit program references behind a version echo.
 ///
-/// Bits 48.. carry the version again. The container header is never transmitted
-/// over USB — the device sends only this body — so the version is echoed into the
-/// payload where the wire side can see it. ⚠️ It must be the *read* version, never a
-/// constant: the eight factory demo songs are version 0, and stamping 1 here
-/// silently rewrites them.
+/// The container header is never transmitted over USB — the device sends only
+/// this body — so the version is echoed into bits the wire side can see. ⚠️ It
+/// must be the *read* version, never a constant: the eight factory demo songs
+/// are version 0, and stamping 1 here silently rewrites them.
+#[nord_bits_derive::bitbody(18)]
 struct SongBody {
-    version: u32,
-    programs: [program::Location; PROGRAM_COUNT],
-}
-
-impl cbin::Body for SongBody {
-    const LEN: Option<u64> = Some(BODY_LEN as u64);
-
-    fn read<R: Read + Seek>(r: &mut BodyReader<'_, R>, _: &Header) -> Result<Self, Error> {
-        let mut raw = [0u8; BODY_LEN];
-        r.read_exact(&mut raw)?;
-        let map = u64::from_be_bytes(raw[0..8].try_into().unwrap());
-        let slot = |shift: u32| -> Result<program::Location, Error> {
-            Ok(((map >> shift & 0b1_1111_1111) as u16).try_into()?)
-        };
-        Ok(SongBody {
-            version: (map >> 48) as u32,
-            programs: [slot(39)?, slot(30)?, slot(21)?, slot(12)?],
-        })
-    }
-
-    fn write<W: Write + Seek>(&self, w: &mut BodyWriter<'_, W>) -> Result<(), Error> {
-        let [a, b, c, d] = self.programs;
-        let map = (self.version as u64) << 48
-            | (a.as_u16() as u64) << 39
-            | (b.as_u16() as u64) << 30
-            | (c.as_u16() as u64) << 21
-            | (d.as_u16() as u64) << 12;
-        w.write_all(&map.to_be_bytes())?;
-        w.write_all(&[0u8; BODY_LEN - 8])?;
-        Ok(())
-    }
+    #[bits(0..=15)]
+    version: u16,
+    #[bits(16..=24)]
+    a: program::Location,
+    #[bits(25..=33)]
+    b: program::Location,
+    #[bits(34..=42)]
+    c: program::Location,
+    #[bits(43..=51)]
+    d: program::Location,
 }
 
 impl Song {
@@ -74,7 +51,11 @@ impl Song {
         let file: Cbin<SongBody> = cbin::read(reader, FORMAT)?;
         program::known_version(FORMAT, file.header.version, KNOWN_VERSIONS)?;
 
-        let mut song = Song::new(program::location(&file.header)?, file.body.programs);
+        let body = &file.body;
+        let mut song = Song::new(
+            program::location(&file.header)?,
+            [body.a, body.b, body.c, body.d],
+        );
         song.set_version(file.header.version);
         song.set_generation(file.header.generation);
         Ok(song)
@@ -83,11 +64,16 @@ impl Song {
     pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
         let mut header = Header::new(FORMAT, self.location().inner(), self.version());
         header.generation = self.generation();
+        let [a, b, c, d] = *self.programs();
         let file = Cbin {
             header,
             body: SongBody {
-                version: self.version(),
-                programs: *self.programs(),
+                raw: [0; BODY_LEN],
+                version: self.version() as u16,
+                a,
+                b,
+                c,
+                d,
             },
         };
         file.write_to(writer)

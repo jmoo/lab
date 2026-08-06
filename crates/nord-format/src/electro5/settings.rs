@@ -1,22 +1,21 @@
 //! The Electro 5 global settings format (`.ne5s`).
 //!
 //! Reads top-down: the format's constants, then [`SettingsBody`] — the 34 bytes
-//! after the container header — then [`Settings`]. The body is one `#[bitpanel]`,
-//! in [`panel`].
+//! after the container header, one flat `#[bitbody]` in [`panel`] — then
+//! [`Settings`].
 
 pub mod panel;
 
 pub use panel::{
     B3TrigMode, CtrlPedalGain, CtrlPedalType, FineTune, GlobalTranspose, KeyClickLevel, LiveSlot,
     Menu, MidiChannel, MidiMessageMode, OutputRouting, PercDecay, PercVolume, ResonanceLevel,
-    RotaryBalance, RotaryCtrlType, RotaryPedalMode, RotaryRate, RotarySpeakerType, Selection,
-    Setting, SettingsPanel, SustainPedalMode, SustainPedalType, TonewheelMode, TransposeAt,
+    RotaryBalance, RotaryCtrlType, RotaryPedalMode, RotaryRate, RotarySpeakerType, Setting,
+    SettingsBody, SustainPedalMode, SustainPedalType, TonewheelMode, TransposeAt,
 };
 
-use crate::cbin::{self, BodyReader, BodyWriter, Cbin, Header};
+use crate::cbin::{self, Cbin, Header};
 use crate::electro5::program;
 use crate::error::Error;
-use crate::panel::{FieldError, Panel};
 use panel::BODY_LEN;
 use std::fmt::Debug;
 use std::io::{Read, Seek, Write};
@@ -29,62 +28,6 @@ pub const FILE_LEN: usize = 0x2c + BODY_LEN;
 
 /// The settings as a file: container header plus body.
 pub type Schema = Cbin<SettingsBody>;
-
-/// The 34-byte settings body. Two panels share these bytes: the menu settings and
-/// the instrument's selection state, interleaved rather than split (the set list
-/// song runs 30..=37 and the first setting starts at 38), so the body is read once
-/// and decoded twice — an overlay `#[bitbody]`'s one-segment-per-byte model does
-/// not express, which is why this codec is by hand.
-#[derive(Debug)]
-pub struct SettingsBody {
-    pub panel: SettingsPanel,
-    pub selection: Selection,
-}
-
-impl cbin::Body for SettingsBody {
-    const LEN: Option<u64> = Some(BODY_LEN as u64);
-
-    fn read<R: Read + Seek>(r: &mut BodyReader<'_, R>, _: &Header) -> Result<Self, Error> {
-        let mut raw = [0u8; BODY_LEN];
-        r.read_exact(&mut raw)?;
-        Ok(SettingsBody {
-            panel: SettingsPanel::try_from(raw)?,
-            selection: Selection::try_from(raw)?,
-        })
-    }
-
-    fn write<W: Write + Seek>(&self, w: &mut BodyWriter<'_, W>) -> Result<(), Error> {
-        w.write_all(&panel::encode(&self.panel, &self.selection))?;
-        Ok(())
-    }
-}
-
-impl SettingsBody {
-    /// Every settable field, menu panel then selection, in declaration order.
-    pub fn fields(&self) -> Vec<program::Field> {
-        let mut out = program::describe("panel", &self.panel);
-        out.extend(program::describe("selection", &self.selection));
-        out
-    }
-
-    /// Set one field, addressed as `panel.field` or `selection.field`.
-    pub fn set_field(&mut self, path: &str, value: &str) -> Result<(), FieldError> {
-        let (member, field) = path
-            .split_once('.')
-            .ok_or_else(|| FieldError::UnknownField {
-                panel: "settings",
-                name: path.to_string(),
-            })?;
-        match member {
-            "panel" => self.panel.set_field(field, value),
-            "selection" => self.selection.set_field(field, value),
-            other => Err(FieldError::UnknownField {
-                panel: "settings",
-                name: other.to_string(),
-            }),
-        }
-    }
-}
 
 /// Electro 5 global settings (`ne5s`): the System, MIDI and Sound menus.
 ///
@@ -100,10 +43,7 @@ impl Settings {
         Settings {
             schema: Cbin {
                 header: Header::new(FORMAT, (0, 0), 0),
-                body: SettingsBody {
-                    panel: SettingsPanel::default(),
-                    selection: Selection::default(),
-                },
+                body: SettingsBody::default(),
             },
         }
     }

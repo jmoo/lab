@@ -13,9 +13,9 @@
 //! carries at `0x2c` because the container header is not transmitted over USB — see
 //! [`crate::electro5::song`]. `ne5s` is version 0, so they read zero.
 //!
-//! Bits 16..=37 are not settings at all: they are where the instrument *was*, and they
-//! live in [`Selection`]. **Bit 18 is the only bit below the settings that no field
-//! claims.** It is clear in every specimen. Whatever it is, it survives a re-encode
+//! Bits 16..=37 are not settings at all: they are where the instrument *was* —
+//! the `selection` group below. **Bit 18 is the only bit below the settings that no
+//! field claims.** It is clear in every specimen. Whatever it is, it survives a re-encode
 //! untouched, as does everything past the last setting.
 //!
 //! **Two catalogued settings have no home here.** Toggling *memory protect* and *local
@@ -26,25 +26,12 @@ use crate::common::components::sparse_enum;
 use crate::electro5::{program, song};
 use crate::error::ParseError;
 use crate::types::RangedI8;
-use nord_bits_derive::bitpanel;
+use nord_bits_derive::bitbody;
 
 use std::fmt::{self, Debug, Display, Formatter};
 
 /// Length of the settings body block, `0x2c..=0x4d`.
 pub const BODY_LEN: usize = 0x4e - 0x2c;
-
-/// Write a settings body from the two panels that share it.
-///
-/// ⚠️ The threading is load-bearing. A panel re-encodes onto the bytes it was decoded
-/// from, so each carries a stale copy of the other's fields; feeding the settings'
-/// output through the selection's encode is what keeps both sets of edits. Encoding each
-/// from its own bytes and keeping either result silently reverts the other. The order
-/// only decides whose copy supplies the bits neither panel claims — the same bytes
-/// whenever both came from one decode.
-pub fn encode(settings: &SettingsPanel, selection: &Selection) -> [u8; BODY_LEN] {
-    let raw = <[u8; BODY_LEN]>::from(settings);
-    <[u8; BODY_LEN]>::from(&Selection { raw, ..*selection })
-}
 
 /// Half-step global transposition, `-6..=6`, stored biased by 6.
 pub type GlobalTranspose = RangedI8<6, -6, 6>;
@@ -55,9 +42,14 @@ pub type ResonanceLevel = RangedI8<6, -6, 6>;
 /// Master tuning offset in cents, `-50..=50`, stored biased by 50.
 pub type FineTune = RangedI8<50, -50, 50>;
 
-#[bitpanel(34)]
-pub struct SettingsPanel {
+/// The 34-byte settings body: the System, MIDI and Sound menus (the `panel`
+/// group), interleaved in one bit space with where the instrument was (the
+/// `selection` group). Deliberately flat — the two vocabularies share bytes, so
+/// the groups are path prefixes over one body rather than nested structures.
+#[bitbody(34)]
+pub struct SettingsBody {
     // ── System ─────────────────────────────────────────────────────────────────
+    #[group(panel)]
     #[bits(52..=53)]
     pub rotary_ctrl_type: RotaryCtrlType,
     #[bits(54..=54)]
@@ -137,26 +129,23 @@ pub struct SettingsPanel {
     pub rotary_rotor_speed: RotaryRate,
     #[bits(91..=93)]
     pub rotary_rotor_acceleration: RotaryRate,
-}
 
-/// Where the instrument was, stored alongside the settings in the same body.
-///
-/// None of this appears in a menu and none of it is a setting: it is the panel state the
-/// instrument restores at power-up. Changing any of the 34 catalogued settings leaves
-/// every bit here alone, and a settings file written by a different capture session
-/// differs here and nowhere else.
-///
-/// Both locations are `bank * 50 + slot`, zero-based — the packing
-/// [`crate::electro5::song`] uses for its program references.
-///
-/// `live_slot` survives leaving Live mode and `program` survives entering it, so each
-/// holds the last selection of its kind rather than the current one.
-#[bitpanel(34)]
-#[derive(Clone, Copy)]
-pub struct Selection {
+    // ── Where the instrument was, stored alongside the settings ────────────────
+    //
+    // None of this appears in a menu and none of it is a setting: it is the panel
+    // state the instrument restores at power-up. Changing any of the 34 catalogued
+    // settings leaves every bit here alone, and a settings file written by a
+    // different capture session differs here and nowhere else.
+    //
+    // Both locations are `bank * 50 + slot`, zero-based — the packing
+    // [`crate::electro5::song`] uses for its program references.
+    //
+    // `live_slot` survives leaving Live mode and `program` survives entering it, so
+    // each holds the last selection of its kind rather than the current one.
     /// Inferred from specimens; not confirmed on hardware. One specimen holds it — the
     /// one capture made in set list mode. The full backup moves `song` without it, so
     /// the bit tracks the mode, not the song.
+    #[group(selection)]
     #[bits(16..=16)]
     pub set_list_mode: bool,
     #[bits(17..=17)]
@@ -201,26 +190,18 @@ impl Menu {
 
 /// One setting as the instrument's menu presents it.
 pub struct Setting {
-    /// The field's name, as [`crate::panel::Panel`] declares it.
+    /// The field's bare name within the `panel` group.
     pub name: &'static str,
     /// The value spelled the way the instrument spells it — `yamaha fc-7`, not the
     /// variant name the bits decode to.
     pub value: String,
 }
 
-/// Every field decodes from zeroed bytes, so this is the decode rather than a second
-/// statement of each field's default.
-impl Default for SettingsPanel {
+/// Every field decodes from zeroed bytes — program `1:1`, Live and set list mode
+/// off — so this is the decode rather than a second statement of each default.
+impl Default for SettingsBody {
     fn default() -> Self {
-        SettingsPanel::try_from([0; BODY_LEN]).expect("every settings field decodes totally")
-    }
-}
-
-/// As [`SettingsPanel`]: the decode of zeroed bytes, which is program `1:1` with Live and
-/// set list mode off.
-impl Default for Selection {
-    fn default() -> Self {
-        Selection::try_from([0; BODY_LEN]).expect("every selection field decodes totally")
+        SettingsBody::try_from([0; BODY_LEN]).expect("every settings field decodes totally")
     }
 }
 
@@ -229,14 +210,14 @@ fn on_off(on: bool) -> String {
     if on { "on" } else { "off" }.to_string()
 }
 
-impl SettingsPanel {
+impl SettingsBody {
     /// The panel's fields grouped by the menu the instrument shows them under, in menu
     /// order — which is neither declaration order nor the order they sit in the file.
     ///
     /// ⚠️ These renderings are for reading, not for feeding back: `Display` is the panel's
     /// wording, while [`crate::panel::Panel::set_field`] parses a field's `Debug`. A test
     /// holds the list to the panel's own field names, so a field added to
-    /// [`SettingsPanel`] and not placed in a menu fails there.
+    /// [`SettingsBody`] and not placed in a menu fails there.
     pub fn by_menu(&self) -> Vec<(Menu, Vec<Setting>)> {
         let at = |name, value: String| Setting { name, value };
         vec![
@@ -601,7 +582,6 @@ impl PartialEq<u8> for CtrlPedalGain {
 mod tests {
     use super::*;
     use crate::bits::Packed;
-    use crate::panel::Panel;
     use std::collections::{BTreeMap, BTreeSet};
 
     /// Body-relative index of the byte at absolute Electro 5 file offset `abs`.
@@ -610,25 +590,25 @@ mod tests {
     }
 
     /// Build a settings panel from `(absolute offset, byte)` pairs; everything else 0.
-    fn panel(bytes: &[(usize, u8)]) -> SettingsPanel {
+    fn panel(bytes: &[(usize, u8)]) -> SettingsBody {
         let mut raw = [0u8; BODY_LEN];
         for &(at, b) in bytes {
             raw[body(at)] = b;
         }
-        SettingsPanel::try_from(raw).expect("every settings field decodes totally")
+        SettingsBody::try_from(raw).expect("every settings field decodes totally")
     }
 
     /// Every declared field belongs to exactly one menu, and every menu names only
     /// declared fields.
     #[test]
     fn every_field_is_listed_under_one_menu() {
-        let declared: BTreeSet<&str> = SettingsPanel::field_specs()
+        let declared: BTreeSet<String> = SettingsBody::field_specs()
             .into_iter()
-            .map(|f| f.name)
+            .filter_map(|f| f.name.strip_prefix("panel.").map(str::to_string))
             .collect();
 
-        let mut grouped: BTreeSet<&str> = BTreeSet::new();
-        for (menu, settings) in SettingsPanel::default().by_menu() {
+        let mut grouped: BTreeSet<String> = BTreeSet::new();
+        for (menu, settings) in SettingsBody::default().by_menu() {
             for setting in settings {
                 assert!(
                     declared.contains(setting.name),
@@ -637,7 +617,7 @@ mod tests {
                     setting.name,
                 );
                 assert!(
-                    grouped.insert(setting.name),
+                    grouped.insert(setting.name.to_string()),
                     "{} is listed under two menus",
                     setting.name,
                 );
@@ -757,7 +737,7 @@ mod tests {
         let mut raw = [0u8; BODY_LEN];
         raw[body(0x32)] = 0x01;
         raw[body(0x33)] = 0xfc;
-        assert!(SettingsPanel::try_from(raw).is_err(), "101 cents decoded");
+        assert!(SettingsBody::try_from(raw).is_err(), "101 cents decoded");
     }
 
     /// Channels are stored zero-based with 16 for off, so the two ends and the off value
@@ -796,7 +776,7 @@ mod tests {
     /// A default panel is the decode of zeroed bytes, and re-encoding it gives them back.
     #[test]
     fn the_default_panel_encodes_and_decodes() {
-        let p = SettingsPanel::default();
+        let p = SettingsBody::default();
         assert_eq!(<[u8; BODY_LEN]>::from(&p), [0; BODY_LEN]);
         assert_eq!(p.global_transpose, -6);
         assert_eq!(p.fine_tune, -50);

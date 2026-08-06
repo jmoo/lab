@@ -3,11 +3,11 @@
 use crate::common::components::sparse_enum;
 use crate::common::PartMix;
 use crate::electro5::{Instrument, Level, OctaveShift, SplitPoint, Transpose};
-use nord_bits_derive::bitpanel;
+use nord_bits_derive::bitbody;
 
 // 0x2e..0x34 — the center panel.
 
-#[bitpanel(7)]
+#[bitbody(7)]
 #[derive(Default)]
 pub struct CenterPanel {
     #[bits(0..=2)]

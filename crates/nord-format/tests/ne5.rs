@@ -479,8 +479,6 @@ fn test_ne5_settings_re_encode_to_the_same_bytes() {
 /// Each sweep specimen decodes to the setting its filename names.
 #[test]
 fn test_ne5_settings_decode_to_their_filenames() {
-    use nord_format::panel::Panel;
-
     let dir = corpus_dir().join("settings");
     let oracle: BTreeMap<String, (&str, &str)> = SETTINGS_ORACLE
         .iter()
@@ -527,10 +525,10 @@ fn test_ne5_settings_decode_to_their_filenames() {
             .get(&key)
             .unwrap_or_else(|| panic!("{name} has no expected value — add it to the oracle"));
 
-        let values = read_settings(&path).schema.panel.field_values();
+        let values = read_settings(&path).schema.field_values();
         let got = values
             .iter()
-            .find(|v| v.name == *field)
+            .find(|v| v.name == format!("panel.{field}"))
             .unwrap_or_else(|| panic!("{name}: the panel declares no field {field}"));
         assert_eq!(&got.value, want, "{field} in {name}");
 
@@ -577,13 +575,12 @@ fn test_ne5_settings_selection_decodes_to_their_filenames() {
 
     let dir = corpus_dir().join("settings");
     for &(name, live_mode, live_slot, program) in SELECTION_ORACLE {
-        let selection = read_settings(&dir.join(format!("{name}.ne5s")))
-            .schema
-            .selection;
-        assert_eq!(selection.live_mode, live_mode, "live_mode in {name}");
-        assert_eq!(selection.live_slot, live_slot, "live_slot in {name}");
-        assert_eq!(selection.program.inner(), program, "program in {name}");
-        assert!(!selection.set_list_mode, "set_list_mode in {name}");
+        let settings = read_settings(&dir.join(format!("{name}.ne5s")));
+        let body = &settings.schema.body;
+        assert_eq!(body.live_mode, live_mode, "live_mode in {name}");
+        assert_eq!(body.live_slot, live_slot, "live_slot in {name}");
+        assert_eq!(body.program.inner(), program, "program in {name}");
+        assert!(!body.set_list_mode, "set_list_mode in {name}");
     }
 
     // Every pedal specimen was captured in the state `reboot-live-3` left behind, so a
@@ -611,20 +608,18 @@ fn test_ne5_settings_selection_decodes_to_their_filenames() {
 fn test_ne5_settings_set_list_song_decodes() {
     let root = corpus_dir();
     // Captured before the sweep, in set list mode.
-    let early = read_settings(&root.join("settings.ne5s")).schema.selection;
-    assert!(early.set_list_mode);
-    assert_eq!(early.song.inner(), (0, 1));
-    assert_eq!(early.program.inner(), (4, 21));
+    let early = read_settings(&root.join("settings.ne5s"));
+    assert!(early.schema.set_list_mode);
+    assert_eq!(early.schema.song.inner(), (0, 1));
+    assert_eq!(early.schema.program.inner(), (4, 21));
 
     // The full backup. Its archive holds exactly two set lists, 1 and 3, and this is the
     // only specimen pointing outside the first.
     let backup = read_settings(
         &root.join("usb/backup/full_backup/contents/Settings/Settings/Settings.ne5s"),
-    )
-    .schema
-    .selection;
-    assert!(!backup.set_list_mode);
-    assert_eq!(backup.song.inner(), (2, 3));
+    );
+    assert!(!backup.schema.set_list_mode);
+    assert_eq!(backup.schema.song.inner(), (2, 3));
 }
 
 /// No settings file decodes to a value with no name.
@@ -633,20 +628,13 @@ fn test_ne5_settings_set_list_song_decodes() {
 /// is preserved rather than refused — this is where it gets noticed.
 #[test]
 fn test_ne5_no_corpus_settings_hold_an_unrecognized_value() {
-    use nord_format::panel::Panel;
-
     let mut unknowns: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
 
     for path in ne5s_files(&corpus_dir()) {
         let schema = read_settings(&path).schema;
-        // Both panels over the body — the selection's `live_slot` can hold an
-        // unrecognized value too.
-        let values = schema
-            .panel
-            .field_values()
-            .into_iter()
-            .chain(schema.selection.field_values());
-        for value in values {
+        // The flat body registers both vocabularies, selection included — its
+        // `live_slot` can hold an unrecognized value too.
+        for value in schema.field_values() {
             if value.value.starts_with("unknown") {
                 unknowns
                     .entry(value.name.to_string())

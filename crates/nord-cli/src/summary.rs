@@ -508,7 +508,7 @@ pub fn print(ui: &Ui, entity: &Entity) {
             // Not a menu — where the instrument was when the object was written. The
             // Live slot and the program are each retained while the other is in use, so
             // both are shown whichever mode is active.
-            let sel = &s.schema.selection;
+            let sel = &s.schema.body;
             section(ui, "Selection");
             for (name, value) in [
                 ("program", location(sel.program.x(), sel.program.y())),
@@ -530,7 +530,7 @@ pub fn print(ui: &Ui, entity: &Entity) {
 
             // Grouped and ordered by the instrument's own menus, which is not the order
             // the fields sit in the file.
-            for (menu, fields) in s.schema.panel.by_menu() {
+            for (menu, fields) in s.schema.by_menu() {
                 section(ui, menu.title());
                 for f in fields {
                     ui.out(format!(
