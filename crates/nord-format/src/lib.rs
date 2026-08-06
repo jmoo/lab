@@ -97,6 +97,50 @@ pub fn from_stream(reader: &mut (impl Read + Seek + Sized)) -> Result<Entity, Er
     }
 }
 
+/// One decoded entity from a bare wire body — the device transfers only bodies, so
+/// this is the read path that never fabricates a container to immediately re-parse it.
+///
+/// `format` and `version` are the tag and schema version the device reported for the
+/// slot, and `location` is the raw wire form of the slot it came from. Formats the
+/// wire does not transfer this way (bundles) are refused as unknown.
+pub fn from_wire(format: &str, location: u32, version: u32, body: &[u8]) -> Result<Entity, Error> {
+    use crate::file::Location;
+
+    fn at<L: Location>(location: u32) -> Result<L, Error> {
+        Ok(L::from_wire(location)?)
+    }
+
+    match format {
+        sample::FORMAT => Ok(Entity::Sample(sample::Sample::from_wire(
+            at(location)?,
+            version,
+            body,
+        )?)),
+        piano::FORMAT => Ok(Entity::Piano(piano::Piano::from_wire(
+            at(location)?,
+            version,
+            body,
+        )?)),
+        electro5::song::FORMAT => Ok(Entity::Song(Song::Electro5(electro5::Song::from_wire(
+            at(location)?,
+            version,
+            body,
+        )?))),
+        electro5::program::FORMAT => Ok(Entity::Program(Program::Electro5(
+            electro5::Program::from_wire(at(location)?, version, body)?,
+        ))),
+        electro5::live::FORMAT => Ok(Entity::Live(Live::Electro5(electro5::Live::from_wire(
+            at(location)?,
+            version,
+            body,
+        )?))),
+        electro5::settings::FORMAT => Ok(Entity::Settings(Settings::Electro5(
+            electro5::Settings::from_wire(at(location)?, version, body)?,
+        ))),
+        e => Err(ParseError::UnknownFormat(e.to_string()).into()),
+    }
+}
+
 pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Entity, Error> {
     from_stream(&mut BufReader::new(std::fs::File::open(path)?))
 }

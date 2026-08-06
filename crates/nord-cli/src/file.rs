@@ -56,30 +56,6 @@ fn check(path: &Path, format: &str, class: ObjectClass) -> Result<(), String> {
     }
 }
 
-/// The header fields `envelope::unwrap` does not hand back: the schema version, and the
-/// checksum as a labelled row.
-///
-/// The checksum is per generation — a type-1 crc32 over the body, a type-0 crc16 over
-/// the whole file — so the label moves with it rather than calling both a crc32.
-/// `unwrap` has already verified whichever one this file carries.
-fn version_and_crc(file: &[u8]) -> Result<(u32, &'static str, String), String> {
-    let container = Container::parse(file).map_err(|e| e.to_string())?;
-    let (label, value) = match container.header.header_type {
-        container::TYPE_SHORT => (
-            "crc16:",
-            format!(
-                "{:#06x}",
-                nord_format::crc::crc16(&file[..file.len() - container::CRC16_LEN])
-            ),
-        ),
-        _ => (
-            "crc32:",
-            format!("{:#010x}", nord_format::crc::crc32(&container.body)),
-        ),
-    };
-    Ok((container.header.version, label, value))
-}
-
 /// `get` on a file: print the summary, or with `--body` extract the wire body.
 pub fn get(
     ui: &Ui,
@@ -89,18 +65,18 @@ pub fn get(
     body: bool,
 ) -> Result<(), String> {
     let file = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let (format, _, wire_body) =
-        nord_usb::envelope::unwrap(&file).map_err(|e| format!("{}: {e}", path.display()))?;
-    check(path, &format, class)?;
+    let container = Container::parse(&file).map_err(|e| format!("{}: {e}", path.display()))?;
+    check(path, &container.header.tag, class)?;
 
     match (body, out) {
         (true, Some(out)) => {
-            std::fs::write(&out, wire_body).map_err(|e| format!("{}: {e}", out.display()))?;
+            std::fs::write(&out, &container.body).map_err(|e| format!("{}: {e}", out.display()))?;
             ui.note(format!(
-                "unwrapped the {format} body of {} -> {} ({} bytes)",
+                "unwrapped the {} body of {} -> {} ({} bytes)",
+                container.header.tag,
                 path.display(),
                 out.display(),
-                wire_body.len(),
+                container.body.len(),
             ));
             Ok(())
         }
@@ -121,17 +97,34 @@ pub fn get(
 /// `info` on a file: the CBIN header, which is exactly what the wire never transmits.
 pub fn info(ui: &Ui, path: &Path, class: ObjectClass) -> Result<(), String> {
     let file = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let (format, at, body) =
-        nord_usb::envelope::unwrap(&file).map_err(|e| format!("{}: {e}", path.display()))?;
-    check(path, &format, class)?;
-    let (version, crc_label, crc) = version_and_crc(&file)?;
+    // One parse serves every row: the header fields are the container's, and parsing
+    // has already verified whichever checksum this file's generation carries.
+    let container = Container::parse(&file).map_err(|e| format!("{}: {e}", path.display()))?;
+    check(path, &container.header.tag, class)?;
+
+    // The checksum is per generation — a type-1 crc32 over the body, a type-0 crc16
+    // over the whole file — so the label moves with it rather than calling both a
+    // crc32.
+    let (crc_label, crc) = match container.header.header_type {
+        container::TYPE_SHORT => (
+            "crc16:",
+            format!(
+                "{:#06x}",
+                nord_format::crc::crc16(&file[..file.len() - container::CRC16_LEN])
+            ),
+        ),
+        _ => (
+            "crc32:",
+            format!("{:#010x}", nord_format::crc::crc32(&container.body)),
+        ),
+    };
 
     let row = |label: &str, value: String| {
         ui.out(format!("  {}{value}", ui.dim(format!("{label:<11}"))));
     };
     // Library files (samples) carry `0xffff:0xffff` where slot files keep bank/slot —
     // a library object has no slot until an instrument gives it one.
-    if (at.bank, at.slot) == (0xffff, 0xffff) {
+    if (container.bank(), container.slot()) == (0xffff, 0xffff) {
         row(
             "location:",
             format!("none {}", ui.dim("(a library file, not a slot save)")),
@@ -141,20 +134,23 @@ pub fn info(ui: &Ui, path: &Path, class: ObjectClass) -> Result<(), String> {
             "location:",
             format!(
                 "{} {}",
-                shown(at),
+                shown(nord_usb::wire::Location {
+                    bank: container.bank() as u32,
+                    slot: container.slot() as u32,
+                }),
                 ui.dim("(the slot the file was saved from)")
             ),
         );
     }
     row("name:", format!("none {}", ui.dim("(files store no name)")));
-    row("format:", format);
-    row("version:", version.to_string());
+    row("format:", container.header.tag.clone());
+    row("version:", container.header.version.to_string());
     row(
         "body:",
         format!(
             "{} bytes{}",
-            crate::device::grouped(body.len() as u32),
-            match crate::device::human_size(body.len() as u32) {
+            crate::device::grouped(container.body.len() as u32),
+            match crate::device::human_size(container.body.len() as u32) {
                 Some(h) => format!("  {}", ui.dim(format!("({h})"))),
                 None => String::new(),
             }
@@ -225,23 +221,6 @@ pub(crate) fn entity_tag(entity: &Entity) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nord_usb::wire::Location;
-
-    /// A wrapped file must give back the version `wrap` stamped into it, and a CRC that
-    /// tracks the body — which pins both reads to the right header offsets.
-    #[test]
-    fn the_header_fields_come_back_out_of_a_wrapped_file() {
-        let at = Location::from_user(7, 4);
-        let a = nord_usb::envelope::wrap("ne5p", at, 4, &[0u8; 8]).unwrap();
-        let b = nord_usb::envelope::wrap("ne5p", at, 4, &[1u8; 8]).unwrap();
-        let c = nord_usb::envelope::wrap("ne5t", at, 1, &[0u8; 8]).unwrap();
-        assert_eq!(version_and_crc(&a).unwrap().0, 4);
-        assert_eq!(version_and_crc(&c).unwrap().0, 1);
-        assert_ne!(
-            version_and_crc(&a).unwrap().2,
-            version_and_crc(&b).unwrap().2
-        );
-    }
 
     /// The mismatch error must steer to the noun that does read the file.
     #[test]

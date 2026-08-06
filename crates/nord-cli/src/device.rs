@@ -258,9 +258,9 @@ pub fn get(
         return Err("--body writes a file; give -o a path".into());
     }
     let mut t = open_usb()?;
-    let (info, file) = read_object(&mut t, at, class, body)?;
 
     if let Some(path) = out {
+        let (info, file) = read_object(&mut t, at, class, body)?;
         std::fs::write(&path, &file).map_err(|e| format!("{}: {e}", path.display()))?;
         ui.note(format!(
             "read {:?} ({} bytes) from {} -> {}",
@@ -272,9 +272,23 @@ pub fn get(
         return Ok(());
     }
 
-    // Parse the bytes just built rather than reporting the wire fields directly, so this
-    // runs the same decode path `nord inspect` does.
-    let entity = nord_format::from_stream(&mut std::io::Cursor::new(&file)).map_err(|e| {
+    // The wire transfers only the body, so the entity is built straight from it — no
+    // container fabricated just to be re-parsed. Same decode path as `nord inspect`.
+    let (info, wire_body) = nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, class).await?;
+        let r = async { Ok::<_, nord_usb::Error>(usb_op::read_entity(&mut s, at).await?) }.await;
+        let closed = s.commit().await;
+        finish(r, closed)
+    })
+    .map_err(|e| explain(e, at))?;
+
+    let entity = nord_format::from_wire(
+        &info.format,
+        nord_format::common::container::location_of(at.bank as u16, at.slot as u16),
+        info.version,
+        &wire_body,
+    )
+    .map_err(|e| {
         format!(
             "{} decoded off the device but did not parse: {e}",
             shown(at)
