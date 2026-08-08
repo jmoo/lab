@@ -5,8 +5,9 @@
 //! [`section`]s: an `hdr` carrying the name, a `cat` of category strings, a `map`
 //! ending in the [`zone`] table, one [`stroke`] per zone, and a trailing `sty`.
 //!
-//! Both container generations occur in the wild: every v2 instrument is type 0, v4 is
-//! type 1, and v3 is split. The container handles the difference; the chain is the same.
+//! Both container generations occur: across the corpus every v2 specimen is type 0 and
+//! every v4 is type 1, while v3 is split. The container handles the difference; the
+//! chain is the same.
 //!
 //! **The audio is encoded and stays that way.** Strokes are kept verbatim, so this reads
 //! and rewrites instruments byte-exactly and can retune, rename and remap them — but it
@@ -38,18 +39,15 @@ const NAME_AT: usize = 12;
 /// field we cannot see, so refuse instead. Reading is unrestricted.
 pub const MAX_NAME_LEN: usize = 14;
 
-/// A sample instrument: its container header and its section chain.
-pub type Sample = Cbin<SampleBody>;
-
-/// The section chain, held in file order including repeats — `stk` appears once
-/// per zone.
-pub struct SampleBody {
+/// A sample instrument's body: the section chain, held in file order including
+/// repeats — `stk` appears once per zone. A file is a `Cbin<Sample>`.
+pub struct Sample {
     pub sections: Vec<Section>,
 }
 
-impl cbin::Body for SampleBody {
+impl cbin::Body for Sample {
     fn read<R: Read + Seek>(r: &mut BodyReader<'_, R>, _: &Header) -> Result<Self, Error> {
-        Ok(SampleBody {
+        Ok(Sample {
             sections: section::read_chain(r)?,
         })
     }
@@ -62,16 +60,16 @@ impl cbin::Body for SampleBody {
     }
 }
 
-impl Cbin<SampleBody> {
-    /// Reads a whole instrument, verifying its checksum.
-    pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Sample, Error> {
-        cbin::read(reader, FORMAT)
-    }
+/// Reads a whole instrument, verifying its checksum.
+pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Cbin<Sample>, Error> {
+    cbin::read(reader, FORMAT)
+}
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<Sample, Error> {
-        Sample::read_from(&mut std::io::Cursor::new(bytes))
-    }
+pub fn from_bytes(bytes: &[u8]) -> Result<Cbin<Sample>, Error> {
+    read_from(&mut std::io::Cursor::new(bytes))
+}
 
+impl Cbin<Sample> {
     /// Serialises, recomputing the checksum over the body it just produced.
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let mut out = std::io::Cursor::new(Vec::new());
@@ -185,9 +183,9 @@ impl Cbin<SampleBody> {
     }
 }
 
-impl fmt::Debug for SampleBody {
+impl fmt::Debug for Sample {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SampleBody")
+        f.debug_struct("Sample")
             .field("sections", &self.sections)
             .finish()
     }

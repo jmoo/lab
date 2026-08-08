@@ -4,19 +4,18 @@
 //! kept verbatim: it round-trips byte-exactly and verifies the checksum, and that
 //! is all. ⚠️ Real libraries are tens of megabytes and this allocates the body —
 //! [`crate::cbin::inspect`] answers container questions in O(1) instead.
+//!
+//! ⚠️ The header's `location` and `aux` are unchecked here on purpose: this is a
+//! library format, where those words hold something other than a bank/slot pair, and
+//! no local specimen says what. Gating on them would refuse real files.
 
 use crate::cbin::{self, Cbin, Header, RawBody};
 use crate::error::Error;
-use crate::types::RangedU16Pair;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::{Read, Seek, Write};
 
 pub const FORMAT: &str = "npno";
-pub const BANK_COUNT: u16 = 8;
-pub const SLOT_COUNT: u16 = 50;
-
-pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
 
 pub struct Piano {
     pub file: Cbin<RawBody>,

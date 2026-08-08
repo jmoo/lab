@@ -26,6 +26,26 @@ pub fn crc32(data: &[u8]) -> u32 {
     nord_format::crc::crc32(data)
 }
 
+/// A wire slot as the header's `(bank, slot)` pair. Zero-indexed on both sides — one
+/// below the display.
+fn slot(at: Location) -> (u16, u16) {
+    (at.bank as u16, at.slot as u16)
+}
+
+/// The slot a header addresses, as the wire spells it.
+pub fn location(header: &Header) -> Location {
+    let (bank, slot) = header.slot();
+    Location {
+        bank: bank as u32,
+        slot: slot as u32,
+    }
+}
+
+/// The header's format tag as text.
+pub fn tag(header: &Header) -> String {
+    String::from_utf8_lossy(&header.tag).into_owned()
+}
+
 /// Wrap a wire body in a `CBIN` header, producing the bytes of a `.ne5p`-style file.
 ///
 /// `format` and `version` are the tag and schema version the device reported for the
@@ -38,9 +58,8 @@ pub fn wrap(format: &str, at: Location, version: u32, body: &[u8]) -> Result<Vec
         )));
     }
 
-    // Zero-indexed, the same numbering the wire uses — one below the display.
     let file = Cbin {
-        header: Header::new(format, (at.bank as u16, at.slot as u16), version),
+        header: Header::new(format, slot(at), version),
         body: RawBody(body.to_vec()),
     };
     let mut out = Cursor::new(Vec::new());
@@ -49,21 +68,19 @@ pub fn wrap(format: &str, at: Location, version: u32, body: &[u8]) -> Result<Vec
     Ok(out.into_inner())
 }
 
-/// The inverse: take file bytes and hand back the body the wire wants, plus the
-/// format tag and the slot the file claims to belong to. The container checksum is
-/// verified on the way.
-pub fn unwrap(file: &[u8]) -> Result<(String, Location, Vec<u8>)> {
+/// The inverse: take file bytes and hand back the container — the header the device
+/// implies, and the body the wire wants. The checksum is verified on the way.
+pub fn unwrap(file: &[u8]) -> Result<Cbin<RawBody>> {
     let read =
         cbin::read_raw(&mut Cursor::new(file)).map_err(|e| Error::Envelope(e.to_string()))?;
-    let (bank, slot) = read.header.slot();
-    Ok((
-        String::from_utf8_lossy(&read.header.tag).into_owned(),
-        Location {
-            bank: bank as u32,
-            slot: slot as u32,
-        },
-        read.body.0,
-    ))
+    // The container is content with a header and nothing after it; the wire is not —
+    // the body is the whole payload of a write.
+    if read.body.0.is_empty() {
+        return Err(Error::Envelope(
+            "the file is a bare CBIN header with no body to send".into(),
+        ));
+    }
+    Ok(read)
 }
 
 #[cfg(test)]
@@ -109,10 +126,26 @@ mod tests {
     fn unwrap_is_the_inverse() {
         let body = hex(BODY);
         let file = wrap("ne5p", Location::from_user(8, 14), 4, &body).unwrap();
-        let (format, at, got) = unwrap(&file).unwrap();
-        assert_eq!(format, "ne5p");
-        assert_eq!(at, Location::from_user(8, 14));
-        assert_eq!(got, body);
+        let got = unwrap(&file).unwrap();
+        assert_eq!(tag(&got.header), "ne5p");
+        assert_eq!(location(&got.header), Location::from_user(8, 14));
+        assert_eq!(got.header.version, 4);
+        assert_eq!(got.body.0, body);
+    }
+
+    /// A well-formed header with nothing behind it passes every container check, and
+    /// still has nothing to transfer.
+    #[test]
+    fn unwrap_rejects_a_headers_worth_of_file() {
+        let file = Cbin {
+            header: Header::new("ne5p", (0, 0), 4),
+            body: RawBody(Vec::new()),
+        };
+        let mut bytes = Cursor::new(Vec::new());
+        file.write_to(&mut bytes).unwrap();
+        let bytes = bytes.into_inner();
+        assert!(cbin::read_raw(&mut Cursor::new(&bytes)).is_ok());
+        assert!(unwrap(&bytes).is_err(), "an empty body has nothing to send");
     }
 
     #[test]

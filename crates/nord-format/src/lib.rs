@@ -9,6 +9,7 @@ pub mod panel;
 pub mod types;
 pub mod util;
 
+use crate::cbin::Cbin;
 use crate::common::sample::Sample;
 use crate::common::{piano, sample};
 use std::fs::File;
@@ -26,24 +27,24 @@ pub enum Bundle {
 
 #[derive(Debug)]
 pub enum Program {
-    Electro5(electro5::Program),
+    Electro5(Cbin<electro5::Program>),
 }
 
 /// The live buffer — the panel as it stands, not a saved program. Same body as
 /// [`Program`], under its own format tag.
 #[derive(Debug)]
 pub enum Live {
-    Electro5(electro5::Live),
+    Electro5(Cbin<electro5::Program>),
 }
 
 #[derive(Debug)]
 pub enum Song {
-    Electro5(electro5::Song),
+    Electro5(Cbin<electro5::Song>),
 }
 
 #[derive(Debug)]
 pub enum Settings {
-    Electro5(electro5::Settings),
+    Electro5(Cbin<electro5::Settings>),
 }
 
 /// One decoded file.
@@ -59,7 +60,7 @@ pub enum Entity {
     Live(Live),
     Piano(piano::Piano),
     Settings(Settings),
-    Sample(Sample),
+    Sample(Cbin<Sample>),
     #[cfg(feature = "bundle")]
     Bundle(Bundle),
 }
@@ -77,19 +78,19 @@ pub fn from_stream(reader: &mut (impl Read + Seek + Sized)) -> Result<Entity, Er
             Err(ParseError::UnknownFileType("zip (bundle feature disabled)".to_string()).into())
         }
         FileType::Cbin => match header.format.as_str() {
-            sample::FORMAT => Ok(Entity::Sample(Sample::read_from(reader)?)),
+            sample::FORMAT => Ok(Entity::Sample(sample::read_from(reader)?)),
             piano::FORMAT => Ok(Entity::Piano(piano::Piano::read_from(reader)?)),
-            electro5::song::FORMAT => Ok(Entity::Song(Song::Electro5(electro5::Song::read_from(
+            electro5::song::FORMAT => Ok(Entity::Song(Song::Electro5(electro5::song::read_from(
                 reader,
             )?))),
             electro5::program::FORMAT => Ok(Entity::Program(Program::Electro5(
-                electro5::Program::read_from(reader)?,
+                electro5::program::read_from(reader)?,
             ))),
-            electro5::live::FORMAT => Ok(Entity::Live(Live::Electro5(electro5::Live::read_from(
+            electro5::live::FORMAT => Ok(Entity::Live(Live::Electro5(electro5::live::read_from(
                 reader,
             )?))),
             electro5::settings::FORMAT => Ok(Entity::Settings(Settings::Electro5(
-                electro5::Settings::read_from(reader)?,
+                electro5::settings::read_from(reader)?,
             ))),
             e => Err(ParseError::UnknownFormat(e.to_string()).into()),
         },

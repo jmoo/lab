@@ -46,15 +46,18 @@ pub fn peek(reader: &mut (impl Read + Seek)) -> Result<Peek, Error> {
             let mut head = [0u8; 12];
             reader.read_exact(&mut head)?;
             if &head[0..4] != cbin::MAGIC {
-                return Err(ParseError::UnknownFormat(
-                    String::from_utf8_lossy(&head[0..4]).into_owned(),
+                // Through `result`, never a bare return: the rewind below is what
+                // makes this function leave the stream where it found it.
+                Err(
+                    ParseError::UnknownFormat(String::from_utf8_lossy(&head[0..4]).into_owned())
+                        .into(),
                 )
-                .into());
+            } else {
+                Ok(Peek {
+                    format: String::from_utf8_lossy(&head[8..12]).into_owned(),
+                    file_type: FileType::Cbin,
+                })
             }
-            Ok(Peek {
-                format: String::from_utf8_lossy(&head[8..12]).into_owned(),
-                file_type: FileType::Cbin,
-            })
         }
 
         b => Err(ParseError::UnknownFormat(format!("first_byte = {b:0x}")).into()),
@@ -63,4 +66,19 @@ pub fn peek(reader: &mut (impl Read + Seek)) -> Result<Peek, Error> {
     reader.seek(SeekFrom::Start(0))?;
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// A refusal still rewinds: a caller that falls back to another reader after
+    /// `peek` says no must find the stream at byte 0, not mid-header.
+    #[test]
+    fn a_c_that_is_not_cbin_is_refused_with_the_stream_rewound() {
+        let mut reader = Cursor::new(b"CRUD\0\0\0\0abcdefgh".to_vec());
+        assert!(peek(&mut reader).is_err());
+        assert_eq!(reader.stream_position().unwrap(), 0);
+    }
 }

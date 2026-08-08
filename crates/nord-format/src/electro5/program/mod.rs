@@ -1,14 +1,14 @@
 //! The Electro 5 program format (`.ne5p`).
 //!
-//! Reads top-down: the format's constants, then [`ProgramBody`] — the 121 bytes
-//! after the container header — then [`Program`], which is that body in a `Cbin`
-//! plus a slot check. Each panel is a nested `#[bitbody]` in its own module,
-//! placed here by byte range; the registry paths (`center_panel.transpose`)
-//! follow the field names.
+//! Reads top-down: the format's constants, then [`Program`] — the 121 bytes after
+//! the container header — then the read that pairs it with a header. A file is a
+//! `Cbin<Program>`, which derefs to the body. Each panel is a nested `#[bitbody]`
+//! in its own module, placed here by byte range; the registry paths
+//! (`center_panel.transpose`) follow the field names.
 //!
 //! The live buffer ([`crate::electro5::live`]) is this same body under the tag
 //! `ne5l`, addressed in three slots instead of eight banks of fifty; the two
-//! modules share [`ProgramBody`] and differ only in tag and slot space.
+//! modules share [`Program`] and differ only in tag and slot space.
 
 mod center;
 mod effects;
@@ -29,7 +29,7 @@ use crate::common::bank;
 use crate::error::{Error, ParseError};
 use crate::types::RangedU16Pair;
 
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Seek};
 
 pub const FORMAT: &str = "ne5p";
 /// Schema versions this build's field offsets have been validated against. Every corpus
@@ -37,22 +37,20 @@ pub const FORMAT: &str = "ne5p";
 pub const KNOWN_VERSIONS: &[u32] = &[4];
 /// The panel body after the container header.
 pub const BODY_LEN: usize = 121;
-/// Type-1 file length: 44-byte CBIN header + the body. A type-0 file is 18 bytes
-/// shorter — 24-byte header, same body, 2-byte trailing checksum.
+/// Type-1 file length: 44-byte CBIN header + the body. Inferred from specimens, not
+/// confirmed on hardware: a type-0 file is 18 bytes shorter — 24-byte header, same
+/// body, 2-byte trailing checksum.
 pub const FILE_LEN: usize = 0x2c + BODY_LEN;
 pub const BANK_COUNT: u16 = 8;
 pub const SLOT_COUNT: u16 = 50;
 
 pub type Location = RangedU16Pair<BANK_COUNT, SLOT_COUNT>;
-pub type Bank = bank::Bank<Program, Location>;
-/// The program as a file: container header plus body. Kept under the old name —
-/// the body is the schema, and `Cbin` derefs to it.
-pub type Schema = Cbin<ProgramBody>;
+pub type Bank = bank::Bank<Cbin<Program>, Location>;
 
 /// The 121-byte panel body: five panels behind a version echo. The pads between
 /// the panels are unclaimed bits, kept verbatim.
 #[nord_bits_derive::bitbody(121)]
-pub struct ProgramBody {
+pub struct Program {
     /// Every specimen echoes the header's schema version.
     #[bits(0..=15)]
     program_version: u16,
@@ -73,9 +71,9 @@ pub struct ProgramBody {
     pub effects_panel: EffectsPanel,
 }
 
-impl Default for ProgramBody {
-    fn default() -> ProgramBody {
-        ProgramBody {
+impl Default for Program {
+    fn default() -> Program {
+        Program {
             raw: [0; BODY_LEN],
             program_version: 4,
             center_panel: CenterPanel::default(),
@@ -104,62 +102,64 @@ pub(crate) fn known_version(
     Ok(())
 }
 
-/// The typed slot the header's raw location holds, refused if out of the format's
-/// slot space.
-pub(crate) fn location<L: bank::Location>(header: &Header) -> Result<L, Error> {
+/// Gate a read on the `aux` word every slot-addressed specimen holds.
+///
+/// Inferred from specimens; not confirmed on hardware: every slot-addressed file in
+/// the corpus carries `0xFFFFFFFF` at `0x10`. Another value there means the word
+/// carries something this build does not model, so the file is refused rather than
+/// decoded on the assumption it does not matter. ⚠️ Library formats (`nsmp`) use the
+/// word for real data and must not be gated on it.
+pub(crate) fn unset_aux(format: &'static str, header: &Header) -> Result<(), Error> {
+    if header.aux != 0xFFFF_FFFF {
+        return Err(ParseError::AssertFail(format!(
+            "{format}: aux is {:#010x}, not the 0xffffffff every slot-addressed file holds",
+            header.aux,
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+/// The typed slot a header's raw location holds, refused if out of `L`'s slot space.
+pub(crate) fn slot<L: bank::Location>(header: &Header) -> Result<L, Error> {
     let (bank, slot) = header.slot();
     (bank, slot)
         .try_into()
         .map_err(|_| ParseError::AssertFail(format!("invalid location: {bank} {slot}")).into())
 }
 
-/// The slot lives in one place: `schema.header`. Nothing beside the container
-/// shadows it, which is why writes take `&self`.
-#[derive(Debug)]
-pub struct Program {
-    pub schema: Schema,
-    name: Option<String>,
+/// The program slot the file claims.
+///
+/// ⚠️ A live slot is the same body under another tag, so this reads a `ne5l` file's
+/// location in the *program* slot space. [`crate::electro5::live::location`] is the
+/// one that answers for a live buffer.
+pub fn location(file: &Cbin<Program>) -> Result<Location, Error> {
+    slot(&file.header)
 }
 
-impl Program {
-    pub fn new(location: Location) -> Program {
-        Program {
-            name: None,
-            schema: Cbin {
-                header: Header::new(FORMAT, location.inner(), 4),
-                body: ProgramBody::default(),
-            },
-        }
-    }
-
-    pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Program, Error> {
-        let schema: Schema = cbin::read(reader, FORMAT)?;
-        known_version(FORMAT, schema.header.version, KNOWN_VERSIONS)?;
-        location::<Location>(&schema.header)?;
-        Ok(Program { name: None, schema })
-    }
-
-    pub fn write_to(&self, writer: &mut (impl Write + Seek)) -> Result<(), Error> {
-        self.schema.write_to(writer)
+/// A default program addressed to `location`.
+pub fn new(location: Location) -> Cbin<Program> {
+    Cbin {
+        header: Header::new(FORMAT, location.inner(), 4),
+        body: Program::default(),
     }
 }
 
-impl bank::Item<Location> for Program {
-    fn name(&self) -> Option<String> {
-        self.name.clone()
-    }
+pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Cbin<Program>, Error> {
+    let file: Cbin<Program> = cbin::read(reader, FORMAT)?;
+    known_version(FORMAT, file.header.version, KNOWN_VERSIONS)?;
+    unset_aux(FORMAT, &file.header)?;
+    location(&file)?;
+    Ok(file)
+}
 
-    fn set_name(&mut self, name: String) {
-        self.name = Some(name);
-    }
-
+/// ⚠️ Programs and live slots are one type, so a `ne5l` file placed in a program
+/// [`Bank`] lands wherever its live slot number falls in the program space. The tag
+/// in the header is what tells the two apart.
+impl bank::Item<Location> for Cbin<Program> {
     fn location(&self) -> Location {
-        // Validated at `read_from` and `new`, and only `set_location` writes it.
-        location(&self.schema.header).expect("a Program's location is validated at construction")
-    }
-
-    fn set_location(&mut self, location: Location) {
-        self.schema.header.set_slot(location.inner());
+        // Validated at `read_from` and `new`, and only `Header::set_slot` writes it.
+        location(self).expect("a program's location is validated at construction")
     }
 }
 
@@ -177,20 +177,19 @@ mod tests {
     /// persist them. Refusing is the only safe default.
     #[test]
     fn an_unknown_schema_version_is_refused() {
-        let program = Program::new((0, 0).try_into().unwrap());
+        let program = new((0, 0).try_into().unwrap());
         let mut bytes = Vec::new();
         program.write_to(&mut Cursor::new(&mut bytes)).unwrap();
         assert_eq!(bytes.len(), FILE_LEN);
 
         // Sanity: as written, it reads back.
-        assert!(Program::read_from(&mut Cursor::new(&mut bytes.clone())).is_ok());
+        assert!(read_from(&mut Cursor::new(&mut bytes.clone())).is_ok());
 
         // The schema version lives at 0x14, little-endian.
         assert_eq!(u32::from_le_bytes(bytes[0x14..0x18].try_into().unwrap()), 4);
         bytes[0x14..0x18].copy_from_slice(&5u32.to_le_bytes());
 
-        let err = Program::read_from(&mut Cursor::new(&mut bytes))
-            .expect_err("version 5 must not decode");
+        let err = read_from(&mut Cursor::new(&mut bytes)).expect_err("version 5 must not decode");
         // The refusal is a matchable variant carrying the facts, not a string.
         assert!(
             matches!(
@@ -202,6 +201,22 @@ mod tests {
                 })
             ),
             "unhelpful error: {err}",
+        );
+    }
+
+    /// A header whose `aux` word is not `0xFFFFFFFF` is refused, not decoded past.
+    #[test]
+    fn an_unexpected_aux_word_is_refused() {
+        let program = new((0, 0).try_into().unwrap());
+        let mut bytes = Vec::new();
+        program.write_to(&mut Cursor::new(&mut bytes)).unwrap();
+
+        // The type-1 crc32 covers the body alone, so a header edit needs no restamp.
+        bytes[0x10..0x14].copy_from_slice(&0u32.to_le_bytes());
+        let err = read_from(&mut Cursor::new(&bytes)).expect_err("a set aux must not decode");
+        assert!(
+            matches!(err, Error::Parse(ParseError::AssertFail(_))),
+            "refused for the wrong reason: {err}",
         );
     }
 
@@ -218,11 +233,11 @@ mod tests {
         {
         }
 
-        let program = Program::new((0, 0).try_into().unwrap());
-        total::<_, [u8; 7]>(&program.schema.center_panel);
-        total::<_, [u8; 8]>(&program.schema.piano_panel);
-        total::<_, [u8; 8]>(&program.schema.sample_panel);
-        total::<_, [u8; 18]>(&program.schema.effects_panel);
+        let program = new((0, 0).try_into().unwrap());
+        total::<_, [u8; 7]>(&program.center_panel);
+        total::<_, [u8; 8]>(&program.piano_panel);
+        total::<_, [u8; 8]>(&program.sample_panel);
+        total::<_, [u8; 18]>(&program.effects_panel);
     }
 
     /// Re-stamp the body CRC after corrupting a byte, so a decode test exercises the
@@ -235,12 +250,12 @@ mod tests {
     /// Validation is part of the read, not a step a caller has to remember.
     ///
     /// The fallible decode runs inside `cbin::read`'s body pass, so every path to a
-    /// `ProgramBody` validates. Note there is no way to build the corrupt input through
+    /// `Program` body validates. Note there is no way to build the corrupt input through
     /// the API at all: `lower_part` is an `Instrument`, so a panel in memory *cannot*
     /// hold the invalid value. It has to be forged in the bytes.
     #[test]
     fn no_decode_path_can_skip_validation() {
-        let program = Program::new((0, 0).try_into().unwrap());
+        let program = new((0, 0).try_into().unwrap());
         let mut bytes = Vec::new();
         program.write_to(&mut Cursor::new(&mut bytes)).unwrap();
 
@@ -253,7 +268,7 @@ mod tests {
         bytes[0x2e] |= 0b1110_0000;
         restamp_crc(&mut bytes);
 
-        let front = Program::read_from(&mut Cursor::new(&mut bytes))
+        let front = read_from(&mut Cursor::new(&mut bytes))
             .expect_err("the front door accepted an undecodable panel");
         // Structural, not textual: the typed refusal must survive the read's wrapping.
         assert!(
@@ -272,15 +287,12 @@ mod tests {
     /// A field set by name lands in the bits that field owns, and in no others.
     #[test]
     fn setting_a_field_by_name_moves_only_that_fields_bytes() {
-        let mut program = Program::new((0, 0).try_into().unwrap());
+        let mut program = new((0, 0).try_into().unwrap());
         let mut before = Vec::new();
         program.write_to(&mut Cursor::new(&mut before)).unwrap();
 
-        program
-            .schema
-            .set_field("center_panel.transpose", "-5")
-            .unwrap();
-        assert_eq!(program.schema.center_panel.transpose.inner(), -5);
+        program.set_field("center_panel.transpose", "-5").unwrap();
+        assert_eq!(program.center_panel.transpose.inner(), -5);
 
         let mut after = Vec::new();
         program.write_to(&mut Cursor::new(&mut after)).unwrap();
@@ -297,13 +309,13 @@ mod tests {
     /// has to say which half was wrong.
     #[test]
     fn an_unknown_path_names_what_it_could_not_find() {
-        let mut program = Program::new((0, 0).try_into().unwrap());
+        let mut program = new((0, 0).try_into().unwrap());
         for (path, wanted) in [
             ("center_panel.nonesuch", "nonesuch"),
             ("nonesuch.transpose", "nonesuch"),
             ("transpose", "transpose"),
         ] {
-            let err = program.schema.set_field(path, "0").unwrap_err().to_string();
+            let err = program.set_field(path, "0").unwrap_err().to_string();
             assert!(err.contains(wanted), "{path}: {err}");
         }
     }
@@ -311,8 +323,8 @@ mod tests {
     /// Every field the panels declare is listed, and each lists a way to spell itself.
     #[test]
     fn every_declared_field_is_settable_by_its_listed_name() {
-        let mut program = Program::new((0, 0).try_into().unwrap());
-        let fields = program.schema.fields();
+        let mut program = new((0, 0).try_into().unwrap());
+        let fields = program.fields();
         assert!(
             fields.iter().any(|f| f.path == "center_panel.transpose"),
             "the worked example is missing from the registry",
@@ -323,7 +335,6 @@ mod tests {
         for f in fields {
             let (path, value) = (f.path.clone(), f.value.clone());
             program
-                .schema
                 .set_field(&path, &value)
                 .unwrap_or_else(|e| panic!("{path} = {value:?}: {e}"));
         }
@@ -333,18 +344,16 @@ mod tests {
     /// which for this field is also how a reader wants to see it.
     #[test]
     fn a_wide_field_is_spelled_by_its_stored_bits() {
-        let mut program = Program::new((0, 0).try_into().unwrap());
+        let mut program = new((0, 0).try_into().unwrap());
         program
-            .schema
             .set_field("organ_panel.b3_preset1_drawbars", "0x087654321")
             .unwrap();
         assert_eq!(
-            program.schema.organ_panel.drawbars(OrganModel::B3, 1),
+            program.organ_panel.drawbars(OrganModel::B3, 1),
             [0, 8, 7, 6, 5, 4, 3, 2, 1],
         );
 
         let listed = program
-            .schema
             .fields()
             .into_iter()
             .find(|f| f.path == "organ_panel.b3_preset1_drawbars")
@@ -378,7 +387,7 @@ mod tests {
     fn the_program_body_layout_is_published_as_data() {
         use crate::layout::BodyLayout;
 
-        let fields = ProgramBody::layout();
+        let fields = Program::layout();
         let center = fields
             .iter()
             .find(|f| f.path == "center_panel")
@@ -391,13 +400,8 @@ mod tests {
         );
 
         // The registry walks the same structure: full paths, panel by panel.
-        let program = Program::new((0, 0).try_into().unwrap());
-        let paths: Vec<String> = program
-            .schema
-            .fields()
-            .into_iter()
-            .map(|f| f.path)
-            .collect();
+        let program = new((0, 0).try_into().unwrap());
+        let paths: Vec<String> = program.fields().into_iter().map(|f| f.path).collect();
         assert!(paths.contains(&"center_panel.transpose".to_string()));
         assert!(paths.contains(&"piano_panel.id".to_string()));
         assert!(paths.contains(&"sample_panel.id".to_string()));
@@ -407,11 +411,11 @@ mod tests {
     /// header, 18 bytes shorter in total, and it round-trips as itself.
     #[test]
     fn a_type_0_program_is_the_same_body_18_bytes_earlier() {
-        let mut program = Program::new((3, 7).try_into().unwrap());
+        let mut program = new((3, 7).try_into().unwrap());
         let mut v1 = Vec::new();
         program.write_to(&mut Cursor::new(&mut v1)).unwrap();
 
-        program.schema.header.generation = Generation::V0;
+        program.header.generation = Generation::V0;
         let mut v0 = Vec::new();
         program.write_to(&mut Cursor::new(&mut v0)).unwrap();
 
@@ -423,8 +427,8 @@ mod tests {
             "shared header fields differ"
         );
 
-        let back = Program::read_from(&mut Cursor::new(&v0)).unwrap();
-        assert_eq!(back.schema.header.generation, Generation::V0);
+        let back = read_from(&mut Cursor::new(&v0)).unwrap();
+        assert_eq!(back.header.generation, Generation::V0);
         let mut again = Vec::new();
         back.write_to(&mut Cursor::new(&mut again)).unwrap();
         assert_eq!(again, v0, "type-0 round trip changed the bytes");

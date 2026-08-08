@@ -108,7 +108,7 @@ impl std::error::Error for FieldError {}
 
 /// One settable field of a body, addressed the way `--set` addresses it.
 pub struct Field {
-    /// The `group.name` path, e.g. `center_panel.transpose`.
+    /// The field's full registry path, e.g. `center_panel.transpose`.
     pub path: String,
     pub spec: FieldSpec,
     /// What the field currently holds, spelled the way `set_field` takes it.

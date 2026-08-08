@@ -219,7 +219,8 @@ pub async fn write_program<T: Transport>(
     file: &[u8],
     timestamp: u32,
 ) -> Result<()> {
-    let (format, _, body) = envelope::unwrap(file)?;
+    let file = envelope::unwrap(file)?;
+    let body = &file.body.0;
 
     // The "Downloading..." label the instrument paints — NSM's backwards word for
     // host → keyboard. Fire-and-forget, exactly as on the wire.
@@ -228,7 +229,7 @@ pub async fn write_program<T: Transport>(
     let mut begin = Vec::new();
     at.write_to(&mut begin);
     begin.extend_from_slice(&(body.len() as u32).to_be_bytes());
-    begin.extend_from_slice(format.as_bytes());
+    begin.extend_from_slice(&file.header.tag);
     begin.extend_from_slice(&timestamp.to_be_bytes());
     begin.extend_from_slice(&u32::MAX.to_be_bytes());
     begin.extend_from_slice(&1u32.to_be_bytes());
@@ -241,7 +242,7 @@ pub async fn write_program<T: Transport>(
     at.write_to(&mut data);
     data.extend_from_slice(&0u32.to_be_bytes()); // offset
     data.extend_from_slice(&(body.len() as u32).to_be_bytes());
-    data.extend_from_slice(&body);
+    data.extend_from_slice(body);
     session
         .request(Service::Program, 10, cmd::WRITE_DATA, &data)
         .await?;

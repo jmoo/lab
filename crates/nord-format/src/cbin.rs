@@ -345,25 +345,13 @@ impl<B: Body> Cbin<B> {
         let mut writer = BodyWriter {
             inner: w,
             pos: 0,
-            hashed: 0,
             hash,
-            rewrote: false,
         };
         self.body.write(&mut writer)?;
         let BodyWriter {
-            pos: written,
-            hashed,
-            hash,
-            rewrote,
-            ..
+            pos: written, hash, ..
         } = writer;
 
-        if rewrote || written != hashed {
-            return Err(ParseError::AssertFail(
-                "the body was not written in one forward pass, so its checksum is wrong".into(),
-            )
-            .into());
-        }
         if let Some(expected) = B::LEN {
             if written != expected {
                 return Err(ParseError::WrongBodyLength {
@@ -582,30 +570,23 @@ impl<R: Read + Seek> Seek for BodyReader<'_, R> {
 }
 
 /// The write half: hashes bytes as they stream out, in one forward pass.
+///
+/// ⚠️ This must never implement `Seek`. The checksum is accumulated as bytes go
+/// past, so it is only correct if every body byte is written exactly once, in
+/// order; a rewind would hash a byte twice and stamp a checksum matching no file.
 pub struct BodyWriter<'a, W: Write + Seek> {
     inner: &'a mut W,
     /// Body-relative position.
     pos: u64,
-    /// High-water mark of hashed bytes.
-    hashed: u64,
     hash: Hash,
-    /// Set when a write landed below the high-water mark: those bytes were
-    /// already hashed, so the checksum can no longer be trusted and the container
-    /// refuses to stamp it.
-    rewrote: bool,
 }
 
 impl<W: Write + Seek> Write for BodyWriter<'_, W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let n = self.inner.write(buf)?;
-        if self.pos < self.hashed {
-            self.rewrote = true;
-        } else {
-            // Only the bytes accepted — hashing past `n` would checksum bytes the
-            // caller will retry, counting them twice.
-            self.hash.update(&buf[..n]);
-            self.hashed = self.pos + n as u64;
-        }
+        // Only the bytes accepted — hashing past `n` would checksum bytes the
+        // caller will retry, counting them twice.
+        self.hash.update(&buf[..n]);
         self.pos += n as u64;
         Ok(n)
     }

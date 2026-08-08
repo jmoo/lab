@@ -13,8 +13,8 @@
 //! carries at `0x2c` because the container header is not transmitted over USB — see
 //! [`crate::electro5::song`]. `ne5s` is version 0, so they read zero.
 //!
-//! Bits 16..=37 are not settings at all: they are where the instrument *was* —
-//! the `selection` group below. **Bit 18 is the only bit below the settings that no
+//! Bits 16..=37 are the `startup_*` settings below — the selections the instrument
+//! restores at power-up. **Bit 18 is the only bit below the menu settings that no
 //! field claims.** It is clear in every specimen. Whatever it is, it survives a re-encode
 //! untouched, as does everything past the last setting.
 //!
@@ -42,14 +42,12 @@ pub type ResonanceLevel = RangedI8<6, -6, 6>;
 /// Master tuning offset in cents, `-50..=50`, stored biased by 50.
 pub type FineTune = RangedI8<50, -50, 50>;
 
-/// The 34-byte settings body: the System, MIDI and Sound menus (the `panel`
-/// group), interleaved in one bit space with where the instrument was (the
-/// `selection` group). Deliberately flat — the two vocabularies share bytes, so
-/// the groups are path prefixes over one body rather than nested structures.
+/// The 34-byte settings body: the System, MIDI and Sound menus, interleaved in one
+/// bit space with the `startup_*` settings the instrument restores at power-up.
+/// Flat, because the two share bytes.
 #[bitbody(34)]
-pub struct SettingsBody {
+pub struct Settings {
     // ── System ─────────────────────────────────────────────────────────────────
-    #[group(panel)]
     #[bits(52..=53)]
     pub rotary_ctrl_type: RotaryCtrlType,
     #[bits(54..=54)]
@@ -130,35 +128,35 @@ pub struct SettingsBody {
     #[bits(91..=93)]
     pub rotary_rotor_acceleration: RotaryRate,
 
-    // ── Where the instrument was, stored alongside the settings ────────────────
+    // ── Startup ────────────────────────────────────────────────────────────────
     //
-    // None of this appears in a menu and none of it is a setting: it is the panel
-    // state the instrument restores at power-up. Changing any of the 34 catalogued
-    // settings leaves every bit here alone, and a settings file written by a
-    // different capture session differs here and nowhere else.
+    // Boot-state settings: none of these appears in a menu, and the instrument
+    // restores each at power-up. Changing any of the 34 catalogued settings leaves
+    // every bit here alone, and a settings file written by a different capture
+    // session differs here and nowhere else.
     //
     // Both locations are `bank * 50 + slot`, zero-based — the packing
     // [`crate::electro5::song`] uses for its program references.
     //
-    // `live_slot` survives leaving Live mode and `program` survives entering it, so
-    // each holds the last selection of its kind rather than the current one.
+    // `startup_live_slot` survives leaving Live mode and `startup_program` survives
+    // entering it, so each holds the last selection of its kind rather than the
+    // current one.
     /// Inferred from specimens; not confirmed on hardware. One specimen holds it — the
-    /// one capture made in set list mode. The full backup moves `song` without it, so
-    /// the bit tracks the mode, not the song.
-    #[group(selection)]
+    /// one capture made in set list mode. The full backup moves `startup_song` without
+    /// it, so the bit tracks the mode, not the song.
     #[bits(16..=16)]
-    pub set_list_mode: bool,
+    pub startup_set_list_mode: bool,
     #[bits(17..=17)]
-    pub live_mode: bool,
+    pub startup_live_mode: bool,
     #[bits(19..=20)]
-    pub live_slot: LiveSlot,
+    pub startup_live_slot: LiveSlot,
     #[bits(21..=29)]
-    pub program: program::Location,
+    pub startup_program: program::Location,
     /// Inferred from specimens; not confirmed on hardware. The sweep never leaves the
     /// first slot, and the two files that do move it are a full backup and a capture
     /// predating the sweep.
     #[bits(30..=37)]
-    pub song: song::Location,
+    pub startup_song: song::Location,
 }
 
 sparse_enum!(
@@ -190,7 +188,7 @@ impl Menu {
 
 /// One setting as the instrument's menu presents it.
 pub struct Setting {
-    /// The field's bare name within the `panel` group.
+    /// The field's name in [`Settings`].
     pub name: &'static str,
     /// The value spelled the way the instrument spells it — `yamaha fc-7`, not the
     /// variant name the bits decode to.
@@ -199,9 +197,9 @@ pub struct Setting {
 
 /// Every field decodes from zeroed bytes — program `1:1`, Live and set list mode
 /// off — so this is the decode rather than a second statement of each default.
-impl Default for SettingsBody {
+impl Default for Settings {
     fn default() -> Self {
-        SettingsBody::try_from([0; BODY_LEN]).expect("every settings field decodes totally")
+        Settings::try_from([0; BODY_LEN]).expect("every settings field decodes totally")
     }
 }
 
@@ -210,14 +208,14 @@ fn on_off(on: bool) -> String {
     if on { "on" } else { "off" }.to_string()
 }
 
-impl SettingsBody {
+impl Settings {
     /// The panel's fields grouped by the menu the instrument shows them under, in menu
     /// order — which is neither declaration order nor the order they sit in the file.
     ///
     /// ⚠️ These renderings are for reading, not for feeding back: `Display` is the panel's
     /// wording, while [`crate::panel::Panel::set_field`] parses a field's `Debug`. A test
     /// holds the list to the panel's own field names, so a field added to
-    /// [`SettingsBody`] and not placed in a menu fails there.
+    /// [`Settings`] and not placed in a menu fails there.
     pub fn by_menu(&self) -> Vec<(Menu, Vec<Setting>)> {
         let at = |name, value: String| Setting { name, value };
         vec![
@@ -590,25 +588,27 @@ mod tests {
     }
 
     /// Build a settings panel from `(absolute offset, byte)` pairs; everything else 0.
-    fn panel(bytes: &[(usize, u8)]) -> SettingsBody {
+    fn panel(bytes: &[(usize, u8)]) -> Settings {
         let mut raw = [0u8; BODY_LEN];
         for &(at, b) in bytes {
             raw[body(at)] = b;
         }
-        SettingsBody::try_from(raw).expect("every settings field decodes totally")
+        Settings::try_from(raw).expect("every settings field decodes totally")
     }
 
-    /// Every declared field belongs to exactly one menu, and every menu names only
-    /// declared fields.
+    /// Every declared menu field belongs to exactly one menu, and every menu names
+    /// only declared fields. The `startup_*` settings are in no menu — the
+    /// instrument shows them nowhere — so they are excluded rather than missing.
     #[test]
     fn every_field_is_listed_under_one_menu() {
-        let declared: BTreeSet<String> = SettingsBody::field_specs()
+        let declared: BTreeSet<String> = Settings::field_specs()
             .into_iter()
-            .filter_map(|f| f.name.strip_prefix("panel.").map(str::to_string))
+            .map(|f| f.name)
+            .filter(|name| !name.starts_with("startup_"))
             .collect();
 
         let mut grouped: BTreeSet<String> = BTreeSet::new();
-        for (menu, settings) in SettingsBody::default().by_menu() {
+        for (menu, settings) in Settings::default().by_menu() {
             for setting in settings {
                 assert!(
                     declared.contains(setting.name),
@@ -737,7 +737,7 @@ mod tests {
         let mut raw = [0u8; BODY_LEN];
         raw[body(0x32)] = 0x01;
         raw[body(0x33)] = 0xfc;
-        assert!(SettingsBody::try_from(raw).is_err(), "101 cents decoded");
+        assert!(Settings::try_from(raw).is_err(), "101 cents decoded");
     }
 
     /// Channels are stored zero-based with 16 for off, so the two ends and the off value
@@ -776,7 +776,7 @@ mod tests {
     /// A default panel is the decode of zeroed bytes, and re-encoding it gives them back.
     #[test]
     fn the_default_panel_encodes_and_decodes() {
-        let p = SettingsBody::default();
+        let p = Settings::default();
         assert_eq!(<[u8; BODY_LEN]>::from(&p), [0; BODY_LEN]);
         assert_eq!(p.global_transpose, -6);
         assert_eq!(p.fine_tune, -50);

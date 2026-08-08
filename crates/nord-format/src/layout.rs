@@ -12,9 +12,8 @@
 /// a type-0.
 #[derive(Clone)]
 pub struct LayoutField {
-    /// The field's registry path within its body — group-qualified for a grouped
-    /// leaf, the field's own name otherwise. A walker prefixes nested children
-    /// with this path and a dot.
+    /// The field's registry path within its body — the field's own name. A walker
+    /// prefixes nested children with this path and a dot.
     pub path: &'static str,
     /// The field's Rust type, as written.
     pub ty: &'static str,
@@ -71,7 +70,7 @@ mod tests {
     }
 
     /// A body exercising both placements: a private leaf word, a nested body,
-    /// and a grouped public leaf, with unclaimed bits in between.
+    /// and a public leaf, with unclaimed bits in between.
     #[bitbody(6)]
     struct Outer {
         #[bits(0..=15)]
@@ -80,7 +79,6 @@ mod tests {
         #[at(0x02..0x04)]
         pub inner: Inner,
 
-        #[group(tail)]
         #[bits(40..=47)]
         pub level: u8,
     }
@@ -100,7 +98,7 @@ mod tests {
         let raw = <[u8; 6]>::from(&body());
         // word rewritten; inner: flag clear (bit 0 of 0x0f), level 0x55 over bits
         // 4..=11, inner's unclaimed bits 1..=3 kept from 0x0f; byte 4 unclaimed
-        // at the outer level, kept verbatim; tail level rewritten.
+        // at the outer level, kept verbatim; the outer leaf rewritten.
         assert_eq!(raw, [0x01, 0x02, 0x05, 0x50, 0xff, 0x07]);
         let back = Outer::try_from(raw).unwrap();
         assert_eq!(back.word, 0x0102);
@@ -128,24 +126,23 @@ mod tests {
         }
     }
 
-    /// Paths: a nested field prefixes its children with its own name, a grouped
-    /// leaf takes the group in force, and private fields stay unregistered.
+    /// Paths: a nested field prefixes its children with its own name, a leaf
+    /// registers under its bare name, and private fields stay unregistered.
     #[test]
     fn paths_recurse_through_nested_bodies() {
         let b = body();
         let paths: Vec<String> = b.fields().into_iter().map(|f| f.path).collect();
-        assert_eq!(paths, ["inner.flag", "inner.level", "tail.level"]);
+        assert_eq!(paths, ["inner.flag", "inner.level", "level"]);
 
         let mut b = body();
         b.set_field("inner.level", "3").unwrap();
         assert_eq!(b.inner.level, 3);
-        b.set_field("tail.level", "9").unwrap();
+        // ⚠️ `level` and `inner.level` are different fields: the bare name is the
+        // outer leaf, and nothing about a nested body's child reaches it.
+        b.set_field("level", "9").unwrap();
         assert_eq!(b.level, 9);
+        assert_eq!(b.inner.level, 3);
         assert!(b.set_field("word", "1").is_err(), "private is not a path");
-        assert!(
-            b.set_field("level", "1").is_err(),
-            "a bare name is not a path"
-        );
     }
 
     /// The layout publishes every placement — including the unregistered word —
@@ -159,7 +156,7 @@ mod tests {
             [
                 "word bits 0..=15 (u16)",
                 "inner bytes 0x02..0x04 (Inner)",
-                "tail.level bits 40..=47 (u8)",
+                "level bits 40..=47 (u8)",
             ],
         );
 

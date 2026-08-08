@@ -3,7 +3,7 @@
 //! ```ignore
 //! /// The attribute's argument is the structure's length in bytes.
 //! #[bitbody(121)]
-//! pub struct ProgramBody {
+//! pub struct Program {
 //!     #[bits(0..=15)]
 //!     program_version: u16,
 //!     #[at(0x02..0x09)]
@@ -40,11 +40,7 @@
 //! `field_specs()`. Private fields decode and encode but stay unregistered.
 //!
 //! **Paths.** A nested field registers its children under its own name:
-//! `center_panel.transpose`. A leaf registers under the `#[group(name)]` in
-//! force, if any — `#[group]` is sticky from its field to the next marker, and
-//! exists for bodies that are *deliberately* flat: the settings body interleaves
-//! two vocabularies in one bit space, and the group keeps their established
-//! `panel.` / `selection.` paths without forcing an overlay into this design.
+//! `center_panel.transpose`. A leaf registers under its own name alone.
 //!
 //! Only usable inside `nord-format`: generated code names `crate::bits`,
 //! `crate::cbin`, `crate::error`, `crate::layout` and `crate::panel`.
@@ -203,7 +199,6 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
     };
 
     let mut claimed: Vec<(u32, u32, &Ident)> = Vec::new();
-    let mut group: Option<Ident> = None;
 
     let mut fields = Vec::new();
     let mut decode = Vec::new();
@@ -220,10 +215,6 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         let ty = &field.ty;
         let ty_str = quote!(#ty).to_string().replace(' ', "");
         let public = matches!(field.vis, syn::Visibility::Public(_));
-
-        if let Some(marker) = field.attrs.iter().find(|a| a.path().is_ident("group")) {
-            group = Some(marker.parse_args::<Ident>()?);
-        }
 
         let bits_attr = field.attrs.iter().find(|a| a.path().is_ident("bits"));
         let at_attr = field.attrs.iter().find(|a| a.path().is_ident("at"));
@@ -270,16 +261,11 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         }
         claimed.push((lo, hi, ident));
 
-        // Keep everything but the placement and the group marker, which have
-        // served their purpose.
+        // Keep everything but the placement, which has served its purpose.
         let kept: Vec<_> = field
             .attrs
             .iter()
-            .filter(|a| {
-                !a.path().is_ident("bits")
-                    && !a.path().is_ident("at")
-                    && !a.path().is_ident("group")
-            })
+            .filter(|a| !a.path().is_ident("bits") && !a.path().is_ident("at"))
             .collect();
         let placement_doc = if at_attr.is_some() {
             format!("Bytes {:#04x}..{:#04x}.", lo / 8, (hi + 1) / 8)
@@ -346,29 +332,20 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         decode.push(quote! { #ident: #f::get(&raw)? });
         encode.push(quote! { #f::set(&mut raw, p.#ident); });
 
-        layout.push({
-            let path = match &group {
-                Some(g) => format!("{g}.{ident}"),
-                None => ident.to_string(),
-            };
-            quote! {
-                crate::layout::LayoutField {
-                    path: #path,
-                    ty: #ty_str,
-                    lo: #lo,
-                    hi: #hi,
-                    nested: ::core::option::Option::None,
-                }
+        let path = ident.to_string();
+        layout.push(quote! {
+            crate::layout::LayoutField {
+                path: #path,
+                ty: #ty_str,
+                lo: #lo,
+                hi: #hi,
+                nested: ::core::option::Option::None,
             }
         });
 
         if !public {
             continue;
         }
-        let path = match &group {
-            Some(g) => format!("{g}.{ident}"),
-            None => ident.to_string(),
-        };
         let placement = format!("{lo}..={hi}");
         let width = hi - lo + 1;
 
