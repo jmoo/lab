@@ -61,6 +61,7 @@
             # This requires access to a private repository (jmoo/nord-corpus)
             checks.nord-format-corpus = pkgs.nord-format.overrideAttrs (old: {
               NORD_CORPUS_DIR = "${pkgs.nord-corpus}/ne5";
+              NORD_CORPUS_ROOT = "${pkgs.nord-corpus}";
               cargoTestFlags = old.cargoTestFlags ++ [
                 "--features"
                 "corpus"
