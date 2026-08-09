@@ -167,6 +167,31 @@ fn aux_matches_one_of_the_three_documented_shapes() {
     );
 }
 
+/// Every nsmp3/nsmp4 specimen decodes as the wide section chain, with a name
+/// and at least one stroke — in both container generations.
+#[test]
+fn v3_samples_decode_names_and_strokes() {
+    use nord_format::Sample;
+
+    let mut seen = 0usize;
+    for path in specimens(&corpus_root()) {
+        let ext = path.extension().unwrap().to_string_lossy();
+        if ext != "nsmp3" && ext != "nsmp4" {
+            continue;
+        }
+        match nord_format::from_path(&path).unwrap() {
+            Entity::Sample(Sample::V3(s)) => {
+                let name = s.name().unwrap();
+                assert!(!name.is_empty(), "{}: empty name", path.display());
+                assert!(s.stroke_count() > 0, "{}: no strokes", path.display());
+            }
+            other => panic!("{}: decoded to {other:?}", path.display()),
+        }
+        seen += 1;
+    }
+    assert!(seen >= 12, "only {seen} nsmp3/nsmp4 specimens seen");
+}
+
 /// The stub modules' observed body lengths hold across every specimen.
 #[test]
 fn observed_body_lengths_match_the_documented_constants() {

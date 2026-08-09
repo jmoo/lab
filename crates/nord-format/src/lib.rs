@@ -194,8 +194,8 @@ pub enum PianoPreset {
 #[derive(Debug)]
 pub enum Sample {
     V2(Cbin<nsmp::Sample>),
-    /// The nsmp3/nsmp4 generations: schema unmapped, body verbatim.
-    Raw(Cbin<RawBody>),
+    /// The nsmp3/nsmp4 generations: section chain decoded, strokes verbatim.
+    V3(Cbin<nsmp::SampleV3>),
 }
 
 /// One decoded file.
@@ -264,7 +264,7 @@ fn read_cbin(reader: &mut (impl Read + Seek), tag: &str) -> Result<Entity, Error
             let header = file.header;
             E::Sample(match file.body {
                 nsmp::AnyBody::V2(body) => Sample::V2(Cbin { header, body }),
-                nsmp::AnyBody::Raw(body) => Sample::Raw(Cbin { header, body }),
+                nsmp::AnyBody::V3(body) => Sample::V3(Cbin { header, body }),
             })
         }
         npno::FORMAT => E::Piano(npno::Piano::read_from(reader)?),
@@ -561,8 +561,7 @@ impl Entity {
             | Entity::OrganPreset(OP::Electro3(f) | OP::Stage4(f))
             | Entity::PianoPreset(PianoPreset::Stage4(f))
             | Entity::PianoLibrary(f)
-            | Entity::PipeLibrary(f)
-            | Entity::Sample(Sample::Raw(f)) => Some(f),
+            | Entity::PipeLibrary(f) => Some(f),
             _ => None,
         }
     }
@@ -666,7 +665,7 @@ impl Entity {
             ),
             Entity::PipeLibrary(_) => id("C2 pipe library", npip::pipe_library::FORMAT),
             Entity::Sample(Sample::V2(_)) => id("sample instrument", nsmp::FORMAT),
-            Entity::Sample(Sample::Raw(_)) => id("sample instrument (nsmp3/nsmp4)", nsmp::FORMAT),
+            Entity::Sample(Sample::V3(_)) => id("sample instrument (nsmp3/nsmp4)", nsmp::FORMAT),
             Entity::Sysex(_) => id("SysEx dump", "syx"),
             Entity::Midi(_) => id("MIDI file", "mid"),
             Entity::Cne3(_) => id("Electro 2 library", "cn3"),
@@ -734,7 +733,7 @@ impl Entity {
                 Program::Stage3(f) => f.write_to(w),
             },
             Entity::Sample(Sample::V2(f)) => f.write_to(w),
-            Entity::Sample(Sample::Raw(f)) => f.write_to(w),
+            Entity::Sample(Sample::V3(f)) => f.write_to(w),
             Entity::Settings(s) => match s {
                 Settings::C2(f)
                 | Settings::C2D(f)

@@ -408,6 +408,22 @@ fn panels(ui: &Ui, kind: &str, at: (u16, u16), p: &ne5::Program) {
     }
 }
 
+/// The v3/v4 sample-instrument printout: identity and section inventory — the
+/// zone map is not decoded for this generation yet.
+fn sample_v3(ui: &Ui, s: &Cbin<nord_format::formats::nsmp::SampleV3>) {
+    ui.out(field(ui, 2, "type", "sample instrument (nsmp3/nsmp4)"));
+    match (s.name(), s.sub_name()) {
+        (Ok(name), Ok(sub)) if !sub.is_empty() => {
+            ui.out(field(ui, 2, "name", format!("{name}_{sub}")))
+        }
+        (Ok(name), _) => ui.out(field(ui, 2, "name", name)),
+        (Err(e), _) => ui.warn(format!("name unreadable: {e}")),
+    }
+    let v = s.header.version;
+    ui.out(field(ui, 2, "version", format!("{}.{}", v / 100, v % 100)));
+    ui.out(field(ui, 2, "strokes", s.stroke_count().to_string()));
+}
+
 /// The sample-instrument printout: identity, then the zone map.
 fn sample(ui: &Ui, s: &Cbin<Sample>) {
     ui.out(field(ui, 2, "type", "sample instrument (nsmp)"));
@@ -558,6 +574,7 @@ pub fn print(ui: &Ui, entity: &Entity) {
             ));
         }
         Entity::Sample(nord_format::Sample::V2(s)) => sample(ui, s),
+        Entity::Sample(nord_format::Sample::V3(s)) => sample_v3(ui, s),
         Entity::Bundle(nord_format::Bundle::Electro5(b)) => {
             ui.out(field(ui, 2, "type", "backup bundle (zip)"));
             if let Some(name) = b.name() {
