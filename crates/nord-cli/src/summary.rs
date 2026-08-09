@@ -588,6 +588,22 @@ pub fn print(ui: &Ui, entity: &Entity) {
             ui.out(field(ui, 2, "type", "Drum 3P kit bank (zip)"));
             ui.out(field(ui, 2, "kits", b.kits.len().to_string()));
         }
+        Entity::Bundle(nord_format::Bundle::Members(members)) => {
+            ui.out(field(ui, 2, "type", "bundle (zip)"));
+            // Count members per tag so "384 ns4p, 8 ns4l" reads at a glance.
+            let mut by_tag: std::collections::BTreeMap<String, usize> = Default::default();
+            for (_, m) in members {
+                *by_tag
+                    .entry(String::from_utf8_lossy(&m.header.tag).replace('\0', ""))
+                    .or_default() += 1;
+            }
+            let counts = by_tag
+                .iter()
+                .map(|(tag, n)| format!("{n} {tag}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            ui.out(field(ui, 2, "members", counts));
+        }
         other => raw_summary(ui, other),
     }
 }

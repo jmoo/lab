@@ -59,6 +59,12 @@ pub enum Bundle {
     Drum2Bank(nd2::bank::Bank),
     Drum3KitBank(nd3::kit_bank::KitBank),
     Electro5(ne5::Bundle),
+    /// A ZIP of CBIN files under any mix of tags — the shape independent
+    /// interop projects report for the other models' bundles and backups
+    /// (`.ns3fb`, `.ns2b`, …). No specimen is in the corpus, so members are
+    /// kept container-verified and raw, under their archive paths — which
+    /// reportedly encode the slot, uninterpreted here.
+    Members(Vec<(String, Cbin<RawBody>)>),
 }
 
 /// A stored program, one variant per model. Only the Electro 5 and the two
@@ -382,7 +388,9 @@ fn read_zip(reader: &mut (impl Read + Seek)) -> Result<Entity, Error> {
         } else if names.iter().all(|n| n.ends_with(".nd3k")) {
             "nd3"
         } else {
-            return Err(ParseError::UnknownFormat("zip with unrecognized members".into()).into());
+            // Not a known archive by name — a bundle only if every member is a
+            // CBIN file, which `zip_raw_members` decides below.
+            "members"
         }
     };
     reader.seek(std::io::SeekFrom::Start(0))?;
@@ -390,6 +398,7 @@ fn read_zip(reader: &mut (impl Read + Seek)) -> Result<Entity, Error> {
     Ok(Entity::Bundle(match kind {
         "nd2" => Bundle::Drum2Bank(nd2::bank::read_from(reader)?),
         "nd3" => Bundle::Drum3KitBank(nd3::kit_bank::read_from(reader)?),
+        "members" => Bundle::Members(formats::zip_raw_members(reader)?),
         _ => Bundle::Electro5(ne5::Bundle::read_from(reader)?),
     }))
 }
@@ -397,6 +406,60 @@ fn read_zip(reader: &mut (impl Read + Seek)) -> Result<Entity, Error> {
 /// [`from_stream`] over a buffered read of the file at `path`.
 pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Entity, Error> {
     from_stream(&mut BufReader::new(File::open(path)?))
+}
+
+#[cfg(all(test, feature = "bundle"))]
+mod bundle_tests {
+    use super::*;
+    use crate::cbin::{Cbin, Header, RawBody};
+    use std::io::{Cursor, Write};
+
+    fn member(tag: &str) -> Vec<u8> {
+        let file = Cbin {
+            header: Header::new(tag, (0, 0), 4),
+            body: RawBody(vec![0x5A; 16]),
+        };
+        let mut out = Cursor::new(Vec::new());
+        file.write_to(&mut out).unwrap();
+        out.into_inner()
+    }
+
+    fn archive(members: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, bytes) in members {
+            zip.start_file(name.to_string(), stored).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    /// A ZIP of mixed CBIN members — the reported family bundle shape — reads
+    /// as [`Bundle::Members`] with paths preserved.
+    #[test]
+    fn a_zip_of_mixed_cbin_members_is_a_bundle() {
+        let a = member("ns3f");
+        let b = member("ns3y");
+        let bytes = archive(&[("Bank A/One.ns3f", &a), ("presets/Two.ns3y", &b)]);
+
+        let entity = from_stream(&mut Cursor::new(bytes)).unwrap();
+        let Entity::Bundle(Bundle::Members(members)) = entity else {
+            panic!("decoded to something other than a member bundle");
+        };
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0].0, "Bank A/One.ns3f");
+        assert_eq!(&members[0].1.header.tag, b"ns3f");
+        assert_eq!(&members[1].1.header.tag, b"ns3y");
+    }
+
+    /// A ZIP holding anything that is not a CBIN file is not a bundle.
+    #[test]
+    fn a_zip_with_a_non_cbin_member_is_refused() {
+        let a = member("ns3f");
+        let bytes = archive(&[("One.ns3f", &a), ("readme.txt", b"hello")]);
+        assert!(from_stream(&mut Cursor::new(bytes)).is_err());
+    }
 }
 
 /// Serialize an [`Entity`] back to the bytes of its file — the counterpart to
