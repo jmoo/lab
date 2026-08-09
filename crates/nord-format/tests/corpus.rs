@@ -135,6 +135,38 @@ fn every_specimen_parses_and_round_trips() {
     );
 }
 
+/// The header's `aux` word holds one of three shapes everywhere: `0xFFFFFFFF`
+/// (no category), a low u16 under a zero high u16 (the program category id), or
+/// — on the preset/library tags alone — both halves set. A fourth shape, or a
+/// both-halves value on a program tag, means the word carries something the
+/// container docs don't model.
+#[test]
+fn aux_matches_one_of_the_three_documented_shapes() {
+    // The tags observed holding both u16 halves. (`nd2p` does too, but lives
+    // inside `.nd2_bank` archives, which this standalone walk does not open.)
+    const BOTH_HALVES: &[&str] = &["ns3y", "nsmp"];
+
+    let mut failures: Vec<String> = Vec::new();
+    for path in specimens(&corpus_root()) {
+        let bytes = fs::read(&path).unwrap();
+        if bytes.len() < 0x18 || &bytes[..4] != b"CBIN" {
+            continue;
+        }
+        let tag = String::from_utf8_lossy(&bytes[8..12]).replace('\0', "");
+        let aux = u32::from_le_bytes(bytes[0x10..0x14].try_into().unwrap());
+        let ok = aux == 0xFFFF_FFFF || (aux >> 16) == 0 || BOTH_HALVES.contains(&tag.as_str());
+        if !ok {
+            failures.push(format!("{}: {tag} aux {aux:#010x}", path.display()));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} specimens hold an undocumented aux shape:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
 /// The stub modules' observed body lengths hold across every specimen.
 #[test]
 fn observed_body_lengths_match_the_documented_constants() {
