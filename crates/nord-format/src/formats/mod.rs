@@ -102,7 +102,10 @@ pub(crate) fn zip_raw_members(
     let mut members = Vec::new();
     for i in 0..zip.len() {
         let mut file = zip.by_index(i)?;
-        if file.is_dir() {
+        // Real backups carry a meta.xml manifest beside the CBIN members; it
+        // describes the archive rather than being content, so it is passed
+        // over rather than failing the walk.
+        if file.is_dir() || file.name().ends_with("meta.xml") {
             continue;
         }
         let name = file.name().to_string();

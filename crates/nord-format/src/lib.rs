@@ -59,11 +59,10 @@ pub enum Bundle {
     Drum2Bank(nd2::bank::Bank),
     Drum3KitBank(nd3::kit_bank::KitBank),
     Electro5(ne5::Bundle),
-    /// A ZIP of CBIN files under any mix of tags — the shape independent
-    /// interop projects report for the other models' bundles and backups
-    /// (`.ns3fb`, `.ns2b`, …). No specimen is in the corpus, so members are
-    /// kept container-verified and raw, under their archive paths — which
-    /// reportedly encode the slot, uninterpreted here.
+    /// A ZIP of CBIN files under any mix of tags — every model's bundle/backup
+    /// shape, verified against real factory restores (`.no3b`, `.nc2b`,
+    /// `.nl4b`). Members are kept container-verified and raw, under their
+    /// archive paths — which encode the slot, uninterpreted here.
     Members(Vec<(String, Cbin<RawBody>)>),
 }
 
@@ -381,15 +380,22 @@ fn read_zip(reader: &mut (impl Read + Seek)) -> Result<Entity, Error> {
     let kind = {
         let zip = zip::ZipArchive::new(&mut *reader)?;
         let names: Vec<&str> = zip.file_names().collect();
-        if names.iter().any(|n| n.ends_with("meta.xml")) {
+        // ⚠️ meta.xml alone does not say Electro 5: the whole family's backups
+        // carry one (verified against real Piano/Organ 3/C2D/Lead 4 factory
+        // restores). Only .ne5* members make it an Electro 5 bundle.
+        if names.iter().any(|n| {
+            std::path::Path::new(n)
+                .extension()
+                .is_some_and(|e| e.to_string_lossy().starts_with("ne5"))
+        }) {
             "bundle"
         } else if names.iter().all(|n| n.ends_with(".nd2p")) {
             "nd2"
         } else if names.iter().all(|n| n.ends_with(".nd3k")) {
             "nd3"
         } else {
-            // Not a known archive by name — a bundle only if every member is a
-            // CBIN file, which `zip_raw_members` decides below.
+            // Anything else — a bundle only if every member is a CBIN file,
+            // which `zip_raw_members` decides below.
             "members"
         }
     };
