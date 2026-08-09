@@ -584,13 +584,26 @@ pub fn print(ui: &Ui, entity: &Entity) {
                 }
             }
         }
-        Entity::Piano(_) => {
-            ui.out(field(
-                ui,
-                2,
-                "type",
-                format!("piano (npno) {} header/reference only", ui.dash()),
-            ));
+        Entity::Piano(p) => {
+            ui.out(field(ui, 2, "type", "piano library (npno)"));
+            match p.name() {
+                Ok((name, variant)) if variant.is_empty() => ui.out(field(ui, 2, "name", name)),
+                Ok((name, variant)) => ui.out(field(ui, 2, "name", format!("{name} ({variant})"))),
+                Err(e) => ui.warn(format!("name unreadable: {e}")),
+            }
+            // The vendor's filenames write tenths without the trailing zero:
+            // 530 is "5.3", not "5.30".
+            let v = p.file.header.version;
+            let minor = if v % 10 == 0 {
+                format!("{}", v % 100 / 10)
+            } else {
+                format!("{:02}", v % 100)
+            };
+            ui.out(field(ui, 2, "version", format!("{}.{minor}", v / 100)));
+            if let Ok(map) = p.key_map() {
+                let covered = map.iter().filter(|&&b| b != 0xFF).count();
+                ui.out(field(ui, 2, "notes", format!("{covered} covered")));
+            }
         }
         Entity::Sample(nord_format::Sample::V2(s)) => sample(ui, s),
         Entity::Sample(nord_format::Sample::V3(s)) => sample_v3(ui, s),
