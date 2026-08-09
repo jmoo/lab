@@ -3,6 +3,7 @@ name = "anki-tool"
 description = "CLI for querying AnkiConnect, designed for AI agent consumption"
 edition.workspace = true
 license.workspace = true
+publish = false
 version.workspace = true
 
 [dependencies]
