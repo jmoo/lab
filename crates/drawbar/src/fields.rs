@@ -75,6 +75,11 @@ pub fn fields_of(entity: &Entity) -> Option<Vec<Field>> {
     body(entity).map(|body| body.fields())
 }
 
+/// Whether the body carries the generated registry, and so has a friendly view at all.
+pub fn has_registry(entity: &Entity) -> bool {
+    body(entity).is_some()
+}
+
 /// Whether the body is an Electro 5 panel — the one the document knows section by
 /// section. Everything else with a registry falls back to a plain field list.
 pub fn is_electro5_panel(entity: &Entity) -> bool {

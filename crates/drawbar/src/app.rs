@@ -35,19 +35,30 @@ pub struct DrawbarApp {
     tabs: Tabs,
     document: Document,
     log: Log,
+    /// The list's revision as the store last saw it.
+    saved: u64,
+    /// When the store was last caught up, on egui's own clock.
+    saved_at: f64,
 }
 
 impl DrawbarApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> DrawbarApp {
         cc.egui_ctx.set_visuals(visuals());
-        DrawbarApp {
+        let mut app = DrawbarApp {
             workspace: Workspace::new(cc.egui_ctx.clone()),
             device: Device::new(cc.egui_ctx.clone()),
             browser: Browser::default(),
             tabs: Tabs::default(),
             document: Document::default(),
             log: Log::default(),
+            saved: 0,
+            saved_at: 0.0,
+        };
+        if let Some(storage) = cc.storage {
+            crate::store::load(storage, &mut app.workspace, &mut app.log);
         }
+        app.saved = app.workspace.revision();
+        app
     }
 
     /// Ingest anything dropped on the window.
@@ -86,6 +97,36 @@ impl DrawbarApp {
                     .ingest(name.clone(), Origin::File(name), bytes, &mut self.log);
             }
         }
+    }
+
+    /// Catch the store up with the list.
+    ///
+    /// ⚠️ eframe's own periodic save runs at the end of a frame, and egui only paints
+    /// when something asks it to — a change made and then left alone can sit unwritten
+    /// for as long as the window goes untouched. So the write happens here, from the
+    /// frame that made the change, and eframe's `save` is left as the way out.
+    ///
+    /// Rate-limited because a drag changes the list on every frame it moves, and the
+    /// whole list is re-encoded each time.
+    fn keep_up(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        /// How often the store is allowed to be rewritten, in seconds.
+        const EVERY: f64 = 2.0;
+
+        if self.workspace.revision() == self.saved {
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        if now - self.saved_at < EVERY {
+            // Nothing else may be about to ask for a frame, and the write is still owed.
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            return;
+        }
+        let Some(storage) = frame.storage_mut() else {
+            return;
+        };
+        crate::store::save(storage, &self.workspace, &mut self.log);
+        self.saved = self.workspace.revision();
+        self.saved_at = now;
     }
 
     /// One line of plain words, and the whole log behind it.
@@ -133,7 +174,19 @@ impl DrawbarApp {
 }
 
 impl eframe::App for DrawbarApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    /// How long a change may sit unwritten.
+    fn auto_save_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(5)
+    }
+
+    /// eframe calls this on its own timer and on the way out, so an edit is kept
+    /// without anyone asking for it to be.
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        crate::store::save(storage, &self.workspace, &mut self.log);
+        self.saved = self.workspace.revision();
+    }
+
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.log.tick(ctx);
         self.workspace.poll(&mut self.log);
         self.device
@@ -158,7 +211,7 @@ impl eframe::App for DrawbarApp {
         let mut acts = Vec::new();
         egui::SidePanel::left("places")
             .resizable(true)
-            .default_width(300.0)
+            .default_width(520.0)
             .show(ctx, |ui| {
                 acts = self.browser.ui(ui, &self.workspace, &self.device);
             });
@@ -174,6 +227,11 @@ impl eframe::App for DrawbarApp {
                 );
                 return;
             };
+            // ⚠️ Never a file export. Cmd+S means "keep what I did", which for something
+            // read off the instrument is a promise to send it back.
+            if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
+                self.document.stage(id, &mut self.workspace, &mut self.log);
+            }
             let sent = self.document.ui(
                 ui,
                 id,
@@ -202,6 +260,8 @@ impl eframe::App for DrawbarApp {
         // Last, so a command the user just asked for is ahead of the background read of
         // the tree in the one slot the protocol allows.
         self.device.pump();
+
+        self.keep_up(ctx, frame);
     }
 }
 

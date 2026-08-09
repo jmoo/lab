@@ -1,95 +1,68 @@
-//! Which banks have been read, and which are still owed.
+//! Which classes have been read, and which are still owed.
 //!
-//! The instrument reports how many objects a class holds but never how the panel
-//! divides them into banks, so a class is walked one bank at a time until the device
-//! stops answering. That answer arrives as a *short* bank — fewer slots than were asked
-//! for, because the walk hit status 3 — and that is what ends the walk.
+//! One class is one command: the worker opens a session, reads the class's counters and
+//! then every bank inside it, and streams a bank at a time back. So the queue holds
+//! classes, and the progress each one reports arrives while it is still running.
 
 use std::collections::{HashMap, VecDeque};
 
-use nord_usb::wire::Status;
 use nord_usb::ObjectClass;
-
-use super::slots_per_bank;
-
-/// ⚠️ A ceiling on a walk whose end the device alone decides. Nothing on the wire says a
-/// class cannot hold more banks than this; the cap is here so an instrument that never
-/// answers "out of range" cannot spin the queue forever.
-const MAX_BANKS: u32 = 32;
 
 /// How far through a class the background read has got.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Progress {
     /// Banks read so far.
     pub done: u32,
-    /// Banks expected, where the inventory said enough to work it out.
+    /// Banks expected, once the class's counters have said enough to work it out.
     pub total: Option<u32>,
-    /// More banks are queued for this class.
+    /// The walk is still going.
     pub running: bool,
 }
 
-/// The queue of banks still to read, and what has been read already.
+/// The classes still to read, and how far each got.
 #[derive(Default)]
 pub struct Scan {
-    queue: VecDeque<(ObjectClass, u32)>,
+    queue: VecDeque<ObjectClass>,
     /// Keyed by the raw class number, because [`ObjectClass`] is not `Hash`.
     progress: HashMap<u32, Progress>,
 }
 
 impl Scan {
-    /// Read `class` from its first bank, discarding anything already queued for it.
-    pub fn start(&mut self, class: ObjectClass, total: Option<u32>) {
-        self.queue.retain(|(queued, _)| *queued != class);
-        self.queue.push_back((class, 1));
+    /// Read `class` from the top. Queued once however often it is asked for.
+    pub fn start(&mut self, class: ObjectClass) {
+        if !self.queue.contains(&class) {
+            self.queue.push_back(class);
+        }
         self.progress.insert(
             class.to_raw(),
             Progress {
                 done: 0,
-                total,
+                total: None,
                 running: true,
             },
         );
     }
 
-    /// Take the next bank to ask about off the queue.
-    pub fn take(&mut self) -> Option<(ObjectClass, u32)> {
+    /// Take the next class to read off the queue.
+    pub fn take(&mut self) -> Option<ObjectClass> {
         self.queue.pop_front()
     }
 
-    /// Read one bank again on its own, without restarting the walk through the class.
-    ///
-    /// What a mutation owes: only the banks it touched can have changed names.
-    pub fn again(&mut self, class: ObjectClass, bank: u32) {
-        if !self.queue.contains(&(class, bank)) {
-            self.queue.push_back((class, bank));
-        }
+    /// The class's counters arrived, and with them how many banks to expect.
+    pub fn expect(&mut self, class: ObjectClass, total: Option<u32>) {
+        self.progress.entry(class.to_raw()).or_default().total = total;
     }
 
-    /// Record a bank that came back. `full` means the device answered every slot that
-    /// was asked for, which is the only sign that another bank may follow it.
-    ///
-    /// The walk only continues from the bank it was itself up to, so a one-off re-read
-    /// of an already-visited bank does not set the rest of the class going again.
-    pub fn scanned(&mut self, class: ObjectClass, bank: u32, full: bool) {
+    /// One bank landed.
+    pub fn bank(&mut self, class: ObjectClass, bank: u32) {
         let progress = self.progress.entry(class.to_raw()).or_default();
-        let walking = bank == progress.done + 1;
         progress.done = progress.done.max(bank);
-        let more =
-            walking && full && bank < MAX_BANKS && progress.total.is_none_or(|total| bank < total);
-        if walking {
-            progress.running = more;
-        }
-        if more {
-            self.queue.push_back((class, bank + 1));
-        }
     }
 
-    /// The class stopped answering, so nothing more is owed for it.
-    pub fn stopped(&mut self, class: ObjectClass) {
-        self.queue.retain(|(queued, _)| *queued != class);
-        if let Some(progress) = self.progress.get_mut(&class.to_raw()) {
-            progress.running = false;
-        }
+    /// The walk ended — whether it ran out of banks or gave up part-way.
+    pub fn finished(&mut self, class: ObjectClass) {
+        self.queue.retain(|queued| *queued != class);
+        self.progress.entry(class.to_raw()).or_default().running = false;
     }
 
     pub fn progress(&self, class: ObjectClass) -> Option<Progress> {
@@ -102,135 +75,63 @@ impl Scan {
     }
 }
 
-/// How many banks a class is expected to have, when the inventory says enough to tell.
-///
-/// ⚠️ The count is derived from the class's slot total and [`slots_per_bank`], both of
-/// which are the Electro 5's divisions rather than anything the wire reports. `None`
-/// means the walk runs until the device refuses a bank.
-pub fn bank_count(class: ObjectClass, inventory: &[Status]) -> Option<u32> {
-    match class {
-        // Both are singletons: one bank, however the rest of the classes are divided.
-        ObjectClass::Live | ObjectClass::Settings => Some(1),
-        _ => inventory
-            .iter()
-            .find(|status| status.class == class)?
-            .slots()
-            .map(|slots| slots.div_ceil(slots_per_bank(class))),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn status(class: ObjectClass, count: u32, free: u32, used: u32) -> Status {
-        Status {
-            class,
-            count,
-            free,
-            used,
+    /// A class is queued once and reports itself as it goes.
+    #[test]
+    fn a_class_reports_its_banks_as_they_land() {
+        let mut scan = Scan::default();
+        scan.start(ObjectClass::Program);
+        scan.start(ObjectClass::Program);
+        assert_eq!(scan.take(), Some(ObjectClass::Program));
+        assert_eq!(scan.take(), None, "one class, one walk");
+
+        scan.expect(ObjectClass::Program, Some(8));
+        for bank in 1..=3 {
+            scan.bank(ObjectClass::Program, bank);
         }
+        let progress = scan.progress(ObjectClass::Program).unwrap();
+        assert_eq!((progress.done, progress.total), (3, Some(8)));
+        assert!(progress.running);
     }
 
-    /// A bank that answered every slot may have a successor, so the walk goes on.
+    /// A walk that ends stops reporting itself as running, however it ended.
     #[test]
-    fn a_full_bank_queues_the_one_after_it() {
+    fn a_finished_walk_stops_running() {
         let mut scan = Scan::default();
-        scan.start(ObjectClass::Program, None);
-        assert_eq!(scan.take(), Some((ObjectClass::Program, 1)));
-        scan.scanned(ObjectClass::Program, 1, true);
-        assert_eq!(scan.take(), Some((ObjectClass::Program, 2)));
-        assert!(scan.progress(ObjectClass::Program).unwrap().running);
-    }
-
-    /// A short bank is the device saying the class ends here.
-    #[test]
-    fn a_short_bank_ends_the_walk() {
-        let mut scan = Scan::default();
-        scan.start(ObjectClass::Sample, None);
+        scan.start(ObjectClass::Sample);
         scan.take();
-        scan.scanned(ObjectClass::Sample, 1, false);
-        assert_eq!(scan.take(), None);
+        scan.bank(ObjectClass::Sample, 1);
+        scan.finished(ObjectClass::Sample);
         let progress = scan.progress(ObjectClass::Sample).unwrap();
         assert!(!progress.running);
         assert_eq!(progress.done, 1);
     }
 
-    /// A known total stops the walk without spending an operation on a bank that
-    /// cannot exist.
+    /// Reading a class again starts its count over rather than carrying on from where
+    /// the last walk stopped.
     #[test]
-    fn a_known_total_stops_the_walk_at_the_last_bank() {
+    fn reading_a_class_again_starts_its_count_over() {
         let mut scan = Scan::default();
-        scan.start(ObjectClass::Program, Some(2));
+        scan.start(ObjectClass::Program);
         scan.take();
-        scan.scanned(ObjectClass::Program, 1, true);
-        assert_eq!(scan.take(), Some((ObjectClass::Program, 2)));
-        scan.scanned(ObjectClass::Program, 2, true);
-        assert_eq!(scan.take(), None);
-        assert!(!scan.progress(ObjectClass::Program).unwrap().running);
-    }
+        scan.bank(ObjectClass::Program, 4);
+        scan.finished(ObjectClass::Program);
 
-    /// Asking for a class again starts it over rather than appending to a walk that is
-    /// already part-way through — the names it read are the ones being replaced.
-    #[test]
-    fn reading_a_class_again_starts_it_over() {
-        let mut scan = Scan::default();
-        scan.start(ObjectClass::Program, Some(8));
-        scan.take();
-        scan.scanned(ObjectClass::Program, 1, true);
-        scan.start(ObjectClass::Program, Some(8));
-        assert_eq!(scan.take(), Some((ObjectClass::Program, 1)));
-        assert_eq!(scan.take(), None);
+        scan.start(ObjectClass::Program);
         assert_eq!(scan.progress(ObjectClass::Program).unwrap().done, 0);
+        assert_eq!(scan.take(), Some(ObjectClass::Program));
     }
 
-    /// A bank re-read after a mutation is one operation, not the tail of the class.
+    /// One class finishing leaves the others queued.
     #[test]
-    fn re_reading_one_bank_does_not_restart_the_walk() {
+    fn finishing_one_class_leaves_the_others_queued() {
         let mut scan = Scan::default();
-        scan.start(ObjectClass::Program, Some(8));
-        for bank in 1..=8 {
-            scan.take();
-            scan.scanned(ObjectClass::Program, bank, true);
-        }
-        assert_eq!(scan.take(), None);
-
-        scan.again(ObjectClass::Program, 7);
-        assert_eq!(scan.take(), Some((ObjectClass::Program, 7)));
-        scan.scanned(ObjectClass::Program, 7, true);
-        assert_eq!(scan.take(), None);
-    }
-
-    /// One class stopping leaves the others queued.
-    #[test]
-    fn stopping_one_class_leaves_the_others_queued() {
-        let mut scan = Scan::default();
-        scan.start(ObjectClass::Program, None);
-        scan.start(ObjectClass::SetList, None);
-        scan.stopped(ObjectClass::Program);
-        assert_eq!(scan.take(), Some((ObjectClass::SetList, 1)));
-        assert!(!scan.progress(ObjectClass::Program).unwrap().running);
-    }
-
-    /// An Electro 5 reports 400 program slots, which is its eight banks of fifty.
-    #[test]
-    fn the_bank_count_comes_out_of_the_slot_total() {
-        // 141 blocks an item, 400 items: the numbers a real Electro 5 answers with.
-        let inventory = [status(ObjectClass::Program, 379, 2961, 53439)];
-        assert_eq!(
-            bank_count(ObjectClass::Program, &inventory),
-            Some(400_u32.div_ceil(50))
-        );
-    }
-
-    /// Variable-size classes divide into nothing, so their walk is open-ended; the
-    /// singletons are one bank whatever the inventory says.
-    #[test]
-    fn a_class_the_inventory_cannot_divide_has_no_expected_bank_count() {
-        let inventory = [status(ObjectClass::Sample, 7, 100, 333)];
-        assert_eq!(bank_count(ObjectClass::Sample, &inventory), None);
-        assert_eq!(bank_count(ObjectClass::Piano, &inventory), None);
-        assert_eq!(bank_count(ObjectClass::Live, &inventory), Some(1));
-        assert_eq!(bank_count(ObjectClass::Settings, &[]), Some(1));
+        scan.start(ObjectClass::Program);
+        scan.start(ObjectClass::SetList);
+        scan.finished(ObjectClass::Program);
+        assert_eq!(scan.take(), Some(ObjectClass::SetList));
     }
 }

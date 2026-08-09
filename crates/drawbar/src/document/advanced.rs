@@ -8,6 +8,7 @@ use eframe::egui;
 use nord_format::fields::Field;
 use nord_usb::{Location, ObjectClass};
 
+use super::controls::Sets;
 use crate::app::BAD;
 use crate::device::{Device, DeviceCmd};
 use crate::fields::byte_diff;
@@ -20,9 +21,28 @@ pub struct SlotDetails {
     pub at: Location,
 }
 
+/// Column widths for the table. Wide enough for the longest of each in an ne5 body.
+const NAME_W: f32 = 230.0;
+const BITS_W: f32 = 70.0;
+const STORED_W: f32 = 220.0;
+
+/// A cell being typed into, and what the library said about it last.
+#[derive(Default)]
+struct Cell {
+    path: String,
+    text: String,
+    /// The first frame the cell is open, so focus is taken once.
+    fresh: bool,
+    /// The library's refusal. While it is set the cell stays in edit.
+    error: Option<String>,
+}
+
 #[derive(Default)]
 pub struct Advanced {
     open: bool,
+    /// Narrows the table by path or label. A body has ninety fields.
+    filter: String,
+    cell: Cell,
     /// The entity the cached dump belongs to.
     ///
     /// ⚠️ `{:#?}` over an undecoded body prints every byte, and a piano library is
@@ -37,6 +57,171 @@ impl Advanced {
     #[cfg(test)]
     pub(super) fn start_open(&mut self) {
         self.open = true;
+    }
+
+    /// The whole body as a table: every field the library declares, engineering-only
+    /// ones included, each value editable by the spelling `set_field` takes.
+    ///
+    /// This is the engineer's view, so nothing is hidden and nothing is prettied up: an
+    /// unrecognised value is spelled `unknown (9)` here and that spelling is accepted
+    /// back, which the friendly view deliberately will not do.
+    pub fn table(&mut self, ui: &mut egui::Ui, fields: &[Field], sets: &mut Sets) {
+        ui.horizontal(|ui| {
+            ui.label("Filter");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .desired_width(200.0)
+                    .hint_text("path or name"),
+            );
+            let shown = fields.iter().filter(|f| self.matches(f)).count();
+            ui.label(
+                egui::RichText::new(format!("{shown} of {} fields", fields.len()))
+                    .small()
+                    .weak(),
+            );
+        });
+        ui.separator();
+
+        egui::Grid::new("registry_table")
+            .num_columns(4)
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("field").small().weak());
+                ui.label(egui::RichText::new("bits").small().weak());
+                ui.label(egui::RichText::new("stored").small().weak());
+                ui.label(egui::RichText::new("value").small().weak());
+                ui.end_row();
+
+                // Declaration order: it is the order the body is laid out in, which is
+                // what an engineer reading a dump alongside this is following.
+                let rows: Vec<&Field> = fields.iter().filter(|f| self.matches(f)).collect();
+                for field in rows {
+                    self.cell_row(ui, field, sets);
+                    ui.end_row();
+                }
+            });
+    }
+
+    fn matches(&self, field: &Field) -> bool {
+        let wanted = self.filter.trim().to_ascii_lowercase();
+        if wanted.is_empty() {
+            return true;
+        }
+        field.path.to_ascii_lowercase().contains(&wanted)
+            || strings::label(&field.path)
+                .to_ascii_lowercase()
+                .contains(&wanted)
+    }
+
+    fn cell_row(&mut self, ui: &mut egui::Ui, field: &Field, sets: &mut Sets) {
+        // Widths are set rather than left to the text: a path is long and a body has
+        // ninety of them, and a column that reflows per row cannot be read down.
+        ui.vertical(|ui| {
+            ui.set_min_width(NAME_W);
+            ui.add(egui::Label::new(strings::label(&field.path)).truncate());
+            ui.add(
+                egui::Label::new(egui::RichText::new(&field.path).monospace().small().weak())
+                    .truncate(),
+            );
+        });
+        ui.add_sized(
+            [BITS_W, ui.spacing().interact_size.y],
+            egui::Label::new(
+                egui::RichText::new(field.spec.placement)
+                    .monospace()
+                    .small()
+                    .weak(),
+            )
+            .truncate()
+            .halign(egui::Align::LEFT),
+        );
+        ui.add_sized(
+            [STORED_W, ui.spacing().interact_size.y],
+            egui::Label::new(egui::RichText::new(&field.display).monospace().small())
+                .truncate()
+                .halign(egui::Align::LEFT),
+        );
+
+        let editing = self.cell.path == field.path;
+        if !editing {
+            // Not a `selectable_label`: clicking the value is what opens it.
+            if ui
+                .add_sized(
+                    [180.0, ui.spacing().interact_size.y],
+                    egui::Label::new(egui::RichText::new(&field.value).monospace())
+                        .truncate()
+                        .halign(egui::Align::LEFT)
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text("click to edit")
+                .clicked()
+            {
+                self.cell = Cell {
+                    path: field.path.clone(),
+                    text: field.value.clone(),
+                    fresh: true,
+                    error: None,
+                };
+            }
+            return;
+        }
+
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut self.cell.text)
+                .desired_width(160.0)
+                .font(egui::TextStyle::Monospace),
+        );
+        // ⚠️ Taken once. Asking for focus every frame would mean the cell could never be
+        // left by clicking anything else.
+        if self.cell.fresh {
+            self.cell.fresh = false;
+            response.request_focus();
+            // Selected, so typing replaces the value rather than growing it.
+            let all = egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(self.cell.text.chars().count()),
+            );
+            if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id) {
+                state.cursor.set_char_range(Some(all));
+                state.store(ui.ctx(), response.id);
+            }
+        }
+        // The refusal sits beside the cell it is about: a message at the foot of ninety
+        // rows is a message about nothing in particular.
+        if let Some(why) = &self.cell.error {
+            ui.label(egui::RichText::new(why).small().color(BAD));
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.cell = Cell::default();
+            return;
+        }
+        let entered = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        // Losing focus while a refusal is showing keeps the cell open: the typed value
+        // is the only copy of what the operator meant.
+        let settled = entered || (response.lost_focus() && self.cell.error.is_none());
+        if !settled {
+            return;
+        }
+        let typed = self.cell.text.trim().to_string();
+        if typed == field.value {
+            self.cell = Cell::default();
+            return;
+        }
+        sets.push((field.path.clone(), typed));
+    }
+
+    /// Report what the library said about the last cell edit.
+    ///
+    /// `Ok` closes the cell; a refusal leaves it open with the message under the table.
+    pub fn settled(&mut self, outcome: Result<(), String>) {
+        match outcome {
+            Ok(()) => self.cell = Cell::default(),
+            Err(why) => {
+                self.cell.error = Some(why);
+                // Back into the cell: what was typed is the only copy of what was meant.
+                self.cell.fresh = true;
+            }
+        }
     }
 
     pub fn ui(

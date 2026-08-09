@@ -10,10 +10,12 @@ use eframe::egui;
 use nord_format::Entity;
 use nord_usb::{Location, ObjectClass};
 
-use crate::app::{dot, GOOD, WARN};
-use crate::device::{holdings, put_refusal, read_only, Device, DeviceCmd, BROWSED};
+use crate::app::{dot, GOOD};
+use crate::device::{
+    holdings, put_refusal, read_only, Device, DeviceCmd, Outgoing, BROWSED,
+};
 use crate::log::Log;
-use crate::strings::{folder, place};
+use crate::strings::{folder, place, shown};
 use crate::tabs::Tabs;
 use crate::workspace::{ExportWhat, Fresh, Workspace};
 
@@ -181,7 +183,9 @@ pub enum Act {
         class: ObjectClass,
         at: Location,
     },
-    /// The same, already agreed to. Nothing asks twice.
+    /// Write everything waiting, grouped by folder. Already agreed to.
+    SendAll,
+    /// The same as a Send, already agreed to. Nothing asks twice.
     Replace {
         id: u64,
         class: ObjectClass,
@@ -233,6 +237,14 @@ struct Ask {
     act: Act,
 }
 
+/// Whether a plain click starts a rename rather than moving the selection.
+///
+/// Both halves are needed. Selecting is the whole row's job, so a row that answers a
+/// click anywhere would otherwise arm the editor on every second click.
+pub fn arms_rename(selected: bool, on_name: bool) -> bool {
+    selected && on_name
+}
+
 /// What Enter does to an in-place rename: nothing, or a new name.
 ///
 /// A blank field is not a name and an unchanged one is not a rename, so both leave the
@@ -253,19 +265,36 @@ pub struct Browser {
 }
 
 impl Browser {
-    /// Draw the sidebar and collect what the user asked for.
+    /// Draw the two places side by side and collect what the user asked for.
+    ///
+    /// Adjacent columns rather than stacked lists: a drag between them is then a short
+    /// horizontal move, and a long device tree cannot push the local list off-screen.
     pub fn ui(&mut self, ui: &mut egui::Ui, workspace: &Workspace, device: &Device) -> Vec<Act> {
         let mut acts = Vec::new();
         self.dialog(ui.ctx(), &mut acts);
-        egui::ScrollArea::vertical()
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                self.computer(ui, workspace, &mut acts);
-                ui.add_space(10.0);
-                self.instrument(ui, device, &mut acts);
-            });
+        ui.columns(2, |columns| {
+            self.computer(&mut columns[0], workspace, &mut acts);
+            self.instrument(&mut columns[1], workspace, device, &mut acts);
+        });
         ghost(ui.ctx());
         acts
+    }
+
+    /// A column heading, and the strip of buttons under it.
+    fn heading(
+        &mut self,
+        ui: &mut egui::Ui,
+        title: &str,
+        buttons: impl FnOnce(&mut egui::Ui),
+    ) -> egui::Response {
+        let head = ui
+            .horizontal(|ui| {
+                ui.label(egui::RichText::new(title).strong());
+                buttons(ui);
+            })
+            .response;
+        ui.separator();
+        head
     }
 
     fn select(&mut self, item: Item) {
@@ -288,22 +317,33 @@ impl Browser {
     // ---- this computer ----------------------------------------------------------
 
     fn computer(&mut self, ui: &mut egui::Ui, workspace: &Workspace, acts: &mut Vec<Act>) {
-        let head = egui::CollapsingHeader::new(egui::RichText::new("This computer").strong())
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if ui.small_button("Open…").clicked() {
-                        acts.push(Act::OpenFiles);
+        let mut open_files = false;
+        let mut fresh = None;
+        let head = self.heading(ui, "This computer", |ui| {
+            open_files = ui.small_button("Open…").clicked();
+            ui.menu_button("New", |ui| {
+                for kind in Fresh::ALL {
+                    if ui.button(kind.label()).clicked() {
+                        fresh = Some(kind);
+                        ui.close();
                     }
-                    ui.menu_button("New", |ui| {
-                        for kind in Fresh::ALL {
-                            if ui.button(kind.label()).clicked() {
-                                acts.push(Act::New(kind));
-                                ui.close();
-                            }
-                        }
-                    });
-                });
+                }
+            });
+        });
+        if open_files {
+            acts.push(Act::OpenFiles);
+        }
+        if let Some(kind) = fresh {
+            acts.push(Act::New(kind));
+        }
+        // The heading takes a drop, so there is one target that is never also a place a
+        // drag could have started from.
+        self.drop_zone(ui, &head, Onto::Computer, acts);
+
+        egui::ScrollArea::vertical()
+            .id_salt("computer_scroll")
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
                 if workspace.entities().is_empty() {
                     ui.label(
                         egui::RichText::new("Drop Nord files here, or use Open…")
@@ -314,23 +354,19 @@ impl Browser {
                 for entity in workspace.entities() {
                     self.local_row(ui, entity, acts);
                 }
-                // Somewhere unambiguous to aim at, since every row above is also a
-                // place a drag could have started from.
                 if egui::DragAndDrop::has_payload_of_type::<Carried>(ui.ctx()) {
-                    let landing = row(ui, false, |ui| {
-                        ui.label(
-                            egui::RichText::new("Drop here to copy it to this computer")
-                                .weak()
-                                .italics(),
-                        );
-                    });
-                    self.drop_zone(ui, &landing, Onto::Computer, acts);
+                    let landing = row(
+                        ui,
+                        false,
+                        &Cells {
+                            name: "Drop here to copy it to this computer",
+                            faint: true,
+                            ..Cells::default()
+                        },
+                    );
+                    self.drop_zone(ui, &landing.response, Onto::Computer, acts);
                 }
             });
-
-        // The heading takes a drop too, so the section is a target even when it is
-        // collapsed.
-        self.drop_zone(ui, &head.header_response, Onto::Computer, acts);
     }
 
     fn local_row(
@@ -355,13 +391,19 @@ impl Browser {
             return;
         }
 
-        let response = row(ui, selected, |ui| {
-            if entity.dirty {
-                dot(ui, WARN).on_hover_text("changed since it was opened");
-            }
-            ui.label(&entity.name);
-            ui.label(egui::RichText::new(kind.chip()).small().weak());
-        });
+        let owed = entity.pending.then(|| destination(entity)).flatten();
+        let drawn = row(
+            ui,
+            selected,
+            &Cells {
+                name: &entity.name,
+                note: owed.as_deref().or(Some(kind.chip())),
+                dirty: entity.dirty,
+                waiting: owed.is_some(),
+                ..Cells::default()
+            },
+        );
+        let response = drawn.response;
 
         if response.dragged() {
             egui::DragAndDrop::set_payload(
@@ -373,18 +415,14 @@ impl Browser {
                 },
             );
         }
-        // A drop onto a row is a drop onto the list; it is taken here so the section's
+        // A drop onto a row is a drop onto the list; it is taken here so the column's
         // own zone does not act on it a second time.
         self.drop_zone(ui, &response, Onto::Computer, acts);
 
         if response.double_clicked() {
             acts.push(Act::Open(item));
         } else if response.clicked() {
-            // Clicking the name of an already-selected row is the rename gesture.
-            match selected {
-                true => self.start_rename(item, &entity.name),
-                false => self.select(item),
-            }
+            self.clicked(item, &response, drawn.name, &entity.name);
         }
         if selected && ui.input(|i| i.key_pressed(egui::Key::F2)) {
             self.start_rename(item, &entity.name);
@@ -396,7 +434,7 @@ impl Browser {
                 acts.push(Act::Open(item));
                 ui.close();
             }
-            if ui.button("Save to disk…").clicked() {
+            if ui.button("Export…").clicked() {
                 acts.push(Act::Save(entity.id));
                 ui.close();
             }
@@ -416,21 +454,58 @@ impl Browser {
         });
     }
 
+    /// What a plain click on a row does.
+    ///
+    /// ⚠️ Arming the rename editor needs the click to land on the **name**, not merely
+    /// on a row that was already selected. An editor armed by any second click sits
+    /// there with the whole name selected, so the next keystroke — one meant for the
+    /// document, or a stray one — replaces it, and the blur commits the replacement.
+    /// That is how a program came to be called "0".
+    fn clicked(&mut self, item: Item, response: &egui::Response, name: egui::Rect, from: &str) {
+        let on_name = response
+            .interact_pointer_pos()
+            .is_some_and(|at| name.contains(at));
+        match arms_rename(self.selection == Some(item), on_name) {
+            true => self.start_rename(item, from),
+            false => self.select(item),
+        }
+    }
+
     // ---- the instrument ---------------------------------------------------------
 
-    fn instrument(&mut self, ui: &mut egui::Ui, device: &Device, acts: &mut Vec<Act>) {
-        let Some(product) = device.state.product() else {
+    fn instrument(
+        &mut self,
+        ui: &mut egui::Ui,
+        workspace: &Workspace,
+        device: &Device,
+        acts: &mut Vec<Act>,
+    ) {
+        let Some(product) = device.state.product().map(str::to_string) else {
             return self.no_instrument(ui, device, acts);
         };
-        egui::CollapsingHeader::new(egui::RichText::new(product).strong())
-            .default_open(true)
+        let mut disconnect = false;
+        let mut send_all = false;
+        let owed = workspace.pending().len();
+        self.heading(ui, &product, |ui| {
+            dot(ui, GOOD).on_hover_text("attached");
+            disconnect = ui.small_button("Disconnect").clicked();
+            if owed > 0 {
+                send_all = ui
+                    .button(egui::RichText::new(format!("Send all ({owed})")).strong())
+                    .on_hover_text("write every waiting sound back to the instrument")
+                    .clicked();
+            }
+        });
+        if disconnect {
+            acts.push(Act::Disconnect);
+        }
+        if send_all {
+            self.ask_send_all(workspace, device);
+        }
+        egui::ScrollArea::vertical()
+            .id_salt("instrument_scroll")
+            .auto_shrink([false; 2])
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    dot(ui, GOOD).on_hover_text("attached");
-                    if ui.small_button("Disconnect").clicked() {
-                        acts.push(Act::Disconnect);
-                    }
-                });
                 for class in BROWSED {
                     self.class(ui, device, class, acts);
                 }
@@ -442,34 +517,32 @@ impl Browser {
             device.state.connection,
             crate::device::Connection::Connecting
         );
-        egui::CollapsingHeader::new(egui::RichText::new("No instrument").strong())
-            .default_open(true)
-            .show(ui, |ui| {
-                if connecting {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Waiting for the instrument…");
-                    });
-                } else if ui.button("Connect").clicked() {
-                    // ⚠️ Reached inside the frame the click landed in, which is what
-                    // keeps the browser's transient user activation alive for
-                    // `requestDevice()`.
-                    acts.push(Act::Connect);
-                }
-                ui.label(
-                    egui::RichText::new(
-                        "Close Nord Sound Manager first — it holds the instrument on its \
-                         own, and nothing else can reach it alongside.",
-                    )
-                    .small()
-                    .weak(),
-                );
-                ui.label(
-                    egui::RichText::new("In a browser: Chrome or Edge only.")
-                        .small()
-                        .weak(),
-                );
-            });
+        let mut connect = false;
+        self.heading(ui, "No instrument", |ui| {
+            if connecting {
+                ui.spinner();
+            } else {
+                // ⚠️ Reached inside the frame the click landed in, which is what keeps
+                // the browser's transient user activation alive for `requestDevice()`.
+                connect = ui.small_button("Connect").clicked();
+            }
+        });
+        if connect {
+            acts.push(Act::Connect);
+        }
+        ui.label(
+            egui::RichText::new(
+                "Close Nord Sound Manager first — it holds the instrument on its own, and \
+                 nothing else can reach it alongside.",
+            )
+            .small()
+            .weak(),
+        );
+        ui.label(
+            egui::RichText::new("In a browser: Chrome or Edge only.")
+                .small()
+                .weak(),
+        );
     }
 
     fn class(
@@ -502,40 +575,23 @@ impl Browser {
                         ui.label(egui::RichText::new(holdings).small().weak());
                     }
                 });
+                // One flat list, labelled the way the panel and the CLI label a slot.
+                // Banks are a numbering, not a container: grouping by them buried the
+                // row you were looking for behind a header you had to open.
                 let banks = device.state.banks_of(class);
                 if banks.is_empty() {
                     ui.label(egui::RichText::new("nothing read yet").small().weak());
                 }
-                let single = banks.len() == 1;
                 for bank in banks {
-                    match single {
-                        true => self.slots(ui, device, class, bank, acts),
-                        false => {
-                            egui::CollapsingHeader::new(format!("Bank {bank}"))
-                                .id_salt((class.to_raw(), bank))
-                                .default_open(bank == 1)
-                                .show(ui, |ui| self.slots(ui, device, class, bank, acts));
-                        }
+                    let Some(slots) = device.state.bank(class, bank) else {
+                        continue;
+                    };
+                    for index in 0..slots.len() {
+                        let at = Location::from_user(bank, index as u32 + 1);
+                        self.slot_row(ui, device, class, at, acts);
                     }
                 }
             });
-    }
-
-    fn slots(
-        &mut self,
-        ui: &mut egui::Ui,
-        device: &Device,
-        class: ObjectClass,
-        bank: u32,
-        acts: &mut Vec<Act>,
-    ) {
-        let Some(slots) = device.state.bank(class, bank) else {
-            return;
-        };
-        for index in 0..slots.len() {
-            let at = Location::from_user(bank, index as u32 + 1);
-            self.slot_row(ui, device, class, at, acts);
-        }
     }
 
     fn slot_row(
@@ -564,22 +620,17 @@ impl Browser {
             return;
         }
 
-        let response = row(ui, selected, |ui| {
-            ui.label(
-                egui::RichText::new(format!("{:>2}", at.slot + 1))
-                    .monospace()
-                    .small()
-                    .weak(),
-            );
-            match &held {
-                Some(name) => {
-                    ui.label(name);
-                }
-                None => {
-                    ui.label(egui::RichText::new("empty").weak().italics());
-                }
-            }
-        });
+        let drawn = row(
+            ui,
+            selected,
+            &Cells {
+                at: Some(shown(at)),
+                name: held.as_deref().unwrap_or("empty"),
+                faint: held.is_none(),
+                ..Cells::default()
+            },
+        );
+        let response = drawn.response;
 
         // ⚠️ A piano is a library of hundreds of megabytes, read whole into memory by
         // anything that fetches it. The folder lists what is installed and offers no way
@@ -605,13 +656,13 @@ impl Browser {
                 acts.push(Act::Open(item));
             }
         } else if response.clicked() {
-            match (selected, &held) {
-                (true, Some(name)) if !read_only(class) => self.start_rename(item, name),
+            match (&held, fetchable) {
+                (Some(name), true) => self.clicked(item, &response, drawn.name, name),
                 _ => self.select(item),
             }
         }
         if let Some(name) = &held {
-            if selected && !read_only(class) && ui.input(|i| i.key_pressed(egui::Key::F2)) {
+            if selected && fetchable && ui.input(|i| i.key_pressed(egui::Key::F2)) {
                 self.start_rename(item, name);
             }
         }
@@ -675,8 +726,11 @@ impl Browser {
 
     // ---- shared pieces ----------------------------------------------------------
 
-    /// The in-place editor, prefilled and selected. Enter or a click elsewhere settles
-    /// it; Escape leaves the name alone.
+    /// The in-place editor, prefilled and selected.
+    ///
+    /// ⚠️ **Only Enter renames.** Clicking away cancels. An editor that commits on blur
+    /// turns a stray keystroke into a rename nobody asked for, and the name is the only
+    /// record of what an object is — files store no name of their own.
     fn rename_row(&mut self, ui: &mut egui::Ui, original: &str) -> Option<String> {
         let rename = self.rename.as_mut()?;
         let output = ui
@@ -699,16 +753,13 @@ impl Browser {
             }
             return None;
         }
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.rename = None;
-            return None;
-        }
-        if !output.response.lost_focus() {
+        let entered = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if !entered && !output.response.lost_focus() {
             return None;
         }
         let typed = std::mem::take(&mut rename.text);
         self.rename = None;
-        renamed(original, &typed)
+        entered.then(|| renamed(original, &typed)).flatten()
     }
 
     /// Take a drop, if this is somewhere the dragged thing can land.
@@ -798,6 +849,41 @@ impl Browser {
         }
     }
 
+    /// The one question a batch asks: everything it is about to write, and what it
+    /// would replace.
+    fn ask_send_all(&mut self, workspace: &Workspace, device: &Device) {
+        let waiting = workspace.pending();
+        if waiting.is_empty() {
+            return;
+        }
+        let mut lines = Vec::new();
+        for entity in &waiting {
+            let Some((class, at)) = entity.origin.slot() else {
+                continue;
+            };
+            let where_ = place(class, at);
+            // Naming the occupant is the whole point of asking: a batch is where an
+            // operator stops reading each destination for themselves.
+            lines.push(match device.state.slot(class, at).flatten() {
+                Some(info) => format!(
+                    "“{}” replaces “{}” in {where_}",
+                    entity.name,
+                    info.name.trim()
+                ),
+                None => format!("“{}” goes into {where_}, which is empty", entity.name),
+            });
+        }
+        self.ask = Some(Ask {
+            title: match lines.len() {
+                1 => "Send 1 sound to the instrument?".to_string(),
+                n => format!("Send {n} sounds to the instrument?"),
+            },
+            note: Some(lines.join("\n")),
+            verb: "Send",
+            act: Act::SendAll,
+        });
+    }
+
     /// Raise the one Finder-style question a drop can need: the destination is taken.
     fn ask_replace(&mut self, occupant: &str, incoming: &str, at: String, act: Act) {
         self.ask = Some(Ask {
@@ -812,33 +898,100 @@ impl Browser {
     }
 }
 
-/// One row of the tree, sensing clicks and drags over its whole width.
-fn row(ui: &mut egui::Ui, selected: bool, contents: impl FnOnce(&mut egui::Ui)) -> egui::Response {
-    let background = ui.painter().add(egui::Shape::Noop);
-    let response = ui
-        .scope_builder(
-            egui::UiBuilder::new().sense(egui::Sense::click_and_drag()),
-            |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    contents(ui);
-                });
-            },
-        )
-        .response;
+/// What one row of a list shows.
+#[derive(Default)]
+pub struct Cells<'a> {
+    /// The monospace location column, `7:4`. Assets on this computer have none.
+    pub at: Option<String>,
+    pub name: &'a str,
+    /// A faint word after the name — what kind of thing it is, or where it is owed.
+    pub note: Option<&'a str>,
+    /// The note is a destination rather than a kind, so it is worth noticing.
+    pub waiting: bool,
+    /// The name is a stand-in rather than a real one.
+    pub faint: bool,
+    pub dirty: bool,
+}
+
+/// A drawn row: what it answered, and where its name ended up.
+pub struct Drawn {
+    pub response: egui::Response,
+    /// The name's own rectangle — the only sub-area of a row that means anything, and
+    /// only because clicking the name of a selected row starts a rename.
+    pub name: egui::Rect,
+}
+
+/// The width the location column takes, so names line up under each other.
+const AT_W: f32 = 42.0;
+
+/// One row of a list: a full-width click target with its text painted into it.
+///
+/// ⚠️ Nothing inside is a widget. A label allocates a hover rect of its own, which then
+/// wins the hit test over the row — the highlight drops out as the pointer crosses the
+/// text, and clicks land on whichever word happens to be under them. The row is the only
+/// thing that senses.
+fn row(ui: &mut egui::Ui, selected: bool, cells: &Cells) -> Drawn {
+    let height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click_and_drag(),
+    );
+
+    let visuals = ui.visuals();
     let fill = match (selected, response.hovered()) {
-        (true, _) => Some(ui.visuals().selection.bg_fill),
-        (false, true) => Some(ui.visuals().faint_bg_color),
+        (true, _) => Some(visuals.selection.bg_fill),
+        (false, true) => Some(visuals.faint_bg_color),
         (false, false) => None,
     };
+    let weak = visuals.weak_text_color();
+    let strong = match cells.faint {
+        true => weak,
+        false => visuals.text_color(),
+    };
+    let painter = ui.painter().clone();
     if let Some(fill) = fill {
-        ui.painter().set(
-            background,
-            egui::epaint::RectShape::filled(response.rect, 3.0, fill),
+        painter.rect_filled(rect, 3.0, fill);
+    }
+
+    let mut x = rect.left() + 4.0;
+    if cells.dirty {
+        painter.circle_filled(egui::pos2(x + 3.5, rect.center().y), 3.5, crate::app::WARN);
+    }
+    x += 10.0;
+
+    if let Some(at) = &cells.at {
+        let galley = painter.layout_no_wrap(at.clone(), egui::FontId::monospace(11.0), weak);
+        painter.galley(
+            egui::pos2(x, rect.center().y - galley.size().y / 2.0),
+            galley,
+            egui::Color32::PLACEHOLDER,
+        );
+        x += AT_W;
+    }
+
+    let font = egui::FontId::proportional(13.0);
+    let galley = painter.layout_no_wrap(cells.name.to_string(), font.clone(), strong);
+    let at = egui::pos2(x, rect.center().y - galley.size().y / 2.0);
+    let name = egui::Rect::from_min_size(at, galley.size());
+    x += galley.size().x + 8.0;
+    painter.galley(at, galley, egui::Color32::PLACEHOLDER);
+
+    if let Some(note) = cells.note {
+        let galley =
+            painter.layout_no_wrap(note.to_string(), egui::FontId::proportional(10.0), weak);
+        painter.galley(
+            egui::pos2(x, rect.center().y - galley.size().y / 2.0),
+            galley,
+            egui::Color32::PLACEHOLDER,
         );
     }
-    response
+    Drawn { response, name }
+}
+
+/// Where an asset is owed, for the badge that says so.
+fn destination(entity: &crate::workspace::LocalEntity) -> Option<String> {
+    let (class, at) = entity.origin.slot()?;
+    Some(format!("will be sent to {}", place(class, at)))
 }
 
 /// The name of whatever is being dragged, following the pointer.
@@ -915,6 +1068,7 @@ pub fn apply(
             Act::Replace { id, class, at } => {
                 send(browser, workspace, device, log, id, class, at, false)
             }
+            Act::SendAll => send_all(workspace, device, log),
             Act::Rearrange { class, from, to } => {
                 device.send(DeviceCmd::Move { class, from, to }, log)
             }
@@ -940,6 +1094,55 @@ pub fn apply(
             Act::Refused(why) => log.say(why),
         }
     }
+}
+
+/// Everything waiting, one command per folder.
+///
+/// Grouped by class because a session belongs to a class: one folder is one session, and
+/// the worker keeps it open across every item in it.
+fn send_all(workspace: &Workspace, device: &mut Device, log: &mut Log) {
+    // Refused before the transport is touched: bytes that are not what they claim to be
+    // must not reach a delete-then-write, and one bad item stops the whole batch rather
+    // than being skipped past.
+    for entity in workspace.pending() {
+        if let Err(e) = nord_usb::envelope::unwrap(&entity.bytes) {
+            log.error(format!("{}: {e}", entity.name));
+            log.trouble(format!(
+                "“{}” is not a file the instrument takes, so nothing was sent.",
+                entity.name
+            ));
+            return;
+        }
+    }
+    for (class, items) in grouped(workspace) {
+        device.send(DeviceCmd::SendAll { class, items }, log);
+    }
+}
+
+/// Everything waiting, gathered per folder in the order it was opened.
+///
+/// A session belongs to a folder, so a folder is the unit a batch is cut into.
+fn grouped(workspace: &Workspace) -> Vec<(ObjectClass, Vec<Outgoing>)> {
+    let mut by_class: Vec<(ObjectClass, Vec<Outgoing>)> = Vec::new();
+    for entity in workspace.pending() {
+        let Some((class, at)) = entity.origin.slot() else {
+            continue;
+        };
+        if !crate::device::sendable(class) {
+            continue;
+        }
+        let item = Outgoing {
+            id: entity.id,
+            at,
+            name: entity.name.clone(),
+            bytes: entity.bytes.clone(),
+        };
+        match by_class.iter_mut().find(|(held, _)| *held == class) {
+            Some((_, items)) => items.push(item),
+            None => by_class.push((class, vec![item])),
+        }
+    }
+    by_class
 }
 
 /// Put a local asset into a slot.
@@ -1114,6 +1317,123 @@ mod tests {
                 other => panic!("{other:?} should have been refused"),
             }
         }
+    }
+
+    /// Paint the two columns headlessly. What this catches is a layout that panics or
+    /// an id that collides, neither of which a unit test on the rules would see.
+    fn paint(with_device: bool) {
+        use crate::workspace::Fresh;
+
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut device = Device::new(ctx.clone());
+        let mut log = crate::log::Log::default();
+        let mut tabs = Tabs::default();
+        let mut browser = Browser::default();
+
+        for kind in [Fresh::Program, Fresh::Live, Fresh::Settings] {
+            workspace.create(kind, &mut log).unwrap();
+        }
+        if with_device {
+            // Every row shape a list can hold: a named slot, a vacant one, and a class
+            // that was never read.
+            device.pretend_scanned(ObjectClass::Program, 7, &["Africa Split", "", "Squabble B"]);
+            device.pretend_scanned(ObjectClass::Program, 8, &["Bass Manual"]);
+            device.pretend_scanned(ObjectClass::SetList, 1, &["Sunday"]);
+        }
+
+        // Twice: the second pass runs with the widget state the first left behind.
+        for _ in 0..2 {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::SidePanel::left("places").show(ctx, |ui| {
+                    let acts = browser.ui(ui, &workspace, &device);
+                    apply(
+                        &mut browser,
+                        acts,
+                        &mut workspace,
+                        &mut device,
+                        &mut tabs,
+                        &mut log,
+                    );
+                });
+            });
+        }
+    }
+
+    /// A batch is one command per folder, because a session belongs to a folder — and
+    /// something that cannot be written is not queued at all.
+    #[test]
+    fn a_batch_is_grouped_into_one_command_per_folder() {
+        use crate::workspace::{Fresh, Origin};
+
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut log = crate::log::Log::default();
+        let bytes = {
+            let id = workspace.create(Fresh::Program, &mut log).unwrap();
+            let bytes = workspace.get(id).unwrap().bytes.clone();
+            workspace.remove(id, &mut log);
+            bytes
+        };
+        let at = |slot| Location { bank: 6, slot };
+        for (class, slot) in [
+            (ObjectClass::Program, 0),
+            (ObjectClass::Program, 1),
+            (ObjectClass::SetList, 0),
+            // Live refuses a write, so it must not reach the queue.
+            (ObjectClass::Live, 0),
+        ] {
+            let id = workspace.ingest(
+                format!("{}.ne5p", place(class, at(slot))),
+                Origin::Device { class, at: at(slot) },
+                bytes.clone(),
+                &mut log,
+            );
+            workspace.mark_pending(id, true);
+        }
+
+        let queued = grouped(&workspace);
+        assert_eq!(queued.len(), 2, "one command per folder");
+        let programs = queued
+            .iter()
+            .find(|(class, _)| *class == ObjectClass::Program)
+            .expect("programs are queued");
+        assert_eq!(programs.1.len(), 2);
+        assert!(queued.iter().all(|(class, _)| *class != ObjectClass::Live));
+    }
+
+    #[test]
+    fn the_two_columns_paint_with_nothing_attached() {
+        paint(false);
+    }
+
+    #[test]
+    fn the_two_columns_paint_with_a_tree_to_show() {
+        paint(true);
+    }
+
+    /// ⚠️ The gesture that lost a program its name. An editor armed by any second click
+    /// on a selected row sits there with everything selected, so the next keystroke
+    /// replaces the name and the blur commits it.
+    #[test]
+    fn a_click_away_from_the_name_selects_rather_than_arming_a_rename() {
+        // The row is the click target, so most of it must be safe to click.
+        assert!(!arms_rename(true, false), "past the name on a selected row");
+        assert!(
+            !arms_rename(false, true),
+            "on the name of an unselected row"
+        );
+        assert!(!arms_rename(false, false));
+        assert!(arms_rename(true, true), "the one gesture that renames");
+    }
+
+    /// Only Enter renames: an armed editor that commits on blur turns a stray keystroke
+    /// into a rename nobody asked for.
+    #[test]
+    fn a_rename_needs_enter_and_a_real_change() {
+        assert_eq!(renamed("Africa Split", "LA Grand"), Some("LA Grand".into()));
+        // What blur hands back is nothing at all — see `rename_row`.
+        assert_eq!(renamed("Africa Split", "Africa Split"), None);
     }
 
     /// Enter on an untouched field, or on an empty one, leaves the asset alone.

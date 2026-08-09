@@ -35,7 +35,7 @@ mod web;
 #[cfg(target_arch = "wasm32")]
 use web::Link;
 
-pub use scan::{bank_count, Progress, Scan};
+pub use scan::{Progress, Scan};
 pub use worker::{Emit, Flow};
 
 /// The folders the browser shows, in the order it shows them.
@@ -51,8 +51,17 @@ pub const BROWSED: [ObjectClass; 6] = [
 /// What the UI asks the instrument to do.
 #[derive(Clone)]
 pub enum DeviceCmd {
-    Inventory,
-    /// One `INFO` per slot of a bank, in a single session.
+    /// One class end to end — counters and every bank — inside a single session,
+    /// streaming a [`DeviceEvent::BankScanned`] as each bank lands.
+    ScanClass {
+        class: ObjectClass,
+        /// Slots to ask each bank for.
+        slots: u32,
+        /// Ceiling on the walk, for a class whose size the counters cannot divide.
+        banks: u32,
+    },
+    /// One `INFO` per slot of a single bank. What a mutation owes: only the bank it
+    /// touched can have changed.
     ScanBank {
         class: ObjectClass,
         bank: u32,
@@ -80,6 +89,15 @@ pub enum DeviceCmd {
         name: String,
         bytes: Vec<u8>,
     },
+    /// Every queued object of one class, written inside a single session.
+    ///
+    /// Each item still runs the whole read-back / delete / write / restore flow a lone
+    /// [`DeviceCmd::Put`] runs; what is shared is the session around them. A refusal
+    /// stops the batch where it stands.
+    SendAll {
+        class: ObjectClass,
+        items: Vec<Outgoing>,
+    },
     Move {
         class: ObjectClass,
         from: Location,
@@ -104,6 +122,15 @@ pub enum DeviceCmd {
         at: Location,
     },
     Disconnect,
+}
+
+/// One object waiting to go back to the instrument.
+#[derive(Clone)]
+pub struct Outgoing {
+    pub id: u64,
+    pub at: Location,
+    pub name: String,
+    pub bytes: Vec<u8>,
 }
 
 /// How one operation is spoken about.
@@ -135,7 +162,7 @@ impl DeviceCmd {
     /// What the log and the in-flight spinner call this operation.
     pub fn label(&self) -> String {
         match self {
-            DeviceCmd::Inventory => "inventory".into(),
+            DeviceCmd::ScanClass { class, .. } => format!("scan {}", class.label()),
             DeviceCmd::ScanBank { bank, .. } => format!("scan bank {bank}"),
             DeviceCmd::SlotInfo { at, .. } => format!("info {}", shown(*at)),
             DeviceCmd::Deps { at, .. } => format!("deps {}", shown(*at)),
@@ -144,6 +171,9 @@ impl DeviceCmd {
                 false => format!("get {}", shown(*at)),
             },
             DeviceCmd::Put { at, name, .. } => format!("put {name} -> {}", shown(*at)),
+            DeviceCmd::SendAll { class, items } => {
+                format!("put {} objects -> {}", items.len(), class.label())
+            }
             DeviceCmd::Move { from, to, .. } => {
                 format!("move {} -> {}", shown(*from), shown(*to))
             }
@@ -161,11 +191,7 @@ impl DeviceCmd {
     pub fn words(&self) -> Words {
         let log = self.label();
         match self {
-            DeviceCmd::Inventory => words(
-                ("Checking", "Checked", "check"),
-                "what the instrument holds".into(),
-                log,
-            ),
+            DeviceCmd::ScanClass { class, .. } => words(READING, folder(*class).to_string(), log),
             DeviceCmd::ScanBank { class, bank, .. } => {
                 words(READING, format!("{} — bank {bank}", folder(*class)), log)
             }
@@ -183,6 +209,14 @@ impl DeviceCmd {
             } => words(
                 ("Sending", "Sent", "send"),
                 format!("“{name}” to {}", place(*class, *at)),
+                log,
+            ),
+            DeviceCmd::SendAll { class, items } => words(
+                ("Sending", "Sent", "send"),
+                match items.len() {
+                    1 => format!("1 sound to {}", folder(*class)),
+                    n => format!("{n} sounds to {}", folder(*class)),
+                },
                 log,
             ),
             DeviceCmd::Move { class, from, to } => words(
@@ -224,7 +258,13 @@ pub enum DeviceEvent {
     Disconnected,
     Started(String),
     Finished,
-    Inventory(Vec<Status>),
+    /// A class's own counters, read at the head of its walk.
+    ClassStatus {
+        class: ObjectClass,
+        status: Status,
+        /// Banks the counters say to expect, where they divide.
+        banks: Option<u32>,
+    },
     BankScanned {
         class: ObjectClass,
         bank: u32,
@@ -247,6 +287,12 @@ pub enum DeviceEvent {
         origin: Origin,
         bytes: Vec<u8>,
         open: bool,
+    },
+    /// One object of a batch landed.
+    Sent {
+        id: u64,
+        class: ObjectClass,
+        at: Location,
     },
     /// A slot's former contents, which a failed write and a failed restore left with
     /// nowhere else to go.
@@ -298,8 +344,14 @@ pub struct DeviceState {
     /// The operation currently running, if any. One at a time.
     pub in_flight: Option<Words>,
     pub inventory: Vec<Status>,
-    /// The background read of every bank of every class.
+    /// The background read of every class.
     pub scan: Scan,
+    /// The slot this app last asked the instrument to load, per class.
+    ///
+    /// ⚠️ Only what **this app** selected. A selection made on the panel itself is
+    /// invisible to the host — nothing on the wire reports it — so this is a record of
+    /// our own commands, not of what the instrument is actually playing.
+    selected: HashMap<u32, Location>,
     banks: HashMap<(u32, u32), Vec<Option<ProgramInfo>>>,
     pub detail: Detail,
 }
@@ -359,8 +411,14 @@ impl DeviceState {
         self.inventory.clear();
         self.detail = Detail::default();
         self.scan.clear();
+        self.selected.clear();
     }
 }
+
+/// ⚠️ A ceiling on a walk whose end the device alone decides. Nothing on the wire says a
+/// class cannot hold more banks than this; the cap is here so an instrument that never
+/// answers "out of range" cannot walk forever.
+pub const MAX_BANKS: u32 = 32;
 
 /// Slots per bank, per class.
 ///
@@ -396,6 +454,11 @@ pub fn holdings(class: ObjectClass, inventory: &[Status]) -> Option<String> {
 /// over; the browser lists what is installed and offers nothing that would move it.
 pub fn read_only(class: ObjectClass) -> bool {
     matches!(class, ObjectClass::Piano)
+}
+
+/// Whether this app will write into a class at all.
+pub fn sendable(class: ObjectClass) -> bool {
+    put_refusal(class).is_none() && !read_only(class)
 }
 
 /// Whether a class accepts a write.
@@ -450,11 +513,14 @@ pub struct Device {
     link: Link,
     /// What the user asked for. Always dispatched ahead of the background scan.
     pending: VecDeque<DeviceCmd>,
-    /// The bank the running command is reading, so a scan that fails can be taken off
-    /// the queue rather than left looking like it is still going.
-    reading: Option<(ObjectClass, u32)>,
+    /// The class the running command is walking, so a scan that fails is taken off the
+    /// queue rather than left looking like it is still going.
+    reading: Option<ObjectClass>,
     /// The banks the running mutation touches, to be read again once it finishes.
     rescan: Vec<(ObjectClass, u32)>,
+    /// The loaded slots the running command overwrites. A batch can touch one per
+    /// class, so this is a list rather than a single slot.
+    reselect: Vec<(ObjectClass, Location)>,
 }
 
 impl Device {
@@ -467,6 +533,7 @@ impl Device {
             pending: VecDeque::new(),
             reading: None,
             rescan: Vec::new(),
+            reselect: Vec::new(),
         }
     }
 
@@ -503,15 +570,14 @@ impl Device {
         self.pending.push_back(cmd);
     }
 
-    /// Walk every bank of `class` again.
+    /// Walk `class` again, in one session.
     ///
     /// The names already cached stay up until each bank's replacement arrives: a walk is
-    /// dozens of operations long, and emptying the folder for the length of one is worse
-    /// than showing names that are about to be confirmed. What a mutation touched is
-    /// dropped outright — see [`Device::dispatch`].
+    /// dozens of reads long, and emptying the folder for the length of one is worse than
+    /// showing names that are about to be confirmed. What a mutation touched is dropped
+    /// outright — see [`Device::dispatch`].
     pub fn read_class(&mut self, class: ObjectClass) {
-        let total = bank_count(class, &self.state.inventory);
-        self.state.scan.start(class, total);
+        self.state.scan.start(class);
     }
 
     /// Start the next command if the instrument is free. Call once a frame, after the
@@ -524,14 +590,14 @@ impl Device {
             self.reading = None;
             return self.dispatch(cmd);
         }
-        let Some((class, bank)) = self.state.scan.take() else {
+        let Some(class) = self.state.scan.take() else {
             return;
         };
-        self.reading = Some((class, bank));
-        self.dispatch(DeviceCmd::ScanBank {
+        self.reading = Some(class);
+        self.dispatch(DeviceCmd::ScanClass {
             class,
-            bank,
             slots: slots_per_bank(class),
+            banks: MAX_BANKS,
         });
     }
 
@@ -547,13 +613,72 @@ impl Device {
             DeviceCmd::Move { class, from, to } | DeviceCmd::Duplicate { class, from, to } => {
                 vec![(*class, from.bank + 1), (*class, to.bank + 1)]
             }
+            DeviceCmd::SendAll { class, items } => {
+                let mut banks: Vec<(ObjectClass, u32)> =
+                    items.iter().map(|item| (*class, item.at.bank + 1)).collect();
+                banks.dedup();
+                banks
+            }
             _ => Vec::new(),
         };
         for (class, bank) in &self.rescan {
             self.state.forget_bank(*class, *bank);
         }
+        // Writing into the slot the instrument has loaded leaves the panel playing the
+        // buffer it read before the write; only a fresh SELECT reloads it. Confirmed on
+        // hardware.
+        let loaded = |state: &DeviceState, class: &ObjectClass, at: &Location| {
+            state
+                .selected
+                .get(&class.to_raw())
+                .filter(|held| *held == at)
+                .map(|at| (*class, *at))
+        };
+        self.reselect = match &cmd {
+            DeviceCmd::Put { class, at, .. } | DeviceCmd::Rename { class, at, .. } => {
+                loaded(&self.state, class, at).into_iter().collect()
+            }
+            DeviceCmd::SendAll { class, items } => items
+                .iter()
+                .filter_map(|item| loaded(&self.state, class, &item.at))
+                .collect(),
+            _ => Vec::new(),
+        };
+        if let DeviceCmd::Select { class, at } = &cmd {
+            self.state.selected.insert(class.to_raw(), *at);
+        }
         self.state.in_flight = Some(cmd.words());
         self.link.send(cmd);
+    }
+
+    /// Fill in a bank as though the instrument had answered, for a headless render.
+    #[cfg(test)]
+    pub fn pretend_scanned(&mut self, class: ObjectClass, bank: u32, names: &[&str]) {
+        use nord_usb::wire::ProgramInfo;
+
+        self.state.connection = Connection::Connected(DeviceCard {
+            product: "Electro 5".into(),
+            manufacturer: None,
+            vendor_id: 0x0ffc,
+            product_id: 0,
+            serial: None,
+        });
+        let slots = names
+            .iter()
+            .enumerate()
+            .map(|(slot, name)| {
+                // An empty name is a vacant slot, which is a row like any other.
+                (!name.is_empty()).then(|| ProgramInfo {
+                    location: Location::from_user(bank, slot as u32 + 1),
+                    body_len: 121,
+                    format: "ne5p".into(),
+                    version: 4,
+                    crc32: None,
+                    name: (*name).to_string(),
+                })
+            })
+            .collect();
+        self.state.banks.insert((class.to_raw(), bank), slots);
     }
 
     /// Drain the worker's events into the cache, the local list and the tabs. Call once
@@ -570,9 +695,11 @@ impl Device {
                     self.state.connection = Connection::Connected(card);
                     self.state.forget_everything();
                     self.pending.clear();
-                    // The first thing worth knowing, and read-only. Everything else is
-                    // queued off the back of it, once the class sizes are known.
-                    self.send(DeviceCmd::Inventory, log);
+                    // One walk per class, each its own session. Nothing is asked ahead
+                    // of them: a class's counters are read at the head of its own walk.
+                    for class in BROWSED {
+                        self.read_class(class);
+                    }
                 }
                 DeviceEvent::ConnectFailed(why) => {
                     log.error(why);
@@ -589,28 +716,37 @@ impl Device {
                 }
                 DeviceEvent::Started(what) => log.info(what),
                 DeviceEvent::Finished => {
-                    if let Some((class, _)) = self.reading.take() {
-                        // The bank never arrived, so the walk is not going anywhere.
-                        self.state.scan.stopped(class);
+                    if let Some(class) = self.reading.take() {
+                        self.state.scan.finished(class);
+                    }
+                    // The panel is still playing what it read before the write, so it is
+                    // asked to load the slot again. `select` is read-only.
+                    for (class, at) in std::mem::take(&mut self.reselect) {
+                        self.pending.push_back(DeviceCmd::Select { class, at });
                     }
                     for (class, bank) in std::mem::take(&mut self.rescan) {
-                        self.state.scan.again(class, bank);
+                        self.pending.push_back(DeviceCmd::ScanBank {
+                            class,
+                            bank,
+                            slots: slots_per_bank(class),
+                        });
                     }
                     self.state.in_flight = None;
                 }
-                DeviceEvent::Inventory(report) => {
-                    self.state.inventory = report;
-                    for class in BROWSED {
-                        self.read_class(class);
-                    }
+                DeviceEvent::ClassStatus {
+                    class,
+                    status,
+                    banks,
+                } => {
+                    self.state.inventory.retain(|held| held.class != class);
+                    self.state.inventory.push(status);
+                    self.state.scan.expect(class, banks);
                 }
                 DeviceEvent::BankScanned { class, bank, slots } => {
-                    let full = slots.len() as u32 == slots_per_bank(class);
                     if !slots.is_empty() {
                         self.state.banks.insert((class.to_raw(), bank), slots);
                     }
-                    self.state.scan.scanned(class, bank, full);
-                    self.reading = None;
+                    self.state.scan.bank(class, bank);
                 }
                 DeviceEvent::SlotInfo { at, info, .. } => {
                     self.state.detail = Detail {
@@ -651,6 +787,8 @@ impl Device {
                     ));
                     workspace.ingest(name, Origin::Rescued { at }, bytes, log);
                 }
+                // One of a batch landed, so it is no longer owed.
+                DeviceEvent::Sent { id, .. } => workspace.mark_pending(id, false),
                 DeviceEvent::Note(text) => log.info(text),
                 DeviceEvent::OpOk(text) => {
                     log.info(text);

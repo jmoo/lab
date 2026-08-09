@@ -83,8 +83,17 @@ impl Tabs {
                         {
                             activate = Some(tab.id);
                         }
-                        if entity.dirty {
-                            dot(ui, WARN).on_hover_text("changed since it was opened");
+                        if entity.pending {
+                            let owed = entity
+                                .origin
+                                .slot()
+                                .map(|(class, at)| {
+                                    format!("will be sent to {}", crate::strings::place(class, at))
+                                })
+                                .unwrap_or_default();
+                            dot(ui, WARN).on_hover_text(owed);
+                        } else if entity.dirty {
+                            dot(ui, crate::app::GOOD).on_hover_text("changed since it was opened");
                         }
                         if ui.small_button("×").clicked() {
                             close = Some(tab.id);

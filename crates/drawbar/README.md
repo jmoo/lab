@@ -22,31 +22,48 @@ The window is a file browser over two places your sounds live:
 
 | region | what it holds |
 |---|---|
-| **Sidebar** (left) | **This computer** — dropped or opened files, copies pulled off the instrument, fresh defaults — and the **instrument**, whose folders (Programs, Set lists, Samples, Pianos, Live, Settings) fill in by themselves once it is attached |
-| **Tabs** (centre) | one document per thing you opened. Double-click anything in the sidebar to open it; something on the instrument is copied here first |
+| **Two storage columns** (left) | **This computer** — dropped or opened files, copies pulled off the instrument, fresh defaults — beside the **instrument**, whose folders (Programs, Set lists, Samples, Pianos, Live, Settings) fill in by themselves once it is attached. Side by side, so moving a sound between them is a short drag; each column scrolls on its own, and the dock they share is resizable |
+| **Tabs** (centre) | one document per thing you opened. Double-click anything in the sidebar to open it; something on the instrument is copied here first. Each has a **Basic** and an **Advanced** face |
 | **Status strip** (bottom) | one line about what just happened, and a spinner while something is running. Click it for the full activity log, protocol detail and all |
 
 ### This computer
 
-Files arrive by drag-and-drop or **Open…**, and leave through **Save to disk…**
-on a row's context menu. Every file is decoded and immediately re-encoded to
-check the bytes come back identical; a file that fails to decode still gets a
-row, because reporting a bad file is the point of opening it. **New** makes a
-fresh program, live or settings document.
+Files arrive by drag-and-drop or **Open…**, and leave through **Export…** on a
+row's context menu or the document header. Every file is decoded and immediately
+re-encoded to check the bytes come back identical; a file that fails to decode
+still gets a row, because reporting a bad file is the point of opening it.
+**New** makes a fresh program, live or settings document.
+
+**The list is kept between sessions.** What is on this computer is written to the
+browser's own storage (or a small file beside the app natively) and comes back on
+the next start, re-decoded and re-checked on the way in. Edits are kept without
+being asked for. Two limits, both said out loud when they bite: a single sound
+over about a megabyte is not kept — a sample runs to megabytes and one would fill
+the store — and the whole list is capped well under the browser's quota. Removing
+a row removes it from the store.
 
 ### The instrument
 
 **Connect** opens the device (a chooser in the browser, the first attached
-Clavia natively) and reads what it holds. From there every bank of every folder
-is read in the background, filling names into the tree as they arrive — the
-folder heading says how far it has got. Nothing asks for a bank number. **Read
-again** re-walks one folder; anything you change is re-read on its own, and a
-change made on the panel while the app is attached drops every cached name and
-reads them again.
+Clavia natively) and reads what it holds. Each folder is read in **one session**,
+the way Nord Sound Manager does it — the session is opened once and every slot
+read inside it — so connecting no longer walks the instrument's display through
+an open and a close per bank. Names fill in as each bank lands, and the folder
+heading says how far it has got. Nothing asks for a bank number. **Read again**
+re-walks one folder; anything you change is re-read on its own, and a change made
+on the panel while the app is attached drops every cached name and reads them
+again.
 
-Empty slots are rows, not absences: they are places something can be dropped.
-Pianos are listed and nothing more — a piano library is hundreds of megabytes,
-and the folder offers no way to pull one down.
+A folder is **one flat list**, each row labelled the way the panel and the CLI
+label a slot — `7:4  Africa Split`. Empty slots are rows, not absences: they are
+places something can be dropped. Pianos are listed and nothing more — a piano
+library is hundreds of megabytes, and the folder offers no way to pull one down.
+
+Writing into the slot the instrument currently has loaded leaves the panel
+playing what it read before the write, so after a put or a rename that touches
+it, the app asks the instrument to load that slot again. It can only do this for
+a slot **it** selected: a selection made on the panel itself is invisible to the
+host.
 
 ### Moving things
 
@@ -62,11 +79,14 @@ Drag between the two places, or within one:
 A target that cannot take what you are dragging does not light up; drop on it
 anyway and the status strip says why.
 
-Right-click a row for Open, Copy to this computer / Save to disk…, Load on
-instrument, Rename, Duplicate, Delete… and Remove from list. Click the name of a
-row that is already selected — or press F2 — to rename it in place; Enter
-commits, Escape leaves it alone. Renaming on the instrument happens straight
-away, because renaming it back is its own undo.
+Clicking anywhere in a row selects it — the whole row is the target, not the
+words in it.
+
+Right-click a row for Open, Copy to this computer / Export…, Load on instrument,
+Rename, Duplicate, Delete… and Remove from list. Click the **name** of a row that
+is already selected — or press F2 — to rename it in place; **Enter** renames and
+anything else leaves it alone. Renaming on the instrument happens straight away,
+because renaming it back is its own undo.
 
 Progress is painted on the *instrument's own display* by the operations
 themselves — there is no host-side progress callback, so the app shows a spinner
@@ -90,21 +110,27 @@ and does not invent one.
   strands the instrument on its progress screen with no way out but a power
   cycle.
 - **One operation at a time.** What you asked for always goes ahead of the
-  background read of the tree, so a click never waits on it.
+  background read of the tree, so a click never waits on it. Reading a whole
+  folder is one operation, and its progress arrives while it is still running.
 
 ### The document
 
-A tab holds a working copy. Its header says where it came from, and something copied
-off the instrument offers **Send to Programs 7:4** to put it back through the flow
-above. **Revert** goes back to the bytes the tab opened with — the only undo there is —
-and **Save to disk…** writes the file.
+A tab holds a working copy. Its header says where it came from; **Revert** goes back to
+the bytes the tab opened with — the only undo there is — and **Export…** writes the file.
+
+A name is this app's own: a Nord file stores none. It is set when the bytes arrive —
+from the slot the instrument read it out of, from the filename, or from the New menu —
+and nothing after that re-derives it.
 
 Looking at a document and changing it are the same thing. There is no Apply: a control
 you move is set on the working copy that instant, the bytes are re-encoded and
-re-checked, and the tab picks up a dot. The sections are the ones on the instrument's
-own front panel — Organ, Piano, Sample, Effects, EQ, Keyboard & split — and a settings
-document is divided the way the instrument's menus are: System, MIDI, Sound, At
-power-on.
+re-checked, and the tab picks up a dot.
+
+**Basic** is the front panel. Sections are titled boxes in panel order — Organ, Piano,
+Sample, Effects, EQ, Keyboard & split — and none of them folds away, because a control
+you cannot see is a control you do not know you have. **Only the engines a part is
+actually playing are there**: set both parts to piano and the organ section goes, and
+the part pickers that bring it back are in Keyboard & split, which never goes.
 
 **A document shows what the keyboard would be showing.**
 
@@ -115,8 +141,6 @@ power-on.
   instrument is playing is marked, and clicking the other one switches it.
 - In **b3+bass**, preset 1 is the bass manual: two drawbars, in their own fields. The
   nine nibbles they shadow hold stale leftovers and are not shown at all.
-- A section no part is playing starts collapsed rather than disappearing — the picker
-  inside it is how a part comes to play it.
 - **Transpose is one control**, a switch and a number written together, because that is
   what the panel's button is. The instrument ignores the amount while the switch is
   clear, and never clears the switch once it is set.
@@ -124,22 +148,48 @@ power-on.
   as *unrecognized value (6)* and keeps it in the list, so changing away from it can be
   undone.
 - Reserved bits, unexplained fields and the library ids that name a program's piano and
-  sample are not offered. They are all still in **Advanced**.
+  sample are not offered here. They are all in Advanced.
 
 **Drawbars** are the widget the crate is named after: pull down to draw out, with the
-positions in digits underneath (`88 8800 000`). No hex anywhere in the ordinary view.
+positions in digits underneath (`88 8800 000`). No hex anywhere in Basic.
 
 Sample instruments show their name and the stretch of keyboard each zone covers, with
 root key and top note as note names (`C4` is middle C). Only v2 `.nsmp` content can be
 changed; nsmp3/nsmp4 is carried verbatim.
 
+### Sending changes back
+
+Editing something you copied off the instrument does not write to it. The document is
+marked **pending** instead — the tab and its row say *will be sent to Programs 7:4* —
+and it goes nowhere until you say so.
+
+- **Send all (n)**, beside the instrument's name, writes everything waiting. It asks
+  once, listing every destination and naming what each one replaces, and then writes
+  each folder's worth inside a single session. Progress arrives item by item.
+- **Send to Programs 7:4** in a document's header sends that one, for when a batch is
+  more ceremony than the job needs.
+- If an item is refused the batch stops there. What was already written stays written,
+  the report says how far it got, and the rest stay pending.
+- **Cmd/Ctrl+S** marks the open document pending. For something that only lives on this
+  computer it says so and does nothing, because those edits are already kept. It is
+  never a file-export shortcut — that is Export….
+
 ### Advanced
 
-Every document ends with an **Advanced** disclosure, and everything the engineering
-build put in front of you is in it: the verify badge, the CBIN header numbers, the
-bytes that moved since the tab opened (with the checksum rows annotated so they do not
-read as a second edit nobody made), the full field registry with each field's stored
-spelling and bit placement, the `{:#?}` dump, and — for something read off the
+The other face of every document, and the only face for something with no friendly view
+(a file that did not decode, a set list).
+
+It is the whole body as a table: one row per field the library declares — label, path,
+bit placement, decoded value, and the stored spelling in a cell you can type into.
+Nothing is hidden and nothing is prettied up. Reserved bits, both halves of the
+transpose pair, the library ids and the wide hex registers are all here, in declaration
+order, with a filter box over the names. A value the library refuses says so beside the
+cell and leaves what you typed where it is. `unknown (9)` is a legal spelling here —
+this is the engineer's view.
+
+Under the table sits the record: the verify badge, the CBIN header numbers, the bytes
+that moved since the tab opened (with the checksum rows annotated so they do not read as
+a second edit nobody made), the `{:#?}` dump, and — for something read off the
 instrument — the slot's own info and dependency list, on request.
 
 ### What lives in `nord-cli` instead

@@ -14,11 +14,45 @@ use std::sync::mpsc::Sender;
 use eframe::egui;
 use nord_usb::transport::Transport;
 use nord_usb::wire::{Dependency, ProgramInfo};
+use nord_usb::session::ReadWrite;
 use nord_usb::{op, Error, Location, ObjectClass, Session};
 
-use super::{DeviceCmd, DeviceEvent};
+use super::{DeviceCmd, DeviceEvent, Outgoing};
 use crate::strings::shown;
 use crate::workspace::Origin;
+
+/// Run many items inside **one** session.
+///
+/// ⚠️ Open once, loop the per-item unit, commit once — the batching shape `nord_usb::op`
+/// documents and the one the capture corpus shows NSM using. A session per item makes
+/// the instrument cycle its own display through an open and a close for every slot.
+///
+/// The body may emit events as it goes; they reach the UI while the run is still
+/// running, which is what makes a long walk feel live. The session is committed on
+/// **every** path out of the body, including an early `?`.
+///
+/// `write` escalates to a destructive session — the batch-write path needs it, a scan
+/// must not have it.
+macro_rules! one_session {
+    ($t:expr, $class:expr, $changed:expr, |$s:ident| $body:block) => {
+        one_session!(@run Session::open($t, $class).await?, $changed, |$s| $body)
+    };
+    (write $t:expr, $class:expr, $changed:expr, |$s:ident| $body:block) => {
+        one_session!(
+            @run Session::open($t, $class).await?.allow_destructive_writes(),
+            $changed,
+            |$s| $body
+        )
+    };
+    (@run $open:expr, $changed:expr, |$s:ident| $body:block) => {{
+        #[allow(unused_mut)]
+        let mut $s = $open;
+        let result = async { $body }.await;
+        *$changed |= $s.instrument_changed();
+        let closed = $s.commit().await;
+        finish(result, closed)
+    }};
+}
 
 /// The event channel back to the UI thread, with the repaint that makes an event
 /// visible before the next input arrives.
@@ -86,23 +120,6 @@ async fn execute<T: Transport>(
         // Handled by `run`; the transport is closed by the caller, which owns it.
         DeviceCmd::Disconnect => Ok(None),
 
-        DeviceCmd::Inventory => {
-            let report = op::inventory(t).await.map_err(|e| e.to_string())?;
-            // Not merely an empty inventory: every class is queried, so nothing coming
-            // back means no class answered at all.
-            if report.is_empty() {
-                return Err(
-                    "no object class answered — either the instrument is not in a \
-                            usable session state (a power cycle clears it), or the \
-                            connection failed"
-                        .into(),
-                );
-            }
-            let note = format!("inventory: {} classes answered", report.len());
-            emit.send(DeviceEvent::Inventory(report));
-            Ok(Some(note))
-        }
-
         DeviceCmd::ScanBank {
             class,
             bank,
@@ -118,6 +135,20 @@ async fn execute<T: Transport>(
             );
             emit.send(DeviceEvent::BankScanned { class, bank, slots });
             Ok(Some(note))
+        }
+
+        DeviceCmd::ScanClass {
+            class,
+            slots,
+            banks,
+        } => {
+            let (read, items) = scan_class(t, class, slots, banks, emit, changed)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(Some(format!(
+                "{}: {read} banks, {items} items, one session",
+                class.label()
+            )))
         }
 
         DeviceCmd::SlotInfo { class, at } => {
@@ -169,7 +200,12 @@ async fn execute<T: Transport>(
             at,
             name,
             bytes,
-        } => put(t, class, at, &name, bytes, emit, changed).await,
+        } => put_one(t, class, at, &name, bytes, emit, changed)
+            .await
+            .map_err(|e| e.to_string())?
+            .map(Some),
+
+        DeviceCmd::SendAll { class, items } => send_all(t, class, items, emit, changed).await,
 
         DeviceCmd::Select { class, at } => {
             select(t, class, at, changed)
@@ -216,53 +252,51 @@ async fn execute<T: Transport>(
 /// between, and the only copy of its contents is in this process's memory. If the
 /// restore fails too, those bytes leave here as [`DeviceEvent::Rescued`] rather than
 /// being dropped on the floor.
+///
+/// Runs inside a session the caller owns, so a batch shares one.
 async fn put<T: Transport>(
-    t: &mut T,
-    class: ObjectClass,
+    s: &mut Session<'_, T, ReadWrite>,
     at: Location,
     what: &str,
     bytes: Vec<u8>,
     emit: &Emit,
-    changed: &mut bool,
-) -> Result<Option<String>, String> {
-    let existing = match slot_info(t, class, at, changed).await {
+) -> Result<Result<String, String>, Error> {
+    let existing = match op::info(s, at).await {
         Ok(info) => Some(info),
         Err(Error::DeviceStatus(1)) => None,
-        Err(e) => return Err(explain(e, at)),
+        Err(e) => return Ok(Err(explain(e, at))),
     };
 
     // Nothing is deleted until the backup is in hand.
-    let backup = match &existing {
-        Some(_) => Some(
-            read_object(t, class, at, false, changed)
-                .await
-                .map(|(_, file)| file)
-                .map_err(|e| {
-                    format!(
-                        "could not read {} back before replacing it, so it was left alone: {}",
-                        shown(at),
-                        explain(e, at)
-                    )
-                })?,
-        ),
+    let backup = match existing {
+        Some(_) => match op::read_program(s, at).await {
+            Ok(file) => Some(file),
+            Err(e) => {
+                return Ok(Err(format!(
+                    "could not read {} back before replacing it, so it was left alone: {}",
+                    shown(at),
+                    explain(e, at)
+                )))
+            }
+        },
         None => None,
     };
 
-    if existing.is_some() {
+    if backup.is_some() {
         emit.send(DeviceEvent::Note(format!(
             "deleting {} to make room",
             shown(at)
         )));
-        delete(t, class, at, changed)
-            .await
-            .map_err(|e| format!("deleting {}: {}", shown(at), explain(e, at)))?;
+        if let Err(e) = op::delete(s, at).await {
+            return Ok(Err(format!("deleting {}: {}", shown(at), explain(e, at))));
+        }
     }
 
     let timestamp = unix_now();
-    let written = write(t, class, at, &bytes, timestamp, changed).await;
+    let written = op::write_program(s, at, &bytes, timestamp).await;
 
-    match (written, backup) {
-        (Ok(()), _) => Ok(Some(format!("wrote {what} -> {}", shown(at)))),
+    Ok(match (written, backup) {
+        (Ok(()), _) => Ok(format!("wrote {what} -> {}", shown(at))),
         (Err(e), None) => Err(explain(e, at)),
         // Getting the occupant back matters more than reporting the original error,
         // which is carried along and reported once the slot is whole again.
@@ -271,11 +305,8 @@ async fn put<T: Transport>(
                 "the write failed and {} is now empty; putting the original back",
                 shown(at)
             )));
-            match write(t, class, at, &backup, timestamp, changed).await {
-                Ok(()) => Err(format!(
-                    "{e} ({} was restored, and is unchanged)",
-                    shown(at)
-                )),
+            match op::write_program(s, at, &backup, timestamp).await {
+                Ok(()) => Err(format!("{e} ({} was restored, and is unchanged)", shown(at))),
                 Err(restore) => {
                     let name = rescue_name(at, &backup);
                     emit.send(DeviceEvent::Rescued {
@@ -285,17 +316,91 @@ async fn put<T: Transport>(
                     });
                     Err(format!(
                         "{e} (restoring failed as well: {restore}); {} is EMPTY, and its \
-                         former contents are now in the workspace as a rescued entity — \
+                         former contents are now in the local list as a rescued entity — \
                          put it back",
                         shown(at)
                     ))
                 }
             }
         }
+    })
+}
+
+/// One put in a session of its own.
+async fn put_one<T: Transport>(
+    t: &mut T,
+    class: ObjectClass,
+    at: Location,
+    what: &str,
+    bytes: Vec<u8>,
+    emit: &Emit,
+    changed: &mut bool,
+) -> Result<Result<String, String>, Error> {
+    one_session!(write t, class, changed, |s| {
+        put(&mut s, at, what, bytes, emit).await
+    })
+}
+
+/// Every queued object of one class, inside one session.
+///
+/// ⚠️ A refusal stops the batch where it stands. What has already landed has landed —
+/// the report says which — and the rest stay owed, because carrying on past a failure
+/// would be writing into an instrument whose state nobody has looked at since.
+async fn send_all<T: Transport>(
+    t: &mut T,
+    class: ObjectClass,
+    items: Vec<Outgoing>,
+    emit: &Emit,
+    changed: &mut bool,
+) -> Result<Option<String>, String> {
+    let total = items.len();
+    let mut done = 0;
+    let outcome = batch(t, class, &items, total, &mut done, emit, changed).await;
+    let refusal = outcome.map_err(|e| e.to_string())?;
+    match refusal {
+        None => Ok(Some(format!("wrote {done} of {total} to {}", class.label()))),
+        Some(why) => Err(format!(
+            "{why} — {done} of {total} were written; the rest are still waiting"
+        )),
     }
 }
 
-/// Combine an operation's result with its session close, keeping the operation's error
+#[allow(clippy::too_many_arguments)]
+async fn batch<T: Transport>(
+    t: &mut T,
+    class: ObjectClass,
+    items: &[Outgoing],
+    total: usize,
+    done: &mut usize,
+    emit: &Emit,
+    changed: &mut bool,
+) -> Result<Option<String>, Error> {
+    one_session!(write t, class, changed, |s| {
+        for item in items {
+            emit.send(DeviceEvent::Note(format!(
+                "sending {:?} to {} ({} of {total})",
+                item.name,
+                shown(item.at),
+                *done + 1
+            )));
+            match put(&mut s, item.at, &item.name, item.bytes.clone(), emit).await? {
+                Ok(note) => {
+                    *done += 1;
+                    emit.send(DeviceEvent::OpOk(note));
+                    emit.send(DeviceEvent::Sent {
+                        id: item.id,
+                        class,
+                        at: item.at,
+                    });
+                }
+                Err(why) => return Ok::<Option<String>, Error>(Some(why)),
+            }
+        }
+        Ok(None)
+    })
+}
+
+/// Combine an operation's result with its session close/// Combine an operation's result with its session close, keeping the operation's error
 /// when both fail — a close failing is usually a *consequence* of the op failing, and
 /// the original error is the informative one.
 fn finish<T>(result: Result<T, Error>, closed: Result<(), Error>) -> Result<T, Error> {
@@ -334,8 +439,7 @@ async fn slot_info<T: Transport>(
     finish(r, closed)
 }
 
-/// Every slot of one bank, in one session — the way the protocol expects a caller to
-/// batch: open once, loop the per-item primitive.
+/// Every slot of one bank, in one session.
 ///
 /// A vacant slot is a `None` row rather than an error, and the walk stops where the
 /// device says the class's slot space ends. That matters because nothing on the wire
@@ -347,28 +451,70 @@ async fn scan_bank<T: Transport>(
     slots: u32,
     changed: &mut bool,
 ) -> Result<Vec<Option<ProgramInfo>>, Error> {
-    let mut s = Session::open(t, class).await?;
-    let mut out = Vec::new();
-    let mut fatal = None;
-    for slot in 1..=slots {
-        // A refusal keeps the session in step — request and reply still pair — so the
-        // walk continues inside the same transaction.
-        match op::info(&mut s, Location::from_user(bank, slot)).await {
-            Ok(info) => out.push(Some(info)),
-            Err(Error::DeviceStatus(1)) => out.push(None),
-            Err(Error::DeviceStatus(3)) => break,
-            Err(e) => {
-                fatal = Some(e);
+    one_session!(t, class, changed, |s| {
+        walk_bank(&mut s, bank, slots).await
+    })
+}
+
+/// One class end to end: its counters, then every bank, all inside one session.
+///
+/// The status is read here rather than beforehand because it is what bounds the walk —
+/// and reading it in the same session is the whole point of the shape.
+async fn scan_class<T: Transport>(
+    t: &mut T,
+    class: ObjectClass,
+    per_bank: u32,
+    cap: u32,
+    emit: &Emit,
+    changed: &mut bool,
+) -> Result<(u32, usize), Error> {
+    let mut banks = 0;
+    let mut items = 0;
+    let counted = one_session!(t, class, changed, |s| {
+        let status = op::status(&mut s).await?;
+        let expected = status.slots().map(|slots| slots.div_ceil(per_bank));
+        emit.send(DeviceEvent::ClassStatus {
+            class,
+            status,
+            banks: expected,
+        });
+        for bank in 1..=expected.unwrap_or(cap).min(cap) {
+            let slots = walk_bank(&mut s, bank, per_bank).await?;
+            // A bank the device refused outright is past the end of the class.
+            if slots.is_empty() {
+                break;
+            }
+            let short = slots.len() as u32 != per_bank;
+            banks += 1;
+            items += slots.iter().filter(|slot| slot.is_some()).count();
+            emit.send(DeviceEvent::BankScanned { class, bank, slots });
+            if short {
                 break;
             }
         }
+        Ok::<(), Error>(())
+    });
+    counted.map(|()| (banks, items))
+}
+
+/// One bank's worth of `INFO`, inside a session the caller owns.
+async fn walk_bank<T: Transport, C>(
+    s: &mut Session<'_, T, C>,
+    bank: u32,
+    slots: u32,
+) -> Result<Vec<Option<ProgramInfo>>, Error> {
+    let mut out = Vec::new();
+    for slot in 1..=slots {
+        // A refusal keeps the session in step — request and reply still pair — so the
+        // walk continues inside the same transaction.
+        match op::info(s, Location::from_user(bank, slot)).await {
+            Ok(info) => out.push(Some(info)),
+            Err(Error::DeviceStatus(1)) => out.push(None),
+            Err(Error::DeviceStatus(3)) => break,
+            Err(e) => return Err(e),
+        }
     }
-    *changed |= s.instrument_changed();
-    let closed = s.commit().await;
-    match fatal {
-        Some(e) => Err(e),
-        None => closed.map(|()| out),
-    }
+    Ok(out)
 }
 
 /// One read in its own session: the slot's metadata, then its bytes.
@@ -469,20 +615,6 @@ async fn delete<T: Transport>(
 ) -> Result<(), Error> {
     let mut s = Session::open(t, class).await?.allow_destructive_writes();
     let r = op::delete(&mut s, at).await;
-    *changed |= s.instrument_changed();
-    r.and(s.commit().await)
-}
-
-async fn write<T: Transport>(
-    t: &mut T,
-    class: ObjectClass,
-    at: Location,
-    file: &[u8],
-    timestamp: u32,
-    changed: &mut bool,
-) -> Result<(), Error> {
-    let mut s = Session::open(t, class).await?.allow_destructive_writes();
-    let r = op::write_program(&mut s, at, file, timestamp).await;
     *changed |= s.instrument_changed();
     r.and(s.commit().await)
 }

@@ -39,8 +39,20 @@ struct Header {
     send: Option<SendBack>,
 }
 
+/// Which face of a document is showing.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum View {
+    /// The panel, in the instrument's own words. Happy-path edits.
+    #[default]
+    Basic,
+    /// The whole body as a table, plus the record. Nothing hidden.
+    Advanced,
+}
+
 pub struct Document {
     target: Option<u64>,
+    /// Which face each document was left on.
+    views: std::collections::HashMap<u64, View>,
     /// ⚠️ Per-field legal values, read once per document: asking a field for them walks
     /// every bit pattern it can hold.
     ctx: Ctx,
@@ -55,6 +67,7 @@ impl Default for Document {
     fn default() -> Document {
         Document {
             target: None,
+            views: std::collections::HashMap::new(),
             ctx: Ctx::read(&[]),
             name: String::new(),
             error: None,
@@ -89,20 +102,54 @@ impl Document {
                 .map_or(String::new(), |snapshot| snapshot.name);
         }
 
+        // Something with no friendly view has only the record to show.
+        let basic_exists = entity
+            .entity
+            .as_ref()
+            .is_some_and(|e| fields::has_registry(e) || sample::is_sample(e));
+        let view = match basic_exists {
+            true => self.views.get(&id).copied().unwrap_or_default(),
+            false => View::Advanced,
+        };
+
         let mut sets: Sets = Vec::new();
         let mut act = Header::default();
 
         self.header(ui, entity, opened, &mut act);
+        if basic_exists {
+            let mut want = view;
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.selectable_label(view == View::Advanced, "Advanced").clicked() {
+                        want = View::Advanced;
+                    }
+                    if ui.selectable_label(view == View::Basic, "Basic").clicked() {
+                        want = View::Basic;
+                    }
+                });
+            });
+            self.views.insert(id, want);
+        }
         if let Some(why) = &self.error {
             ui.label(egui::RichText::new(why).color(BAD));
         }
         ui.separator();
 
         let mut details = None;
+        let mut typed = false;
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                self.body(ui, entity, registry.as_deref(), &mut sets);
+                match view {
+                    View::Basic => self.body(ui, entity, registry.as_deref(), &mut sets),
+                    View::Advanced => {
+                        if let Some(fields) = registry.as_deref() {
+                            self.advanced.table(ui, fields, &mut sets);
+                            typed = !sets.is_empty();
+                            ui.add_space(8.0);
+                        }
+                    }
+                }
                 details = self
                     .advanced
                     .ui(ui, entity, opened, registry.as_deref(), device);
@@ -124,9 +171,32 @@ impl Document {
             return act.send;
         }
         if !sets.is_empty() {
-            self.apply(id, sets, workspace, log);
+            let outcome = self.apply(id, sets, workspace, log);
+            if typed {
+                // The table keeps a refused cell open with what was typed in it.
+                self.advanced.settled(outcome);
+            }
         }
         act.send
+    }
+
+    /// Mark the open document as owed to the instrument, or say why it is not.
+    pub fn stage(&mut self, id: u64, workspace: &mut Workspace, log: &mut Log) {
+        let Some(entity) = workspace.get(id) else {
+            return;
+        };
+        let name = entity.name.clone();
+        match entity.origin.slot() {
+            Some((class, at)) if crate::device::sendable(class) => {
+                workspace.mark_pending(id, true);
+                log.say(format!("“{name}” will be sent to {}.", strings::place(class, at)));
+            }
+            // ⚠️ Never a file export. Cmd+S means "keep what I did", and for something
+            // that lives here that has already happened.
+            _ => log.say(format!(
+                "“{name}” is on this computer, and changes to it are kept as you make them."
+            )),
+        }
     }
 
     /// Where it came from, what has changed, and the three things to do about it.
@@ -147,7 +217,7 @@ impl Document {
                 .on_hover_text("back to how it was when this tab opened")
                 .on_disabled_hover_text("nothing has changed")
                 .clicked();
-            act.save = ui.button("Save to disk…").clicked();
+            act.save = ui.button("Export…").clicked();
             if let Some((class, at)) = entity.origin.slot() {
                 let refusal = crate::device::put_refusal(class);
                 let sendable = refusal.is_none() && !crate::device::read_only(class);
@@ -229,9 +299,15 @@ impl Document {
     ///
     /// All of them or none: a control that owns two fields must not leave one half
     /// written when the library refuses the other.
-    fn apply(&mut self, id: u64, sets: Sets, workspace: &mut Workspace, log: &mut Log) {
+    fn apply(
+        &mut self,
+        id: u64,
+        sets: Sets,
+        workspace: &mut Workspace,
+        log: &mut Log,
+    ) -> Result<(), String> {
         let Some(entity) = workspace.get(id) else {
-            return;
+            return Ok(());
         };
         let bytes = entity.bytes.clone();
         let sample = entity.entity.as_ref().is_some_and(sample::is_sample);
@@ -240,14 +316,28 @@ impl Document {
             false => fields::apply(&bytes, &sets).map(|(_, out)| out),
         };
         match result {
-            Ok(out) if out == bytes => self.error = None,
+            Ok(out) if out == bytes => {
+                self.error = None;
+                Ok(())
+            }
             Ok(out) => {
                 self.error = None;
                 workspace.replace_bytes(id, out, log);
+                // An edit to something read off the instrument is owed back to it. It
+                // goes nowhere until the operator sends it.
+                if workspace
+                    .get(id)
+                    .and_then(|e| e.origin.slot())
+                    .is_some_and(|(class, _)| crate::device::sendable(class))
+                {
+                    workspace.mark_pending(id, true);
+                }
+                Ok(())
             }
             Err(why) => {
                 log.error(why.clone());
-                self.error = Some(why);
+                self.error = Some(why.clone());
+                Err(why)
             }
         }
     }
@@ -291,6 +381,10 @@ mod tests {
     }
 
     fn render_with(sets: &[(&str, &str)], kind: Fresh, advanced: bool) {
+        render_view(sets, kind, advanced, View::Basic);
+    }
+
+    fn render_view(sets: &[(&str, &str)], kind: Fresh, advanced: bool, view: View) {
         let ctx = egui::Context::default();
         let mut workspace = Workspace::new(ctx.clone());
         let mut device = Device::new(ctx.clone());
@@ -301,6 +395,7 @@ mod tests {
         }
 
         let id = workspace.create(kind, &mut log).expect("a fresh default");
+        document.views.insert(id, view);
         if !sets.is_empty() {
             let bytes = workspace.get(id).unwrap().bytes.clone();
             let sets: Vec<(String, String)> = sets
@@ -344,6 +439,88 @@ mod tests {
     fn the_advanced_disclosure_paints() {
         render_with(&[("center_panel.gain", "96")], Fresh::Program, true);
         render_with(&[], Fresh::Settings, true);
+    }
+
+    /// The engineer's table paints, filters and holds an edit — for a body with ninety
+    /// fields and for one with forty.
+    #[test]
+    fn the_advanced_table_paints() {
+        render_view(&[], Fresh::Program, true, View::Advanced);
+        render_view(&[], Fresh::Settings, true, View::Advanced);
+    }
+
+    /// A cell the library refuses stays open with what was typed in it, because that is
+    /// the only copy of what the operator meant.
+    #[test]
+    fn a_refused_cell_keeps_its_error() {
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut log = Log::default();
+        let mut document = Document::default();
+        let id = workspace.create(Fresh::Program, &mut log).unwrap();
+
+        // What the table does with the library's answer, which is the part worth
+        // pinning: the same call the frame makes.
+        let refused = document.apply(
+            id,
+            vec![("center_panel.gain".into(), "200".into())],
+            &mut workspace,
+            &mut log,
+        );
+        assert!(refused.is_err());
+        document.advanced.settled(refused);
+        assert!(document.error.is_some());
+
+        let taken = document.apply(
+            id,
+            vec![("center_panel.gain".into(), "96".into())],
+            &mut workspace,
+            &mut log,
+        );
+        assert!(taken.is_ok());
+        document.advanced.settled(taken);
+        assert!(document.error.is_none());
+    }
+
+    /// An edit to something read off the instrument is owed back to it; an edit to
+    /// something that only lives here is not.
+    #[test]
+    fn editing_a_device_document_marks_it_pending() {
+        use crate::workspace::Origin;
+        use nord_usb::{Location, ObjectClass};
+
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut log = Log::default();
+        let mut document = Document::default();
+
+        let local = workspace.create(Fresh::Program, &mut log).unwrap();
+        let bytes = workspace.get(local).unwrap().bytes.clone();
+        let from_device = workspace.ingest(
+            "Africa-Split.ne5p".into(),
+            Origin::Device {
+                class: ObjectClass::Program,
+                at: Location { bank: 6, slot: 3 },
+            },
+            bytes,
+            &mut log,
+        );
+
+        let set = vec![("center_panel.gain".to_string(), "96".to_string())];
+        document.apply(local, set.clone(), &mut workspace, &mut log).unwrap();
+        document
+            .apply(from_device, set, &mut workspace, &mut log)
+            .unwrap();
+
+        assert!(!workspace.get(local).unwrap().pending, "stays here");
+        assert!(workspace.get(from_device).unwrap().pending, "owed back");
+        let owed: Vec<u64> = workspace.pending().iter().map(|e| e.id).collect();
+        assert_eq!(owed, vec![from_device]);
+
+        // Cmd+S on the local one says so rather than exporting anything.
+        document.stage(local, &mut workspace, &mut log);
+        assert!(log.status().1.contains("kept as you make them"), "{}", log.status().1);
+        assert!(!workspace.get(local).unwrap().pending);
     }
 
     #[test]

@@ -15,6 +15,9 @@ use crate::visibility::{self, Bars, Organ, Registration};
 pub fn program(ui: &mut egui::Ui, ctx: &Ctx, fields: &[Field], sets: &mut Sets) {
     let organ = visibility::organ(fields);
     for section in strings::PROGRAM_SECTIONS {
+        if !visibility::shown(section, fields) {
+            continue;
+        }
         let mut rows = gather(fields, section, organ.as_ref());
         if visibility::switches_first(section) {
             reading_order(ctx, &mut rows);
@@ -25,30 +28,19 @@ pub fn program(ui: &mut egui::Ui, ctx: &Ctx, fields: &[Field], sets: &mut Sets) 
         if rows.is_empty() && organ_here.is_none() {
             continue;
         }
-        let open = visibility::open(section, fields);
-        egui::CollapsingHeader::new(egui::RichText::new(section.title()).strong())
-            .id_salt(section.title())
-            .default_open(open)
-            .show(ui, |ui| {
-                if !open {
-                    ui.label(
-                        egui::RichText::new("No part is playing this.")
-                            .small()
-                            .weak(),
-                    );
-                }
-                if section == Section::Keyboard {
-                    transpose(ui, fields, sets);
-                }
-                match organ_here {
-                    Some(organ) => organ_section(ui, ctx, fields, organ, &rows, sets),
-                    None => {
-                        for field in &rows {
-                            controls::row(ui, ctx, field, sets);
-                        }
+        controls::section(ui, section.title(), |ui| {
+            if section == Section::Keyboard {
+                transpose(ui, fields, sets);
+            }
+            match organ_here {
+                Some(organ) => organ_section(ui, ctx, fields, organ, &rows, sets),
+                None => {
+                    for field in &rows {
+                        controls::row(ui, ctx, field, sets);
                     }
                 }
-            });
+            }
+        });
     }
 }
 
@@ -59,14 +51,11 @@ pub fn settings(ui: &mut egui::Ui, ctx: &Ctx, fields: &[Field], sets: &mut Sets)
         if rows.is_empty() {
             continue;
         }
-        egui::CollapsingHeader::new(egui::RichText::new(section.title()).strong())
-            .id_salt(section.title())
-            .default_open(true)
-            .show(ui, |ui| {
-                for field in &rows {
-                    controls::row(ui, ctx, field, sets);
-                }
-            });
+        controls::section(ui, section.title(), |ui| {
+            for field in &rows {
+                controls::row(ui, ctx, field, sets);
+            }
+        });
     }
 }
 

@@ -6,6 +6,7 @@
 //! > ⚠️ 🧱 This project can brick a Nord device. See the crate README.
 
 pub mod app;
+pub mod base64;
 pub mod browser;
 pub mod device;
 pub mod document;
@@ -13,6 +14,7 @@ pub mod drawbar_widget;
 pub mod fields;
 pub mod log;
 pub mod note;
+pub mod store;
 pub mod strings;
 pub mod tabs;
 pub mod visibility;

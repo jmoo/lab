@@ -46,6 +46,20 @@ impl Ctx {
 /// Collected `path = value` sets, applied together once the frame is painted.
 pub type Sets = Vec<(String, String)>;
 
+/// A titled panel.
+///
+/// The instrument's front panel does not fold its sections away, and neither does this:
+/// a control you cannot see is a control you do not know you have.
+pub fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(title).strong());
+        ui.separator();
+        body(ui);
+    });
+    ui.add_space(2.0);
+}
+
 /// A label in the left column, sized so the controls line up.
 pub fn label(ui: &mut egui::Ui, path: &str) {
     let text = strings::label(path);

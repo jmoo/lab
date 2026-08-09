@@ -229,12 +229,17 @@ pub fn part_uses(fields: &[Field], instrument: &str) -> bool {
         .any(|path| value_of(fields, path) == Some(instrument))
 }
 
-/// Whether a section starts open, for a program.
+/// Whether a section is worth showing at all.
 ///
-/// Effects and EQ are always open — the physical panel always shows those knobs. The
-/// three instrument sections open when a part points at them and stay closed, not
-/// hidden, when none does: the model picker inside is how a part comes to point there.
-pub fn open(section: Section, fields: &[Field]) -> bool {
+/// Effects, EQ and the keyboard are always there — the physical panel always shows those
+/// knobs. An engine section is there only while a part is playing it.
+///
+/// ⚠️ The organ case is the CLI summary's own rule: it prints the organ block only when
+/// a part is set to Organ. Piano and sample it prints unconditionally, so hiding *those*
+/// two is this app's choice rather than something the summary establishes. What makes it
+/// safe either way is that the pickers which turn an engine back on live in Keyboard &
+/// split, which never goes away.
+pub fn shown(section: Section, fields: &[Field]) -> bool {
     match section {
         Section::Organ => part_uses(fields, "Organ"),
         Section::Piano => part_uses(fields, "Piano"),
@@ -479,17 +484,30 @@ mod tests {
         assert!(!organ.covers("center_panel.gain"));
     }
 
-    /// A section no part points at stays closed rather than vanishing — the picker
-    /// inside is how a part comes to point at it.
+    /// An engine no part is playing is not shown at all, and the part picker that
+    /// brings it back is somewhere that always is.
     #[test]
-    fn an_unused_instrument_section_starts_closed() {
+    fn only_the_engines_a_part_is_playing_are_shown() {
         let fields = program(&[]);
-        assert!(open(Section::Organ, &fields));
-        assert!(!open(Section::Piano, &fields));
-        assert!(open(Section::Effects, &fields));
+        assert!(shown(Section::Organ, &fields), "a fresh program plays organ");
+        assert!(!shown(Section::Piano, &fields));
+        assert!(!shown(Section::Sample, &fields));
+        for always in [Section::Effects, Section::Eq, Section::Keyboard] {
+            assert!(shown(always, &fields));
+        }
 
         let fields = program(&[("center_panel.upper_part", "Piano")]);
-        assert!(open(Section::Piano, &fields));
+        assert!(shown(Section::Piano, &fields));
+        assert!(shown(Section::Organ, &fields), "the lower part still plays it");
+
+        // Both parts off the organ, and it goes — but its picker does not.
+        let fields = program(&[
+            ("center_panel.lower_part", "Sample"),
+            ("center_panel.upper_part", "Piano"),
+        ]);
+        assert!(!shown(Section::Organ, &fields));
+        assert_eq!(strings::section("center_panel.lower_part"), Section::Keyboard);
+        assert_eq!(strings::section("center_panel.upper_part"), Section::Keyboard);
     }
 
     /// The two halves of the transpose pair move together or not at all.
