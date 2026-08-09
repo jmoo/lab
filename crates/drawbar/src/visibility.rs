@@ -489,7 +489,10 @@ mod tests {
     #[test]
     fn only_the_engines_a_part_is_playing_are_shown() {
         let fields = program(&[]);
-        assert!(shown(Section::Organ, &fields), "a fresh program plays organ");
+        assert!(
+            shown(Section::Organ, &fields),
+            "a fresh program plays organ"
+        );
         assert!(!shown(Section::Piano, &fields));
         assert!(!shown(Section::Sample, &fields));
         for always in [Section::Effects, Section::Eq, Section::Keyboard] {
@@ -498,7 +501,10 @@ mod tests {
 
         let fields = program(&[("center_panel.upper_part", "Piano")]);
         assert!(shown(Section::Piano, &fields));
-        assert!(shown(Section::Organ, &fields), "the lower part still plays it");
+        assert!(
+            shown(Section::Organ, &fields),
+            "the lower part still plays it"
+        );
 
         // Both parts off the organ, and it goes — but its picker does not.
         let fields = program(&[
@@ -506,8 +512,14 @@ mod tests {
             ("center_panel.upper_part", "Piano"),
         ]);
         assert!(!shown(Section::Organ, &fields));
-        assert_eq!(strings::section("center_panel.lower_part"), Section::Keyboard);
-        assert_eq!(strings::section("center_panel.upper_part"), Section::Keyboard);
+        assert_eq!(
+            strings::section("center_panel.lower_part"),
+            Section::Keyboard
+        );
+        assert_eq!(
+            strings::section("center_panel.upper_part"),
+            Section::Keyboard
+        );
     }
 
     /// The two halves of the transpose pair move together or not at all.

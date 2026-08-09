@@ -49,14 +49,18 @@ impl Section {
     }
 }
 
-/// The sections a program document shows, in panel order.
+/// The sections a program document shows.
+///
+/// Keyboard & split leads: its part pickers decide which engine sections exist at all,
+/// so the control that brings a section back sits above the ones that come and go. The
+/// rest run in panel order.
 pub const PROGRAM_SECTIONS: [Section; 7] = [
+    Section::Keyboard,
     Section::Organ,
     Section::Piano,
     Section::Sample,
     Section::Effects,
     Section::Eq,
-    Section::Keyboard,
     Section::Other,
 ];
 

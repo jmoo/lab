@@ -126,11 +126,11 @@ Looking at a document and changing it are the same thing. There is no Apply: a c
 you move is set on the working copy that instant, the bytes are re-encoded and
 re-checked, and the tab picks up a dot.
 
-**Basic** is the front panel. Sections are titled boxes in panel order — Organ, Piano,
-Sample, Effects, EQ, Keyboard & split — and none of them folds away, because a control
-you cannot see is a control you do not know you have. **Only the engines a part is
-actually playing are there**: set both parts to piano and the organ section goes, and
-the part pickers that bring it back are in Keyboard & split, which never goes.
+**Basic** is the front panel. Sections are titled boxes — Keyboard & split, then Organ,
+Piano, Sample, Effects, EQ — and none of them folds away, because a control you cannot
+see is a control you do not know you have. **Only the engines a part is actually playing
+are there**: set both parts to piano and the organ section goes, and the part pickers
+that bring it back are in Keyboard & split, which leads because it never goes.
 
 **A document shows what the keyboard would be showing.**
 

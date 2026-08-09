@@ -12,9 +12,9 @@
 use std::sync::mpsc::Sender;
 
 use eframe::egui;
+use nord_usb::session::ReadWrite;
 use nord_usb::transport::Transport;
 use nord_usb::wire::{Dependency, ProgramInfo};
-use nord_usb::session::ReadWrite;
 use nord_usb::{op, Error, Location, ObjectClass, Session};
 
 use super::{DeviceCmd, DeviceEvent, Outgoing};
@@ -196,14 +196,20 @@ async fn execute<T: Transport>(
         }
 
         DeviceCmd::Put {
+            id,
             class,
             at,
             name,
             bytes,
-        } => put_one(t, class, at, &name, bytes, emit, changed)
-            .await
-            .map_err(|e| e.to_string())?
-            .map(Some),
+        } => {
+            let note = put_one(t, class, at, &name, bytes, emit, changed)
+                .await
+                .map_err(|e| e.to_string())??;
+            // Raised here rather than inside `put_one`, which runs before its session is
+            // committed: nothing is owed to the instrument until the session closes.
+            emit.send(DeviceEvent::Sent { id, class, at });
+            Ok(Some(note))
+        }
 
         DeviceCmd::SendAll { class, items } => send_all(t, class, items, emit, changed).await,
 
@@ -306,7 +312,10 @@ async fn put<T: Transport>(
                 shown(at)
             )));
             match op::write_program(s, at, &backup, timestamp).await {
-                Ok(()) => Err(format!("{e} ({} was restored, and is unchanged)", shown(at))),
+                Ok(()) => Err(format!(
+                    "{e} ({} was restored, and is unchanged)",
+                    shown(at)
+                )),
                 Err(restore) => {
                     let name = rescue_name(at, &backup);
                     emit.send(DeviceEvent::Rescued {
@@ -358,7 +367,10 @@ async fn send_all<T: Transport>(
     let outcome = batch(t, class, &items, total, &mut done, emit, changed).await;
     let refusal = outcome.map_err(|e| e.to_string())?;
     match refusal {
-        None => Ok(Some(format!("wrote {done} of {total} to {}", class.label()))),
+        None => Ok(Some(format!(
+            "wrote {done} of {total} to {}",
+            class.label()
+        ))),
         Some(why) => Err(format!(
             "{why} — {done} of {total} were written; the rest are still waiting"
         )),
@@ -400,7 +412,7 @@ async fn batch<T: Transport>(
     })
 }
 
-/// Combine an operation's result with its session close/// Combine an operation's result with its session close, keeping the operation's error
+/// Combine an operation's result with its session close, keeping the operation's error
 /// when both fail — a close failing is usually a *consequence* of the op failing, and
 /// the original error is the informative one.
 fn finish<T>(result: Result<T, Error>, closed: Result<(), Error>) -> Result<T, Error> {

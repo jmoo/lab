@@ -84,6 +84,10 @@ pub enum DeviceCmd {
         open: bool,
     },
     Put {
+        /// The asset on this computer these bytes came from. It is what the
+        /// [`DeviceEvent::Sent`] this raises names, so a lone put pays the same debt a
+        /// batch does.
+        id: u64,
         class: ObjectClass,
         at: Location,
         name: String,
@@ -288,7 +292,8 @@ pub enum DeviceEvent {
         bytes: Vec<u8>,
         open: bool,
     },
-    /// One object of a batch landed.
+    /// One object landed on the instrument, so it is no longer owed. Every write path
+    /// raises one — a lone put as much as a batch.
     Sent {
         id: u64,
         class: ObjectClass,
@@ -510,6 +515,10 @@ pub fn stem(label: &str) -> String {
 pub struct Device {
     pub state: DeviceState,
     events: Receiver<DeviceEvent>,
+    /// A second handle on the worker's end of the channel, so a headless test can hand
+    /// [`Device::poll`] the events an instrument would have reported.
+    #[cfg(test)]
+    from_worker: std::sync::mpsc::Sender<DeviceEvent>,
     link: Link,
     /// What the user asked for. Always dispatched ahead of the background scan.
     pending: VecDeque<DeviceCmd>,
@@ -529,6 +538,8 @@ impl Device {
         Device {
             state: DeviceState::default(),
             events,
+            #[cfg(test)]
+            from_worker: sender.clone(),
             link: Link::new(ctx, sender),
             pending: VecDeque::new(),
             reading: None,
@@ -614,8 +625,10 @@ impl Device {
                 vec![(*class, from.bank + 1), (*class, to.bank + 1)]
             }
             DeviceCmd::SendAll { class, items } => {
-                let mut banks: Vec<(ObjectClass, u32)> =
-                    items.iter().map(|item| (*class, item.at.bank + 1)).collect();
+                let mut banks: Vec<(ObjectClass, u32)> = items
+                    .iter()
+                    .map(|item| (*class, item.at.bank + 1))
+                    .collect();
                 banks.dedup();
                 banks
             }
@@ -649,6 +662,18 @@ impl Device {
         }
         self.state.in_flight = Some(cmd.words());
         self.link.send(cmd);
+    }
+
+    /// Hand `poll` an event as though the worker had reported it.
+    #[cfg(test)]
+    pub fn pretend(&mut self, event: DeviceEvent) {
+        let _ = self.from_worker.send(event);
+    }
+
+    /// What the user has asked the instrument for and it has not started yet.
+    #[cfg(test)]
+    pub fn queued(&self) -> &VecDeque<DeviceCmd> {
+        &self.pending
     }
 
     /// Fill in a bank as though the instrument had answered, for a headless render.
@@ -787,7 +812,8 @@ impl Device {
                     ));
                     workspace.ingest(name, Origin::Rescued { at }, bytes, log);
                 }
-                // One of a batch landed, so it is no longer owed.
+                // It landed, so it is no longer owed. Only that object: the rest of a
+                // batch is still waiting on its own write.
                 DeviceEvent::Sent { id, .. } => workspace.mark_pending(id, false),
                 DeviceEvent::Note(text) => log.info(text),
                 DeviceEvent::OpOk(text) => {
@@ -874,10 +900,64 @@ mod tests {
         }
     }
 
+    /// What landed is no longer owed, and nothing else is touched — a batch that stops
+    /// halfway leaves the rest of the queue exactly as it was.
+    #[test]
+    fn a_sent_event_clears_the_object_it_names_and_no_other() {
+        use crate::workspace::{Fresh, Origin};
+
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut device = Device::new(ctx);
+        let mut log = Log::default();
+        let mut tabs = Tabs::default();
+
+        let bytes = {
+            let id = workspace.create(Fresh::Program, &mut log).unwrap();
+            let bytes = workspace.get(id).unwrap().bytes.clone();
+            workspace.remove(id, &mut log);
+            bytes
+        };
+        let at = |slot| Location { bank: 6, slot };
+        let landed = workspace.ingest(
+            "Africa-Split.ne5p".into(),
+            Origin::Device {
+                class: ObjectClass::Program,
+                at: at(3),
+            },
+            bytes.clone(),
+            &mut log,
+        );
+        let still_owed = workspace.ingest(
+            "Squabble-B.ne5p".into(),
+            Origin::Device {
+                class: ObjectClass::Program,
+                at: at(4),
+            },
+            bytes,
+            &mut log,
+        );
+        workspace.mark_pending(landed, true);
+        workspace.mark_pending(still_owed, true);
+
+        device.pretend(DeviceEvent::Sent {
+            id: landed,
+            class: ObjectClass::Program,
+            at: at(3),
+        });
+        device.poll(&mut log, &mut workspace, &mut tabs);
+
+        assert!(!workspace.get(landed).unwrap().pending, "it was written");
+        assert!(workspace.get(still_owed).unwrap().pending, "still waiting");
+        let owed: Vec<u64> = workspace.pending().iter().map(|e| e.id).collect();
+        assert_eq!(owed, vec![still_owed]);
+    }
+
     /// The status strip names places and things; the protocol line keeps the verbs.
     #[test]
     fn the_status_sentences_never_quote_the_protocol() {
         let cmd = DeviceCmd::Put {
+            id: 1,
             class: ObjectClass::Program,
             at: Location { bank: 6, slot: 3 },
             name: "Africa Split".into(),

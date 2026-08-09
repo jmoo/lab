@@ -9,6 +9,11 @@ use eframe::egui;
 use crate::app::{dot, WARN};
 use crate::workspace::Workspace;
 
+/// ⚠️ The strip's own scroll id. The strip and the document body are drawn into the same
+/// `Ui`, and egui salts an unsalted `ScrollArea` with that `Ui` alone — two of them there
+/// share one state, and a wheel over the body moves the strip instead of the document.
+pub const SCROLL: &str = "tab_strip";
+
 struct Tab {
     id: u64,
     /// The bytes as the tab opened them: what Revert goes back to, and what the byte
@@ -70,6 +75,7 @@ impl Tabs {
         let mut close = None;
         let mut activate = None;
         egui::ScrollArea::horizontal()
+            .id_salt(SCROLL)
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.horizontal(|ui| {

@@ -11,9 +11,7 @@ use nord_format::Entity;
 use nord_usb::{Location, ObjectClass};
 
 use crate::app::{dot, GOOD};
-use crate::device::{
-    holdings, put_refusal, read_only, Device, DeviceCmd, Outgoing, BROWSED,
-};
+use crate::device::{holdings, put_refusal, read_only, Device, DeviceCmd, Outgoing, BROWSED};
 use crate::log::Log;
 use crate::strings::{folder, place, shown};
 use crate::tabs::Tabs;
@@ -1187,6 +1185,7 @@ fn send(
         ),
         _ => device.send(
             DeviceCmd::Put {
+                id,
                 class,
                 at,
                 name: entity.name.clone(),
@@ -1385,7 +1384,10 @@ mod tests {
         ] {
             let id = workspace.ingest(
                 format!("{}.ne5p", place(class, at(slot))),
-                Origin::Device { class, at: at(slot) },
+                Origin::Device {
+                    class,
+                    at: at(slot),
+                },
                 bytes.clone(),
                 &mut log,
             );
@@ -1400,6 +1402,58 @@ mod tests {
             .expect("programs are queued");
         assert_eq!(programs.1.len(), 2);
         assert!(queued.iter().all(|(class, _)| *class != ObjectClass::Live));
+    }
+
+    /// A lone send names the asset it is sending, so the write can pay off that one
+    /// document's debt the way a batch pays off its own.
+    #[test]
+    fn sending_one_document_names_the_asset_it_sends() {
+        use crate::workspace::{Fresh, Origin};
+
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut device = Device::new(ctx);
+        let mut log = crate::log::Log::default();
+        let mut tabs = Tabs::default();
+        let mut browser = Browser::default();
+        device.pretend_scanned(ObjectClass::Program, 7, &["Africa Split"]);
+
+        let at = Location { bank: 6, slot: 1 };
+        let bytes = {
+            let id = workspace.create(Fresh::Program, &mut log).unwrap();
+            let bytes = workspace.get(id).unwrap().bytes.clone();
+            workspace.remove(id, &mut log);
+            bytes
+        };
+        let id = workspace.ingest(
+            "Africa-Split.ne5p".into(),
+            Origin::Device {
+                class: ObjectClass::Program,
+                at,
+            },
+            bytes,
+            &mut log,
+        );
+        workspace.mark_pending(id, true);
+
+        // The slot is empty in the scan, so nothing is asked and the put goes straight out.
+        apply(
+            &mut browser,
+            vec![Act::Send {
+                id,
+                class: ObjectClass::Program,
+                at,
+            }],
+            &mut workspace,
+            &mut device,
+            &mut tabs,
+            &mut log,
+        );
+        let queued = device.queued().front().expect("a put was queued");
+        match queued {
+            DeviceCmd::Put { id: sending, .. } => assert_eq!(*sending, id),
+            other => panic!("{}", other.label()),
+        }
     }
 
     #[test]

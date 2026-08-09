@@ -24,6 +24,9 @@ mod sample;
 use advanced::Advanced;
 use controls::{Ctx, Sets};
 
+/// The body's own scroll id — see [`crate::tabs::SCROLL`].
+pub const SCROLL: &str = "document_body";
+
 /// A put the header asked for. The browser owns the question it may need to raise.
 pub struct SendBack {
     pub id: u64,
@@ -120,7 +123,10 @@ impl Document {
             let mut want = view;
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.selectable_label(view == View::Advanced, "Advanced").clicked() {
+                    if ui
+                        .selectable_label(view == View::Advanced, "Advanced")
+                        .clicked()
+                    {
                         want = View::Advanced;
                     }
                     if ui.selectable_label(view == View::Basic, "Basic").clicked() {
@@ -138,6 +144,7 @@ impl Document {
         let mut details = None;
         let mut typed = false;
         egui::ScrollArea::vertical()
+            .id_salt(SCROLL)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 match view {
@@ -189,7 +196,10 @@ impl Document {
         match entity.origin.slot() {
             Some((class, at)) if crate::device::sendable(class) => {
                 workspace.mark_pending(id, true);
-                log.say(format!("“{name}” will be sent to {}.", strings::place(class, at)));
+                log.say(format!(
+                    "“{name}” will be sent to {}.",
+                    strings::place(class, at)
+                ));
             }
             // ⚠️ Never a file export. Cmd+S means "keep what I did", and for something
             // that lives here that has already happened.
@@ -507,7 +517,9 @@ mod tests {
         );
 
         let set = vec![("center_panel.gain".to_string(), "96".to_string())];
-        document.apply(local, set.clone(), &mut workspace, &mut log).unwrap();
+        document
+            .apply(local, set.clone(), &mut workspace, &mut log)
+            .unwrap();
         document
             .apply(from_device, set, &mut workspace, &mut log)
             .unwrap();
@@ -519,8 +531,73 @@ mod tests {
 
         // Cmd+S on the local one says so rather than exporting anything.
         document.stage(local, &mut workspace, &mut log);
-        assert!(log.status().1.contains("kept as you make them"), "{}", log.status().1);
+        assert!(
+            log.status().1.contains("kept as you make them"),
+            "{}",
+            log.status().1
+        );
         assert!(!workspace.get(local).unwrap().pending);
+    }
+
+    /// ⚠️ The strip and the body are two scroll regions in one `Ui`. While they shared
+    /// egui's unsalted id they shared one state, and a wheel over the document moved the
+    /// tab strip while the body stayed where it was.
+    #[test]
+    fn the_tab_strip_and_the_document_body_scroll_on_their_own() {
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut device = Device::new(ctx.clone());
+        let mut log = Log::default();
+        let mut document = Document::default();
+        let mut tabs = crate::tabs::Tabs::default();
+
+        let id = workspace.create(Fresh::Program, &mut log).unwrap();
+        tabs.open(id, &workspace);
+        let opened = workspace.get(id).unwrap().bytes.clone();
+
+        let mut ids = None;
+        for frame in 0..4 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 720.0),
+                )),
+                // The first frame lays the document out; the rest wheel over its middle.
+                events: match frame {
+                    0 => Vec::new(),
+                    _ => vec![
+                        egui::Event::PointerMoved(egui::pos2(900.0, 400.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -200.0),
+                            modifiers: egui::Modifiers::default(),
+                        },
+                    ],
+                },
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ids = Some((
+                        ui.make_persistent_id(egui::Id::new(crate::tabs::SCROLL)),
+                        ui.make_persistent_id(egui::Id::new(SCROLL)),
+                    ));
+                    tabs.ui(ui, &workspace);
+                    ui.separator();
+                    document.ui(ui, id, &opened, &mut workspace, &mut device, &mut log);
+                });
+            });
+        }
+
+        let (strip, body) = ids.expect("the panel drew");
+        assert_ne!(strip, body, "one state each");
+        let offset = |id| egui::scroll_area::State::load(&ctx, id).map(|state| state.offset.y);
+        assert_eq!(offset(strip), Some(0.0), "the strip has nothing to scroll");
+        assert!(
+            offset(body).is_some_and(|y| y > 0.0),
+            "the body moved: {:?}",
+            offset(body)
+        );
     }
 
     #[test]
