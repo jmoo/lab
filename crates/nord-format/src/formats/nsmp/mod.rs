@@ -20,6 +20,7 @@ pub mod zone;
 pub use section::Section;
 pub use stroke::Stroke;
 pub use zone::Zone;
+pub use zone::ZoneV3;
 
 use crate::cbin::{self, BodyReader, BodyWriter, Cbin, Header};
 use crate::error::{Error, ParseError};
@@ -174,6 +175,37 @@ impl Cbin<SampleV3> {
             .iter()
             .filter(|s| s.is(section::STK4))
             .count()
+    }
+
+    /// Each stroke's `(global id, root key)` — the u32 its payload leads with,
+    /// and the byte at offset 5. Inferred from specimens; not confirmed on
+    /// hardware.
+    fn stroke_ids(&self) -> Result<Vec<(u32, u8)>, Error> {
+        self.body
+            .sections
+            .iter()
+            .filter(|s| s.is(section::STK4))
+            .map(|s| match (s.payload.get(0..4), s.payload.get(5)) {
+                (Some(gid), Some(&root)) => Ok((u32::from_be_bytes(gid.try_into().unwrap()), root)),
+                _ => Err(ParseError::AssertFail(format!(
+                    "stroke payload is {} bytes, too short for its id fields",
+                    s.payload.len()
+                ))
+                .into()),
+            })
+            .collect()
+    }
+
+    /// Keyboard zones, in stored order — high to low except `map` v14, which
+    /// stores low to high. Each zone is verified against the stroke it names.
+    pub fn zones(&self) -> Result<Vec<ZoneV3>, Error> {
+        let map = section::find4(&self.body.sections, section::MAP4)
+            .ok_or_else(|| ParseError::AssertFail("no map section".into()))?;
+        Ok(zone::read_v3(
+            map.version,
+            &map.payload,
+            &self.stroke_ids()?,
+        )?)
     }
 }
 

@@ -422,6 +422,25 @@ fn sample_v3(ui: &Ui, s: &Cbin<nord_format::formats::nsmp::SampleV3>) {
     let v = s.header.version;
     ui.out(field(ui, 2, "version", format!("{}.{}", v / 100, v % 100)));
     ui.out(field(ui, 2, "strokes", s.stroke_count().to_string()));
+
+    section(ui, "Zones");
+    match s.zones() {
+        Err(e) => ui.warn(format!("zone table unreadable: {e}")),
+        Ok(zones) => {
+            for z in zones {
+                let range = match z.low_note {
+                    Some(low) => format!("{}..={}", low, z.top_note),
+                    None => format!("..={}", z.top_note),
+                };
+                ui.out(field(
+                    ui,
+                    2,
+                    &range,
+                    format!("root {} (stroke {})", z.root_key, z.stroke_gid),
+                ));
+            }
+        }
+    }
 }
 
 /// The sample-instrument printout: identity, then the zone map.

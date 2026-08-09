@@ -184,6 +184,18 @@ fn v3_samples_decode_names_and_strokes() {
                 let name = s.name().unwrap();
                 assert!(!name.is_empty(), "{}: empty name", path.display());
                 assert!(s.stroke_count() > 0, "{}: no strokes", path.display());
+                // One zone per stroke, every note in MIDI range, and each zone
+                // verified against its stroke by the reader itself.
+                let zones = s.zones().unwrap_or_else(|e| {
+                    panic!("{}: zones unreadable: {e}", path.display());
+                });
+                assert_eq!(zones.len(), s.stroke_count(), "{}", path.display());
+                for z in &zones {
+                    assert!(z.top_note <= 127 && z.root_key <= 127, "{}", path.display());
+                    if let Some(low) = z.low_note {
+                        assert!(low <= z.top_note, "{}: low above top", path.display());
+                    }
+                }
             }
             other => panic!("{}: decoded to {other:?}", path.display()),
         }
