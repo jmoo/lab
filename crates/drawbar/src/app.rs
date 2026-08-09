@@ -13,10 +13,107 @@ use crate::log::Log;
 use crate::tabs::Tabs;
 use crate::workspace::{Origin, Workspace};
 
-/// The three status accents. Dark panel, small signals — an instrument tool.
-pub const GOOD: egui::Color32 = egui::Color32::from_rgb(0x60, 0xc0, 0x70);
-pub const WARN: egui::Color32 = egui::Color32::from_rgb(0xe0, 0xa0, 0x30);
-pub const BAD: egui::Color32 = egui::Color32::from_rgb(0xe0, 0x50, 0x40);
+/// The three status accents, and the panel's own red.
+///
+/// ⚠️ Each theme gets its own set. A signal picked to glow on a black panel is washed out
+/// on paper, and one picked for paper disappears on the panel — so nothing here is a
+/// constant, and nothing outside this module spells a status colour for itself.
+pub fn good(visuals: &egui::Visuals) -> egui::Color32 {
+    match visuals.dark_mode {
+        true => egui::Color32::from_rgb(0x60, 0xc0, 0x70),
+        false => egui::Color32::from_rgb(0x1e, 0x7a, 0x36),
+    }
+}
+
+pub fn warn(visuals: &egui::Visuals) -> egui::Color32 {
+    match visuals.dark_mode {
+        true => egui::Color32::from_rgb(0xe0, 0xa0, 0x30),
+        false => egui::Color32::from_rgb(0x8a, 0x5a, 0x00),
+    }
+}
+
+pub fn bad(visuals: &egui::Visuals) -> egui::Color32 {
+    match visuals.dark_mode {
+        true => egui::Color32::from_rgb(0xe0, 0x50, 0x40),
+        false => egui::Color32::from_rgb(0xb3, 0x2a, 0x1e),
+    }
+}
+
+/// The red the instrument itself is: a lit lamp, a knob's travelled arc, a selected row.
+pub fn accent(visuals: &egui::Visuals) -> egui::Color32 {
+    match visuals.dark_mode {
+        true => egui::Color32::from_rgb(0xd6, 0x46, 0x3a),
+        false => egui::Color32::from_rgb(0xa8, 0x33, 0x2a),
+    }
+}
+
+/// Which theme the operator asked for.
+///
+/// `System` is the unset state: the app follows the desktop's or the browser's own
+/// preference until it is told otherwise, and goes back to following it when the choice
+/// is cycled past.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ThemeChoice {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeChoice {
+    /// Where the choice is kept between sessions.
+    const KEY: &'static str = "drawbar.theme";
+
+    fn read(text: &str) -> ThemeChoice {
+        match text {
+            "light" => ThemeChoice::Light,
+            "dark" => ThemeChoice::Dark,
+            _ => ThemeChoice::System,
+        }
+    }
+
+    fn stored(self) -> &'static str {
+        match self {
+            ThemeChoice::System => "system",
+            ThemeChoice::Light => "light",
+            ThemeChoice::Dark => "dark",
+        }
+    }
+
+    fn next(self) -> ThemeChoice {
+        match self {
+            ThemeChoice::System => ThemeChoice::Light,
+            ThemeChoice::Light => ThemeChoice::Dark,
+            ThemeChoice::Dark => ThemeChoice::System,
+        }
+    }
+
+    /// ⚠️ A word, not a sun or a moon: the bundled fonts have no glyph for either, and a
+    /// missing one renders as an empty box.
+    fn label(self) -> &'static str {
+        match self {
+            ThemeChoice::System => "Theme: auto",
+            ThemeChoice::Light => "Theme: light",
+            ThemeChoice::Dark => "Theme: dark",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            ThemeChoice::System => "following the system — click for light",
+            ThemeChoice::Light => "held light — click for dark",
+            ThemeChoice::Dark => "held dark — click to follow the system again",
+        }
+    }
+
+    fn preference(self) -> egui::ThemePreference {
+        match self {
+            ThemeChoice::System => egui::ThemePreference::System,
+            ThemeChoice::Light => egui::ThemePreference::Light,
+            ThemeChoice::Dark => egui::ThemePreference::Dark,
+        }
+    }
+}
 
 /// A small filled dot: something changed here, or something is attached here.
 ///
@@ -35,6 +132,7 @@ pub struct DrawbarApp {
     tabs: Tabs,
     document: Document,
     log: Log,
+    theme: ThemeChoice,
     /// The list's revision as the store last saw it.
     saved: u64,
     /// When the store was last caught up, on egui's own clock.
@@ -43,7 +141,15 @@ pub struct DrawbarApp {
 
 impl DrawbarApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> DrawbarApp {
-        cc.egui_ctx.set_visuals(visuals());
+        // Both faces are dressed up front, so the system flipping from light to dark mid
+        // session lands on this app's own colours rather than egui's defaults.
+        cc.egui_ctx.set_visuals_of(egui::Theme::Dark, dark());
+        cc.egui_ctx.set_visuals_of(egui::Theme::Light, light());
+        let theme = cc
+            .storage
+            .and_then(|storage| storage.get_string(ThemeChoice::KEY))
+            .map_or(ThemeChoice::default(), |text| ThemeChoice::read(&text));
+        cc.egui_ctx.set_theme(theme.preference());
         let mut app = DrawbarApp {
             workspace: Workspace::new(cc.egui_ctx.clone()),
             device: Device::new(cc.egui_ctx.clone()),
@@ -51,6 +157,7 @@ impl DrawbarApp {
             tabs: Tabs::default(),
             document: Document::default(),
             log: Log::default(),
+            theme,
             saved: 0,
             saved_at: 0.0,
         };
@@ -183,6 +290,7 @@ impl eframe::App for DrawbarApp {
     /// without anyone asking for it to be.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         crate::store::save(storage, &self.workspace, &mut self.log);
+        storage.set_string(ThemeChoice::KEY, self.theme.stored().to_string());
         self.saved = self.workspace.revision();
     }
 
@@ -198,11 +306,22 @@ impl eframe::App for DrawbarApp {
         egui::TopBottomPanel::top("title").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("drawbar");
-                ui.label(
-                    egui::RichText::new("your sounds, here and on the instrument")
-                        .weak()
-                        .italics(),
-                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button(self.theme.label())
+                        .on_hover_text(self.theme.hint())
+                        .clicked()
+                    {
+                        self.theme = self.theme.next();
+                        ctx.set_theme(self.theme.preference());
+                        // Written from the frame that changed it: eframe's own save runs
+                        // on a timer, and a choice made and then left alone would sit
+                        // unwritten for as long as the window goes untouched.
+                        if let Some(storage) = frame.storage_mut() {
+                            storage.set_string(ThemeChoice::KEY, self.theme.stored().to_string());
+                        }
+                    }
+                });
             });
         });
 
@@ -286,12 +405,62 @@ fn drop_hint(ctx: &egui::Context) {
 }
 
 /// Dark, panel-like, with the accents kept for status alone.
-fn visuals() -> egui::Visuals {
+fn dark() -> egui::Visuals {
     let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = egui::Color32::from_rgb(0x16, 0x17, 0x19);
     visuals.window_fill = egui::Color32::from_rgb(0x1c, 0x1d, 0x20);
     visuals.faint_bg_color = egui::Color32::from_rgb(0x22, 0x23, 0x26);
     visuals.selection.bg_fill = egui::Color32::from_rgb(0x7a, 0x24, 0x24);
-    visuals.hyperlink_color = BAD;
+    visuals.hyperlink_color = bad(&visuals);
     visuals
+}
+
+/// The same instrument under work light: paper rather than panel, and the reds pulled
+/// down to where they still read against it.
+fn light() -> egui::Visuals {
+    let mut visuals = egui::Visuals::light();
+    visuals.panel_fill = egui::Color32::from_rgb(0xf2, 0xf1, 0xee);
+    visuals.window_fill = egui::Color32::from_rgb(0xfa, 0xf9, 0xf7);
+    visuals.faint_bg_color = egui::Color32::from_rgb(0xe6, 0xe4, 0xdf);
+    visuals.selection.bg_fill = egui::Color32::from_rgb(0xe4, 0xbc, 0xb8);
+    visuals.selection.stroke.color = egui::Color32::from_rgb(0x3a, 0x14, 0x10);
+    visuals.hyperlink_color = bad(&visuals);
+    visuals
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The choice survives a trip through the store, and cycling reaches every state and
+    /// comes back to following the system.
+    #[test]
+    fn the_theme_choice_round_trips_and_cycles_home() {
+        let mut choice = ThemeChoice::System;
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            seen.push(choice.stored());
+            assert_eq!(ThemeChoice::read(choice.stored()), choice);
+            choice = choice.next();
+        }
+        assert_eq!(seen, ["system", "light", "dark"]);
+        assert_eq!(choice, ThemeChoice::System, "the cycle closes");
+        // Anything the store cannot account for is the unset state, never a forced one.
+        assert_eq!(ThemeChoice::read("moonlight"), ThemeChoice::System);
+        assert_eq!(ThemeChoice::read(""), ThemeChoice::System);
+    }
+
+    /// Every accent has to be legible on the background it is painted over, and the two
+    /// sets must not be the same colour twice.
+    #[test]
+    fn each_theme_has_its_own_accents() {
+        let (dark, light) = (dark(), light());
+        assert!(dark.dark_mode && !light.dark_mode);
+        for accent in [good, warn, bad, accent] {
+            assert_ne!(accent(&dark), accent(&light));
+        }
+        // The panel is dark and the paper is light, whatever egui's own defaults do.
+        assert!(dark.panel_fill.intensity() < 0.2);
+        assert!(light.panel_fill.intensity() > 0.8);
+    }
 }

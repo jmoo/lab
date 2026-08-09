@@ -18,13 +18,18 @@ It is named for the nine-drawbar organ register widget in its editor.
 
 ## What this build does
 
-The window is a file browser over two places your sounds live:
+The window is a file browser over the places your sounds live:
 
 | region | what it holds |
 |---|---|
-| **Two storage columns** (left) | **This computer** — dropped or opened files, copies pulled off the instrument, fresh defaults — beside the **instrument**, whose folders (Programs, Set lists, Samples, Pianos, Live, Settings) fill in by themselves once it is attached. Side by side, so moving a sound between them is a short drag; each column scrolls on its own, and the dock they share is resizable |
+| **Storage** (left) | **This computer** — dropped or opened files, copies pulled off the instrument, fresh defaults. **Connect instrument** sits beside Open… and New; until an instrument answers, this is the whole sidebar. Attached, the **instrument** takes a column of its own alongside — folders (Programs, Set lists, Samples, Pianos, Live, Settings) filling in by themselves — so moving a sound between the two is a short drag. Each column scrolls on its own, and the dock they share is resizable |
 | **Tabs** (centre) | one document per thing you opened. Double-click anything in the sidebar to open it; something on the instrument is copied here first. Each has a **Basic** and an **Advanced** face |
 | **Status strip** (bottom) | one line about what just happened, and a spinner while something is running. Click it for the full activity log, protocol detail and all |
+
+**Light or dark, whichever the machine is using.** The button at the top right says
+which — *auto* follows the desktop's or the browser's own setting and changes with it
+mid-session; clicking cycles to a held light, a held dark, and back to auto. The choice
+is kept between sessions.
 
 ### This computer
 
@@ -44,8 +49,9 @@ a row removes it from the store.
 
 ### The instrument
 
-**Connect** opens the device (a chooser in the browser, the first attached
-Clavia natively) and reads what it holds. Each folder is read in **one session**,
+**Connect instrument**, beside Open… and New, opens the device (a chooser in the
+browser, the first attached Clavia natively) and reads what it holds; the instrument's
+own column appears with it, and goes away again when it is released. Each folder is read in **one session**,
 the way Nord Sound Manager does it — the session is opened once and every slot
 read inside it — so connecting no longer walks the instrument's display through
 an open and a close per bank. Names fill in as each bank lands, and the folder
@@ -126,9 +132,12 @@ Looking at a document and changing it are the same thing. There is no Apply: a c
 you move is set on the working copy that instant, the bytes are re-encoded and
 re-checked, and the tab picks up a dot.
 
-**Basic** is the front panel. Sections are titled boxes — Keyboard & split, then Organ,
-Piano, Sample, Effects, EQ — and none of them folds away, because a control you cannot
-see is a control you do not know you have. **Only the engines a part is actually playing
+**Basic** is the front panel, and it is laid out like one: **knobs** for the values that
+sweep, **lamps** for the switches, names printed *under* what they name, and controls
+running left to right in strips that wrap rather than down a column of form rows.
+Sections are titled boxes — Keyboard & split, then Organ, Piano, Sample, Effects, EQ —
+and none of them folds away, because a control you cannot see is a control you do not
+know you have. **Only the engines a part is actually playing
 are there**: set both parts to piano and the organ section goes, and the part pickers
 that bring it back are in Keyboard & split, which leads because it never goes.
 
@@ -141,9 +150,15 @@ that bring it back are in Keyboard & split, which leads because it never goes.
   instrument is playing is marked, and clicking the other one switches it.
 - In **b3+bass**, preset 1 is the bass manual: two drawbars, in their own fields. The
   nine nibbles they shadow hold stale leftovers and are not shown at all.
-- **Transpose is one control**, a switch and a number written together, because that is
-  what the panel's button is. The instrument ignores the amount while the switch is
-  clear, and never clears the switch once it is set.
+- **Transpose is one control**, a lamp and a number written together, because that is
+  what the panel's button is. The instrument ignores the amount while the lamp is dark,
+  and moving the number lights it.
+- **The piano section names the piano** where the instrument can name it. A program
+  stores its piano as an id and the panel's own dial position, and no file anywhere
+  carries the name — so with an instrument attached, *Ask the instrument* reads the
+  program's dependencies and the name appears; without one, the id is shown and says as
+  much. The Model dial keeps its number: nothing this app can read maps a dial position
+  to a name.
 - A picker offers only values the library can name. A file holding one it cannot reads
   as *unrecognized value (6)* and keeps it in the list, so changing away from it can be
   undone.
@@ -152,6 +167,12 @@ that bring it back are in Keyboard & split, which leads because it never goes.
 
 **Drawbars** are the widget the crate is named after: pull down to draw out, with the
 positions in digits underneath (`88 8800 000`). No hex anywhere in Basic.
+
+**Every control answers the keyboard.** Tab reaches them; a knob steps on the arrows,
+jumps ten on Page Up/Down and goes to its stops on Home/End; a lamp switches on Space or
+Enter. A knob is dragged up to open it out, and double-clicking one opens its number for
+typing — what is typed is clamped to the stops, because a knob cannot be turned past
+them.
 
 Sample instruments show their name and the stretch of keyboard each zone covers, with
 root key and top note as note names (`C4` is middle C). Only v2 `.nsmp` content can be

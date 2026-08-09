@@ -24,8 +24,8 @@ impl Level {
     pub fn color(self, visuals: &egui::Visuals) -> egui::Color32 {
         match self {
             Level::Info => visuals.weak_text_color(),
-            Level::Warn => egui::Color32::from_rgb(0xe0, 0xa0, 0x30),
-            Level::Error => egui::Color32::from_rgb(0xe0, 0x50, 0x40),
+            Level::Warn => crate::app::warn(visuals),
+            Level::Error => crate::app::bad(visuals),
         }
     }
 }

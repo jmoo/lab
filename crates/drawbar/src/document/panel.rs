@@ -5,14 +5,19 @@ use eframe::egui;
 use nord_format::fields::Field;
 
 use super::controls::{self, Ctx, Sets};
-use crate::app::{GOOD, WARN};
 use crate::drawbar_widget;
 use crate::fields::Control;
 use crate::strings::{self, Section};
 use crate::visibility::{self, Bars, Organ, Registration};
 
 /// A program or a live slot: the same body, so the same panel.
-pub fn program(ui: &mut egui::Ui, ctx: &Ctx, fields: &[Field], sets: &mut Sets) {
+pub fn program(
+    ui: &mut egui::Ui,
+    ctx: &Ctx,
+    fields: &[Field],
+    piano: &mut PianoLookup,
+    sets: &mut Sets,
+) {
     let organ = visibility::organ(fields);
     for section in strings::PROGRAM_SECTIONS {
         if !visibility::shown(section, fields) {
@@ -29,16 +34,21 @@ pub fn program(ui: &mut egui::Ui, ctx: &Ctx, fields: &[Field], sets: &mut Sets) 
             continue;
         }
         controls::section(ui, section.title(), |ui| {
-            if section == Section::Keyboard {
-                transpose(ui, fields, sets);
+            if section == Section::Piano {
+                piano.ui(ui);
             }
             match organ_here {
                 Some(organ) => organ_section(ui, ctx, fields, organ, &rows, sets),
-                None => {
-                    for field in &rows {
-                        controls::row(ui, ctx, field, sets);
+                None => controls::strip(ui, |ui| {
+                    // The transpose pair leads its section, because it is the control the
+                    // panel's own button is: two fields written as one.
+                    if section == Section::Keyboard {
+                        transpose(ui, fields, sets);
                     }
-                }
+                    for field in &rows {
+                        controls::cell(ui, ctx, field, sets);
+                    }
+                }),
             }
         });
     }
@@ -52,9 +62,11 @@ pub fn settings(ui: &mut egui::Ui, ctx: &Ctx, fields: &[Field], sets: &mut Sets)
             continue;
         }
         controls::section(ui, section.title(), |ui| {
-            for field in &rows {
-                controls::row(ui, ctx, field, sets);
-            }
+            controls::strip(ui, |ui| {
+                for field in &rows {
+                    controls::cell(ui, ctx, field, sets);
+                }
+            });
         });
     }
 }
@@ -67,8 +79,69 @@ pub fn plain(ui: &mut egui::Ui, ctx: &Ctx, fields: &[Field], sets: &mut Sets) {
             .small()
             .weak(),
     );
-    for field in fields {
-        controls::row(ui, ctx, field, sets);
+    controls::strip(ui, |ui| {
+        for field in fields {
+            controls::cell(ui, ctx, field, sets);
+        }
+    });
+}
+
+/// What is known about the piano a program plays, and the way to ask for the rest.
+///
+/// ⚠️ The file stores an **id** for the piano and, separately, the panel's category and
+/// Model dial position. The id is the identity; the dial position is a coordinate whose
+/// meaning lives in the instrument's own library. Only the id can be resolved to a name,
+/// and only the instrument can resolve it — so a name shown here always came off the
+/// wire, never out of the file.
+pub struct PianoLookup {
+    /// The id the file names, or `None` where it references no piano at all.
+    pub id: Option<u32>,
+    /// What the instrument called that id, once it has been asked.
+    pub name: Option<String>,
+    /// Whether asking is possible: an attached instrument, and a slot to ask about.
+    pub can_ask: bool,
+    /// Set when the operator asks. The document turns it into one `DEPENDENCIES` read.
+    pub asked: bool,
+}
+
+impl PianoLookup {
+    fn ui(&mut self, ui: &mut egui::Ui) {
+        let Some(id) = self.id else {
+            return;
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new("currently").small().weak());
+            match &self.name {
+                Some(name) => {
+                    ui.label(egui::RichText::new(name).strong());
+                    ui.label(
+                        egui::RichText::new("— named by the instrument")
+                            .small()
+                            .weak(),
+                    );
+                }
+                None => {
+                    ui.label(egui::RichText::new(format!("piano {id:#010x}")).monospace());
+                    match self.can_ask {
+                        true => {
+                            self.asked |= ui
+                                .small_button("Ask the instrument")
+                                .on_hover_text("read this program's dependencies for the name")
+                                .clicked();
+                        }
+                        false => {
+                            ui.label(
+                                egui::RichText::new(
+                                    "— the file stores the id; only the instrument knows the name",
+                                )
+                                .small()
+                                .weak(),
+                            );
+                        }
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -124,10 +197,23 @@ fn organ_section(
     sets: &mut Sets,
 ) {
     // The model picker is always here, whatever it is set to: it is how a program comes
-    // to have one organ rather than another.
-    if let Some(field) = find(fields, "center_panel.organ_type") {
-        controls::row(ui, ctx, field, sets);
-    }
+    // to have one organ rather than another. Beside it go the settings the whole organ
+    // shares, whichever registration is playing.
+    controls::strip(ui, |ui| {
+        if let Some(field) = find(fields, "center_panel.organ_type") {
+            controls::cell(ui, ctx, field, sets);
+        }
+        for path in organ.vib_type.iter().chain(
+            organ
+                .perc
+                .iter()
+                .flat_map(|(third, speed)| [third, speed].into_iter()),
+        ) {
+            if let Some(field) = find(fields, path) {
+                controls::cell(ui, ctx, field, sets);
+            }
+        }
+    });
     if !organ.known {
         ui.label(
             egui::RichText::new(
@@ -136,19 +222,8 @@ fn organ_section(
                  file stores is below.",
             )
             .small()
-            .color(WARN),
+            .color(crate::app::warn(ui.visuals())),
         );
-    }
-
-    for path in organ.vib_type.iter().chain(
-        organ
-            .perc
-            .iter()
-            .flat_map(|(third, speed)| [third, speed].into_iter()),
-    ) {
-        if let Some(field) = find(fields, path) {
-            controls::row(ui, ctx, field, sets);
-        }
     }
 
     for registration in &organ.registrations {
@@ -157,12 +232,14 @@ fn organ_section(
 
     // Whatever else this section holds: an unrecognised selection's whole panel, or a
     // field the library has grown since.
-    for field in rows {
-        if field.path == "center_panel.organ_type" {
-            continue;
+    controls::strip(ui, |ui| {
+        for field in rows {
+            if field.path == "center_panel.organ_type" {
+                continue;
+            }
+            controls::cell(ui, ctx, field, sets);
         }
-        controls::row(ui, ctx, field, sets);
-    }
+    });
 }
 
 fn preset(
@@ -188,7 +265,8 @@ fn preset(
                 }
             }
             if registration.live {
-                ui.label(egui::RichText::new("playing").small().color(GOOD));
+                let good = crate::app::good(ui.visuals());
+                ui.label(egui::RichText::new("playing").small().color(good));
             }
         });
 
@@ -248,37 +326,41 @@ fn bass(ui: &mut egui::Ui, fields: &[Field], first: &str, second: &str, sets: &m
     }
 }
 
-/// The transpose control: one switch and one number, written together the way the
-/// panel's own button writes them.
+/// The transpose control: a lamp and a number, written together the way the panel's own
+/// button writes them — two cells, because that is how the panel prints it.
+///
+/// The instrument ignores the amount while the lamp is dark, and moving the amount is
+/// what lights it.
 pub fn transpose(ui: &mut egui::Ui, fields: &[Field], sets: &mut Sets) {
+    /// The panel's own travel, either side of nothing.
+    const SEMITONES: i64 = 6;
+
     let Some((on, semitones)) = visibility::transpose(fields) else {
         return;
     };
-    ui.horizontal(|ui| {
-        controls::label(ui, "center_panel.transpose");
-        let mut want_on = on;
-        let mut want = semitones;
-        let switched = ui
-            .checkbox(&mut want_on, "")
-            .on_hover_text("the transpose light on the panel")
-            .changed();
-        let sign = match want >= 0 {
-            true => "+",
-            false => "",
-        };
-        let moved = ui
-            .add(egui::DragValue::new(&mut want).range(-6..=6).prefix(sign))
-            .changed();
-        if switched || moved {
-            // Moving the semitones turns the light on, which is what the panel does.
-            sets.extend(visibility::set_transpose(want_on || moved, want));
-        }
-        if !want_on {
-            ui.label(
-                egui::RichText::new("off — the instrument ignores the amount")
-                    .small()
-                    .weak(),
-            );
-        }
+    let mut switched = None;
+    controls::named_cell(ui, "center_panel.transpose_enabled", 78.0, |ui| {
+        switched = crate::led::ui(ui, on, "");
+    })
+    .on_hover_text("the transpose light on the panel");
+
+    let mut moved = None;
+    controls::named_cell(ui, "center_panel.transpose", 78.0, |ui| {
+        moved = crate::knob::ui(
+            ui,
+            "center_panel.transpose",
+            semitones,
+            -SEMITONES,
+            SEMITONES,
+        );
     });
+
+    match (switched, moved) {
+        (_, Some(want)) => {
+            // Moving the semitones turns the light on, which is what the panel does.
+            sets.extend(visibility::set_transpose(true, want));
+        }
+        (Some(want_on), None) => sets.extend(visibility::set_transpose(want_on, semitones)),
+        (None, None) => {}
+    }
 }

@@ -9,7 +9,7 @@ use eframe::egui;
 use nord_format::fields::Field;
 use nord_usb::{Location, ObjectClass};
 
-use crate::app::{dot, BAD, WARN};
+use crate::app::dot;
 use crate::device::Device;
 use crate::fields;
 use crate::log::Log;
@@ -137,18 +137,21 @@ impl Document {
             self.views.insert(id, want);
         }
         if let Some(why) = &self.error {
-            ui.label(egui::RichText::new(why).color(BAD));
+            ui.label(egui::RichText::new(why).color(crate::app::bad(ui.visuals())));
         }
         ui.separator();
 
         let mut details = None;
         let mut typed = false;
+        let mut piano = piano_lookup(entity, registry.as_deref(), device);
         egui::ScrollArea::vertical()
             .id_salt(SCROLL)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 match view {
-                    View::Basic => self.body(ui, entity, registry.as_deref(), &mut sets),
+                    View::Basic => {
+                        self.body(ui, entity, registry.as_deref(), &mut piano, &mut sets)
+                    }
                     View::Advanced => {
                         if let Some(fields) = registry.as_deref() {
                             self.advanced.table(ui, fields, &mut sets);
@@ -165,6 +168,11 @@ impl Document {
         if let Some(details) = details {
             for cmd in advanced::commands(details) {
                 device.send(cmd, log);
+            }
+        }
+        if piano.asked {
+            if let Some((class, at)) = workspace.get(id).and_then(|e| e.origin.slot()) {
+                device.send(crate::device::DeviceCmd::Deps { class, at }, log);
             }
         }
         if act.save {
@@ -214,8 +222,9 @@ impl Document {
         ui.horizontal_wrapped(|ui| {
             ui.heading(&entity.name);
             if entity.dirty {
-                dot(ui, WARN);
-                ui.label(egui::RichText::new("changed").small().color(WARN));
+                let warn = crate::app::warn(ui.visuals());
+                dot(ui, warn);
+                ui.label(egui::RichText::new("changed").small().color(warn));
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -257,6 +266,7 @@ impl Document {
         ui: &mut egui::Ui,
         entity: &LocalEntity,
         registry: Option<&[Field]>,
+        piano: &mut panel::PianoLookup,
         sets: &mut Sets,
     ) {
         let Some(decoded) = &entity.entity else {
@@ -273,7 +283,7 @@ impl Document {
         }
         if let Some(fields) = registry {
             if fields::is_electro5_panel(decoded) {
-                return panel::program(ui, &self.ctx, fields, sets);
+                return panel::program(ui, &self.ctx, fields, piano, sets);
             }
             if fields::is_electro5_settings(decoded) {
                 return panel::settings(ui, &self.ctx, fields, sets);
@@ -290,7 +300,7 @@ impl Document {
                 sample::ui(ui, &snapshot, &mut self.name, editable, sets);
             }
             Some(Err(why)) => {
-                ui.label(egui::RichText::new(why).color(BAD));
+                ui.label(egui::RichText::new(why).color(crate::app::bad(ui.visuals())));
             }
             None => sample::ui(
                 ui,
@@ -350,6 +360,43 @@ impl Document {
                 Err(why)
             }
         }
+    }
+}
+
+/// What is known about the piano a program plays.
+///
+/// ⚠️ The name can only come from the instrument. A `.ne5p` stores the piano's **id** and
+/// no name at all, and the category/model pair beside it is the panel's dial position
+/// rather than an identity — so nothing here resolves a name out of the file, and a
+/// document opened with no instrument attached shows the id and says so.
+fn piano_lookup(
+    entity: &LocalEntity,
+    registry: Option<&[Field]>,
+    device: &Device,
+) -> panel::PianoLookup {
+    let id = registry
+        .and_then(|fields| fields.iter().find(|field| field.path == "piano_panel.id"))
+        .and_then(|field| library_id(&field.value))
+        // Zero is "this program references no piano", not an id to go looking for.
+        .filter(|id| *id != 0);
+    let slot = entity.origin.slot();
+    panel::PianoLookup {
+        id,
+        name: id
+            .and_then(|id| device.state.dependency_name(slot, ObjectClass::Piano, id))
+            .map(str::to_string),
+        can_ask: slot.is_some() && device.state.connected(),
+        asked: false,
+    }
+}
+
+/// A library id as the registry spells it — decimal from the field list, hex where a
+/// person typed it.
+fn library_id(value: &str) -> Option<u32> {
+    let text = value.trim();
+    match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        Some(hex) => u32::from_str_radix(hex, 16).ok(),
+        None => text.parse().ok(),
     }
 }
 
@@ -598,6 +645,48 @@ mod tests {
             "the body moved: {:?}",
             offset(body)
         );
+    }
+
+    /// A program's piano is an id in the file and a name on the instrument. With nothing
+    /// attached the document has the id and says as much; it never invents the name.
+    #[test]
+    fn a_pianos_name_comes_off_the_instrument_or_not_at_all() {
+        use nord_usb::{Location, ObjectClass};
+
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let device = Device::new(ctx);
+        let mut log = Log::default();
+
+        let id = workspace.create(Fresh::Program, &mut log).unwrap();
+        let bytes = workspace.get(id).unwrap().bytes.clone();
+        let fields = fields::apply(&bytes, &[]).unwrap().0;
+        let local = piano_lookup(workspace.get(id).unwrap(), Some(&fields), &device);
+        assert!(local.name.is_none(), "nothing has been asked");
+        assert!(!local.can_ask, "and there is nothing to ask");
+
+        let from_device = workspace.ingest(
+            "Africa-Split.ne5p".into(),
+            Origin::Device {
+                class: ObjectClass::Program,
+                at: Location { bank: 6, slot: 3 },
+            },
+            bytes,
+            &mut log,
+        );
+        let copied = piano_lookup(workspace.get(from_device).unwrap(), Some(&fields), &device);
+        assert!(copied.name.is_none(), "still nothing has been asked");
+        // A fresh program references no piano at all, and zero is not an id to hunt for.
+        assert_eq!(copied.id, None);
+    }
+
+    /// The registry spells an id in decimal; a person spells it the way `nord deps` does.
+    #[test]
+    fn a_library_id_reads_in_either_spelling() {
+        assert_eq!(library_id("16909060"), Some(0x0102_0304));
+        assert_eq!(library_id("0x01020304"), Some(0x0102_0304));
+        assert_eq!(library_id(" 0 "), Some(0));
+        assert_eq!(library_id("nothing"), None);
     }
 
     #[test]

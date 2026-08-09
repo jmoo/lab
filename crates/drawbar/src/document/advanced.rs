@@ -9,7 +9,6 @@ use nord_format::fields::Field;
 use nord_usb::{Location, ObjectClass};
 
 use super::controls::Sets;
-use crate::app::BAD;
 use crate::device::{Device, DeviceCmd};
 use crate::fields::byte_diff;
 use crate::strings;
@@ -189,7 +188,8 @@ impl Advanced {
         // The refusal sits beside the cell it is about: a message at the foot of ninety
         // rows is a message about nothing in particular.
         if let Some(why) = &self.cell.error {
-            ui.label(egui::RichText::new(why).small().color(BAD));
+            let bad = crate::app::bad(ui.visuals());
+            ui.label(egui::RichText::new(why).small().color(bad));
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.cell = Cell::default();
@@ -278,12 +278,12 @@ fn verify(ui: &mut egui::Ui, entity: &LocalEntity) {
         ui.label(
             egui::RichText::new(entity.verify.badge())
                 .strong()
-                .color(entity.verify.color()),
+                .color(entity.verify.color(ui.visuals())),
         );
         ui.label(egui::RichText::new(entity.verify.detail()).weak());
     });
     if let Some(e) = &entity.parse_error {
-        ui.label(egui::RichText::new(e).color(BAD));
+        ui.label(egui::RichText::new(e).color(crate::app::bad(ui.visuals())));
     }
 }
 

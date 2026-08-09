@@ -6,7 +6,7 @@
 
 use eframe::egui;
 
-use crate::app::{dot, WARN};
+use crate::app::dot;
 use crate::workspace::Workspace;
 
 /// ⚠️ The strip's own scroll id. The strip and the document body are drawn into the same
@@ -97,9 +97,10 @@ impl Tabs {
                                     format!("will be sent to {}", crate::strings::place(class, at))
                                 })
                                 .unwrap_or_default();
-                            dot(ui, WARN).on_hover_text(owed);
+                            dot(ui, crate::app::warn(ui.visuals())).on_hover_text(owed);
                         } else if entity.dirty {
-                            dot(ui, crate::app::GOOD).on_hover_text("changed since it was opened");
+                            dot(ui, crate::app::good(ui.visuals()))
+                                .on_hover_text("changed since it was opened");
                         }
                         if ui.small_button("×").clicked() {
                             close = Some(tab.id);

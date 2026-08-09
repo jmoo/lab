@@ -10,8 +10,10 @@ use eframe::egui;
 use nord_format::Entity;
 use nord_usb::{Location, ObjectClass};
 
-use crate::app::{dot, GOOD};
-use crate::device::{holdings, put_refusal, read_only, Device, DeviceCmd, Outgoing, BROWSED};
+use crate::app::dot;
+use crate::device::{
+    holdings, put_refusal, read_only, Connection, Device, DeviceCmd, Outgoing, BROWSED,
+};
 use crate::log::Log;
 use crate::strings::{folder, place, shown};
 use crate::tabs::Tabs;
@@ -263,17 +265,23 @@ pub struct Browser {
 }
 
 impl Browser {
-    /// Draw the two places side by side and collect what the user asked for.
+    /// Draw the places a sound can live and collect what the user asked for.
     ///
-    /// Adjacent columns rather than stacked lists: a drag between them is then a short
-    /// horizontal move, and a long device tree cannot push the local list off-screen.
+    /// The instrument gets a column once there is an instrument. Attached, the two sit
+    /// adjacent — a drag between them is then a short horizontal move, and a long device
+    /// tree cannot push the local list off-screen. Unattached, the column would be half
+    /// the sidebar saying nothing, so the list takes the whole width and the way to an
+    /// instrument is a button beside the ones that open files.
     pub fn ui(&mut self, ui: &mut egui::Ui, workspace: &Workspace, device: &Device) -> Vec<Act> {
         let mut acts = Vec::new();
         self.dialog(ui.ctx(), &mut acts);
-        ui.columns(2, |columns| {
-            self.computer(&mut columns[0], workspace, &mut acts);
-            self.instrument(&mut columns[1], workspace, device, &mut acts);
-        });
+        match device.state.connected() {
+            true => ui.columns(2, |columns| {
+                self.computer(&mut columns[0], workspace, device, &mut acts);
+                self.instrument(&mut columns[1], workspace, device, &mut acts);
+            }),
+            false => self.computer(ui, workspace, device, &mut acts),
+        }
         ghost(ui.ctx());
         acts
     }
@@ -314,9 +322,18 @@ impl Browser {
 
     // ---- this computer ----------------------------------------------------------
 
-    fn computer(&mut self, ui: &mut egui::Ui, workspace: &Workspace, acts: &mut Vec<Act>) {
+    fn computer(
+        &mut self,
+        ui: &mut egui::Ui,
+        workspace: &Workspace,
+        device: &Device,
+        acts: &mut Vec<Act>,
+    ) {
         let mut open_files = false;
         let mut fresh = None;
+        let mut connect = false;
+        let attached = device.state.connected();
+        let connecting = matches!(device.state.connection, Connection::Connecting);
         let head = self.heading(ui, "This computer", |ui| {
             open_files = ui.small_button("Open…").clicked();
             ui.menu_button("New", |ui| {
@@ -327,12 +344,35 @@ impl Browser {
                     }
                 }
             });
+            if attached {
+                return;
+            }
+            match connecting {
+                true => {
+                    ui.spinner();
+                }
+                // ⚠️ Reached inside the frame the click landed in, which is what keeps
+                // the browser's transient user activation alive for `requestDevice()`.
+                false => {
+                    connect = ui
+                        .small_button("Connect instrument")
+                        .on_hover_text(
+                            "Close Nord Sound Manager first — it holds the instrument on its \
+                             own, and nothing else can reach it alongside.\n\nIn a browser: \
+                             Chrome or Edge only.",
+                        )
+                        .clicked();
+                }
+            }
         });
         if open_files {
             acts.push(Act::OpenFiles);
         }
         if let Some(kind) = fresh {
             acts.push(Act::New(kind));
+        }
+        if connect {
+            acts.push(Act::Connect);
         }
         // The heading takes a drop, so there is one target that is never also a place a
         // drag could have started from.
@@ -479,13 +519,13 @@ impl Browser {
         acts: &mut Vec<Act>,
     ) {
         let Some(product) = device.state.product().map(str::to_string) else {
-            return self.no_instrument(ui, device, acts);
+            return;
         };
         let mut disconnect = false;
         let mut send_all = false;
         let owed = workspace.pending().len();
         self.heading(ui, &product, |ui| {
-            dot(ui, GOOD).on_hover_text("attached");
+            dot(ui, crate::app::good(ui.visuals())).on_hover_text("attached");
             disconnect = ui.small_button("Disconnect").clicked();
             if owed > 0 {
                 send_all = ui
@@ -508,39 +548,6 @@ impl Browser {
                     self.class(ui, device, class, acts);
                 }
             });
-    }
-
-    fn no_instrument(&mut self, ui: &mut egui::Ui, device: &Device, acts: &mut Vec<Act>) {
-        let connecting = matches!(
-            device.state.connection,
-            crate::device::Connection::Connecting
-        );
-        let mut connect = false;
-        self.heading(ui, "No instrument", |ui| {
-            if connecting {
-                ui.spinner();
-            } else {
-                // ⚠️ Reached inside the frame the click landed in, which is what keeps
-                // the browser's transient user activation alive for `requestDevice()`.
-                connect = ui.small_button("Connect").clicked();
-            }
-        });
-        if connect {
-            acts.push(Act::Connect);
-        }
-        ui.label(
-            egui::RichText::new(
-                "Close Nord Sound Manager first — it holds the instrument on its own, and \
-                 nothing else can reach it alongside.",
-            )
-            .small()
-            .weak(),
-        );
-        ui.label(
-            egui::RichText::new("In a browser: Chrome or Edge only.")
-                .small()
-                .weak(),
-        );
     }
 
     fn class(
@@ -953,7 +960,11 @@ fn row(ui: &mut egui::Ui, selected: bool, cells: &Cells) -> Drawn {
 
     let mut x = rect.left() + 4.0;
     if cells.dirty {
-        painter.circle_filled(egui::pos2(x + 3.5, rect.center().y), 3.5, crate::app::WARN);
+        painter.circle_filled(
+            egui::pos2(x + 3.5, rect.center().y),
+            3.5,
+            crate::app::warn(ui.visuals()),
+        );
     }
     x += 10.0;
 

@@ -373,6 +373,30 @@ impl DeviceState {
         }
     }
 
+    /// What the last dependency list called a library id.
+    ///
+    /// ⚠️ Only the wire carries these names — a program's file stores its piano and
+    /// sample as bare ids. The cache holds one slot's list, so this answers for the slot
+    /// that was last asked about and for no other; `None` means *not asked*, never
+    /// *nameless*.
+    pub fn dependency_name(
+        &self,
+        slot: Option<(ObjectClass, Location)>,
+        class: ObjectClass,
+        id: u32,
+    ) -> Option<&str> {
+        let (_, at) = slot?;
+        if self.detail.at != Some(at) {
+            return None;
+        }
+        self.detail
+            .deps
+            .as_ref()?
+            .iter()
+            .find(|dep| dep.class == class && dep.id == id)
+            .map(|dep| dep.name.trim())
+    }
+
     /// A scanned bank's slots, or `None` if it has not been scanned.
     pub fn bank(&self, class: ObjectClass, bank: u32) -> Option<&[Option<ProgramInfo>]> {
         self.banks.get(&(class.to_raw(), bank)).map(Vec::as_slice)
@@ -951,6 +975,51 @@ mod tests {
         assert!(workspace.get(still_owed).unwrap().pending, "still waiting");
         let owed: Vec<u64> = workspace.pending().iter().map(|e| e.id).collect();
         assert_eq!(owed, vec![still_owed]);
+    }
+
+    /// A library id resolves to a name only where the instrument has actually said so:
+    /// for the slot that was asked about, for the class asked for, and for that id.
+    /// Anything else is *not asked*, which is not the same as nameless.
+    #[test]
+    fn a_dependency_name_answers_only_for_what_was_asked() {
+        let at = Location { bank: 6, slot: 3 };
+        let elsewhere = Location { bank: 0, slot: 0 };
+        let detail = Detail {
+            at: Some(at),
+            info: None,
+            asked: true,
+            deps: Some(vec![Dependency {
+                flag: 0,
+                class: ObjectClass::Piano,
+                id: 0x0102_0304,
+                name: "Royal Grand 3D ".into(),
+                location: None,
+            }]),
+        };
+        let state = DeviceState {
+            detail,
+            ..DeviceState::default()
+        };
+
+        let piano = |slot, id| {
+            state
+                .dependency_name(Some((ObjectClass::Program, slot)), ObjectClass::Piano, id)
+                .map(str::to_string)
+        };
+        assert_eq!(piano(at, 0x0102_0304).as_deref(), Some("Royal Grand 3D"));
+        assert_eq!(piano(elsewhere, 0x0102_0304), None, "another slot's list");
+        assert_eq!(piano(at, 0x0999_0999), None, "an id it did not report");
+        assert_eq!(
+            state.dependency_name(
+                Some((ObjectClass::Program, at)),
+                ObjectClass::Sample,
+                0x0102_0304
+            ),
+            None,
+            "a piano is not a sample"
+        );
+        // Nothing to ask about: a document that never came off an instrument.
+        assert_eq!(state.dependency_name(None, ObjectClass::Piano, 1), None);
     }
 
     /// The status strip names places and things; the protocol line keeps the verbs.

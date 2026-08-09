@@ -12,6 +12,8 @@ pub mod device;
 pub mod document;
 pub mod drawbar_widget;
 pub mod fields;
+pub mod knob;
+pub mod led;
 pub mod log;
 pub mod note;
 pub mod store;

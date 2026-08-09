@@ -86,11 +86,11 @@ impl VerifyState {
         }
     }
 
-    pub fn color(&self) -> egui::Color32 {
+    pub fn color(&self, visuals: &egui::Visuals) -> egui::Color32 {
         match self {
-            VerifyState::Ok => crate::app::GOOD,
-            VerifyState::Differs { .. } | VerifyState::Failed(_) => crate::app::BAD,
-            VerifyState::NotApplicable(_) => egui::Color32::GRAY,
+            VerifyState::Ok => crate::app::good(visuals),
+            VerifyState::Differs { .. } | VerifyState::Failed(_) => crate::app::bad(visuals),
+            VerifyState::NotApplicable(_) => visuals.weak_text_color(),
         }
     }
 }
