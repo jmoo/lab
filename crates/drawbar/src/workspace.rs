@@ -1,8 +1,11 @@
-//! The workspace pane: local entities and the ways bytes get in and out of it.
+//! This computer: the assets held in memory, and the ways bytes get in and out of them.
 //!
 //! An entity is bytes first and a decode second — a file that does not parse still
 //! gets a row, with its error and its raw body still exportable, because reporting a
 //! bad file is the point of opening it.
+//!
+//! The list draws itself in [`crate::browser`]; what lives here is the model and the
+//! file dialogs.
 
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -27,27 +30,27 @@ pub enum Origin {
     Rescued {
         at: Location,
     },
-    Sweep {
-        label: String,
-    },
 }
 
 impl Origin {
     pub fn label(&self) -> String {
         match self {
-            Origin::File(name) => format!("file {name}"),
-            Origin::Device { class, at } => format!("{} {}", class.label(), shown(*at)),
-            Origin::Fresh => "new".into(),
-            Origin::Rescued { at } => format!("rescued {}", shown(*at)),
-            Origin::Sweep { label } => format!("sweep {label:?}"),
+            Origin::File(name) => format!("Opened from {name}"),
+            Origin::Device { class, at } => {
+                format!("Copied from {}", crate::strings::place(*class, *at))
+            }
+            Origin::Fresh => "New, not saved anywhere yet".into(),
+            Origin::Rescued { at } => format!("Rescued from {}", crate::strings::shown(*at)),
         }
     }
-}
 
-/// One-indexed `BANK:SLOT`, the way the instrument and Nord Sound Manager label a
-/// location.
-pub fn shown(at: Location) -> String {
-    format!("{}:{}", at.bank + 1, at.slot + 1)
+    /// The slot this came off, for the tab header's way back.
+    pub fn slot(&self) -> Option<(ObjectClass, Location)> {
+        match self {
+            Origin::Device { class, at } => Some((*class, *at)),
+            _ => None,
+        }
+    }
 }
 
 /// Whether re-encoding a decode reproduced the bytes it came from.
@@ -264,9 +267,9 @@ enum Incoming {
     Failed(String),
 }
 
-/// Which bytes an export writes.
+/// Which bytes a save writes.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ExportWhat {
+pub enum ExportWhat {
     File,
     Body,
 }
@@ -298,6 +301,27 @@ impl Workspace {
         self.entities.iter().find(|e| e.id == id)
     }
 
+    /// Point the document view at one entity. The browser's own selection is separate:
+    /// clicking a row in the sidebar does not change what the open tab is showing.
+    pub fn select(&mut self, id: Option<u64>) {
+        self.selected = id;
+    }
+
+    pub fn entities(&self) -> &[LocalEntity] {
+        &self.entities
+    }
+
+    pub fn get(&self, id: u64) -> Option<&LocalEntity> {
+        self.entities.iter().find(|e| e.id == id)
+    }
+
+    /// Rename an asset held here. Nothing leaves this computer.
+    pub fn rename(&mut self, id: u64, name: String) {
+        if let Some(entity) = self.entities.iter_mut().find(|e| e.id == id) {
+            entity.name = name;
+        }
+    }
+
     /// Decode `bytes`, badge them, and add the row. Every way in — drop, picker,
     /// fresh default, and later a device read — lands here.
     pub fn ingest(&mut self, name: String, origin: Origin, bytes: Vec<u8>, log: &mut Log) -> u64 {
@@ -305,20 +329,35 @@ impl Workspace {
         self.next_id += 1;
         let entity = LocalEntity::new(id, name, origin, bytes);
         match (&entity.parse_error, &entity.verify) {
-            (Some(e), _) => log.error(format!("{}: {e}", entity.name)),
-            (None, VerifyState::Ok) => log.info(format!(
-                "{}: {} ({} bytes), verified",
-                entity.name,
-                entity.tag(),
-                entity.bytes.len(),
-            )),
-            (None, state) => log.warn(format!(
-                "{}: {} — verify {}: {}",
-                entity.name,
-                entity.tag(),
-                state.badge(),
-                state.detail(),
-            )),
+            (Some(e), _) => {
+                log.error(format!("{}: {e}", entity.name));
+                log.trouble(format!(
+                    "“{}” is not a file this app understands.",
+                    entity.name
+                ));
+            }
+            (None, VerifyState::Ok) => {
+                log.info(format!(
+                    "{}: {} ({} bytes), verified",
+                    entity.name,
+                    entity.tag(),
+                    entity.bytes.len(),
+                ));
+                log.say(format!("“{}” is on this computer.", entity.name));
+            }
+            (None, state) => {
+                log.warn(format!(
+                    "{}: {} — verify {}: {}",
+                    entity.name,
+                    entity.tag(),
+                    state.badge(),
+                    state.detail(),
+                ));
+                log.say(format!(
+                    "“{}” opened, but it does not re-save byte for byte.",
+                    entity.name
+                ));
+            }
         }
         self.entities.push(entity);
         self.selected = Some(id);
@@ -332,13 +371,13 @@ impl Workspace {
                 Incoming::Opened { name, bytes } => {
                     self.ingest(name.clone(), Origin::File(name), bytes, log);
                 }
-                Incoming::Note(text) => log.info(text),
-                Incoming::Failed(text) => log.error(text),
+                Incoming::Note(text) => log.say(text),
+                Incoming::Failed(text) => log.trouble(text),
             }
         }
     }
 
-    fn open_dialog(&self) {
+    pub fn open_dialog(&self) {
         let tx = self.tx.clone();
         let ctx = self.ctx.clone();
         spawn(async move {
@@ -357,7 +396,7 @@ impl Workspace {
         });
     }
 
-    fn export(&self, id: u64, what: ExportWhat) {
+    pub fn export(&self, id: u64, what: ExportWhat) {
         let Some(entity) = self.entities.iter().find(|e| e.id == id) else {
             return;
         };
@@ -378,6 +417,19 @@ impl Workspace {
             let _ = tx.send(save(name, bytes).await);
             ctx.request_repaint();
         });
+    }
+
+    /// Put back the bytes a tab opened with. The asset is unchanged again, so the dirty
+    /// mark goes with them.
+    pub fn restore_bytes(&mut self, id: u64, bytes: Vec<u8>, log: &mut Log) {
+        let Some(entity) = self.entities.iter_mut().find(|e| e.id == id) else {
+            return;
+        };
+        if entity.bytes == bytes {
+            return;
+        }
+        *entity = LocalEntity::new(id, entity.name.clone(), entity.origin.clone(), bytes);
+        log.say(format!("“{}” is back as it was opened.", entity.name));
     }
 
     /// Swap in re-encoded bytes, keeping the entity's identity and marking it edited.
@@ -404,16 +456,14 @@ impl Workspace {
         ));
     }
 
-    fn duplicate(&mut self, id: u64, log: &mut Log) {
-        let Some(source) = self.entities.iter().find(|e| e.id == id) else {
-            return;
-        };
+    pub fn duplicate(&mut self, id: u64, log: &mut Log) -> Option<u64> {
+        let source = self.entities.iter().find(|e| e.id == id)?;
         let name = format!("{} copy", source.name);
         let (origin, bytes) = (source.origin.clone(), source.bytes.clone());
-        self.ingest(name, origin, bytes, log);
+        Some(self.ingest(name, origin, bytes, log))
     }
 
-    fn remove(&mut self, id: u64, log: &mut Log) {
+    pub fn remove(&mut self, id: u64, log: &mut Log) {
         let Some(at) = self.entities.iter().position(|e| e.id == id) else {
             return;
         };
@@ -421,120 +471,23 @@ impl Workspace {
         if self.selected == Some(id) {
             self.selected = self.entities.last().map(|e| e.id);
         }
-        log.info(format!("removed {}", gone.name));
+        log.say(format!("Removed “{}” from this computer.", gone.name));
     }
 
-    /// The workspace pane. Returns the id of a freshly created default, which the
-    /// caller opens in the editor — a new object exists to be edited.
-    pub fn ui(&mut self, ui: &mut egui::Ui, log: &mut Log) -> Option<u64> {
-        let mut created = None;
-        let mut fresh = None;
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Open…").clicked() {
-                self.open_dialog();
+    /// Make one of the fresh defaults and add it to the list.
+    pub fn create(&mut self, kind: Fresh, log: &mut Log) -> Option<u64> {
+        match kind.bytes() {
+            Ok(bytes) => {
+                let name = format!("untitled.{}", kind.tag());
+                Some(self.ingest(name, Origin::Fresh, bytes, log))
             }
-            ui.menu_button("New ▾", |ui| {
-                for kind in Fresh::ALL {
-                    if ui.button(kind.label()).clicked() {
-                        fresh = Some(kind);
-                        ui.close();
-                    }
-                }
-            });
-        });
-        if let Some(kind) = fresh {
-            match kind.bytes() {
-                Ok(bytes) => {
-                    let name = format!("untitled.{}", kind.tag());
-                    created = Some(self.ingest(name, Origin::Fresh, bytes, log));
-                }
-                Err(e) => log.error(format!("new {}: {e}", kind.label())),
+            Err(e) => {
+                log.error(format!("new {}: {e}", kind.label()));
+                log.trouble(format!("Could not make a new {}.", kind.label()));
+                None
             }
         }
-        ui.separator();
-
-        if self.entities.is_empty() {
-            ui.label(
-                egui::RichText::new("Drop Nord files here, or use Open…")
-                    .weak()
-                    .italics(),
-            );
-            return created;
-        }
-
-        let selected = self.selected;
-        let mut select = None;
-        let mut remove = None;
-        let mut duplicate = None;
-        let mut export = None;
-        egui::ScrollArea::vertical()
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                for entity in &self.entities {
-                    ui.push_id(entity.id, |ui| {
-                        egui::Frame::group(ui.style()).show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            if row(ui, entity, selected == Some(entity.id)).clicked() {
-                                select = Some(entity.id);
-                            }
-                            ui.horizontal_wrapped(|ui| {
-                                if ui.small_button("Export file").clicked() {
-                                    export = Some((entity.id, ExportWhat::File));
-                                }
-                                if ui.small_button("Export raw body").clicked() {
-                                    export = Some((entity.id, ExportWhat::Body));
-                                }
-                                if ui.small_button("Duplicate").clicked() {
-                                    duplicate = Some(entity.id);
-                                }
-                                if ui.small_button("Remove").clicked() {
-                                    remove = Some(entity.id);
-                                }
-                            });
-                        });
-                    });
-                }
-            });
-
-        if let Some(id) = select {
-            self.selected = Some(id);
-        }
-        if let Some((id, what)) = export {
-            self.export(id, what);
-        }
-        if let Some(id) = duplicate {
-            self.duplicate(id, log);
-        }
-        if let Some(id) = remove {
-            self.remove(id, log);
-        }
-        created
     }
-}
-
-/// One workspace row: name, kind chip, origin, dirty dot, verify badge.
-fn row(ui: &mut egui::Ui, entity: &LocalEntity, selected: bool) -> egui::Response {
-    let title = ui.selectable_label(
-        selected,
-        egui::RichText::new(format!("{}  {}", &entity.name, entity.tag())).strong(),
-    );
-    ui.horizontal_wrapped(|ui| {
-        if entity.dirty {
-            ui.label(egui::RichText::new("●").small().color(crate::app::WARN))
-                .on_hover_text("edited since it was loaded");
-        }
-        ui.label(egui::RichText::new(entity.origin.label()).small().weak());
-        ui.label(
-            egui::RichText::new(entity.verify.badge())
-                .small()
-                .color(entity.verify.color()),
-        )
-        .on_hover_text(entity.verify.detail());
-    });
-    if let Some(e) = &entity.parse_error {
-        ui.label(egui::RichText::new(e).small().color(crate::app::BAD));
-    }
-    title
 }
 
 /// Hand `bytes` to the user under `name`, however this target saves a file.

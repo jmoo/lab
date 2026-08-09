@@ -1,4 +1,9 @@
-//! The activity log: a bounded record of what the app did, oldest dropped first.
+//! The activity log: a bounded record of what the app did, oldest dropped first, and
+//! the one plain-words line the status strip shows above it.
+//!
+//! The two are written separately on purpose. The log keeps protocol detail — slot
+//! numbers, byte counts, device status codes — and the status line keeps a sentence
+//! about sounds and places. [`Log::say`] and [`Log::trouble`] write both.
 
 use std::collections::VecDeque;
 
@@ -8,7 +13,7 @@ use eframe::egui;
 /// still fits; a runaway loop cannot grow the app without bound.
 const CAPACITY: usize = 500;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     Info,
     Warn,
@@ -16,7 +21,7 @@ pub enum Level {
 }
 
 impl Level {
-    fn color(self, visuals: &egui::Visuals) -> egui::Color32 {
+    pub fn color(self, visuals: &egui::Visuals) -> egui::Color32 {
         match self {
             Level::Info => visuals.weak_text_color(),
             Level::Warn => egui::Color32::from_rgb(0xe0, 0xa0, 0x30),
@@ -39,6 +44,9 @@ pub struct Log {
     /// ⚠️ `std::time::Instant::now()` traps on `wasm32-unknown-unknown`, so the log
     /// cannot read a clock of its own; the timeline is elapsed seconds, not wall time.
     clock: f64,
+    /// The one sentence the status strip shows when nothing is running.
+    status: (Level, String),
+    /// Whether the strip is expanded into the full log.
     pub open: bool,
 }
 
@@ -47,7 +55,8 @@ impl Default for Log {
         Log {
             entries: VecDeque::new(),
             clock: 0.0,
-            open: true,
+            status: (Level::Info, "Ready.".to_string()),
+            open: false,
         }
     }
 }
@@ -68,6 +77,24 @@ impl Log {
 
     pub fn error(&mut self, text: impl Into<String>) {
         self.push(Level::Error, text);
+    }
+
+    /// Say something in the status strip, and record it in the log as well.
+    pub fn say(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        self.status = (Level::Info, text.clone());
+        self.push(Level::Info, text);
+    }
+
+    /// The same, for something that went wrong.
+    pub fn trouble(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        self.status = (Level::Error, text.clone());
+        self.push(Level::Error, text);
+    }
+
+    pub fn status(&self) -> (Level, &str) {
+        (self.status.0, self.status.1.as_str())
     }
 
     fn push(&mut self, level: Level, text: impl Into<String>) {
@@ -129,6 +156,35 @@ impl Log {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The strip's line and the log's line are written together, so an operator reading
+    /// only the strip is never told less than happened.
+    #[test]
+    fn a_plain_line_reaches_the_strip_and_the_log_alike() {
+        let mut log = Log::default();
+        assert_eq!(log.status(), (Level::Info, "Ready."));
+        log.say("Sent “Africa Split” to Programs 7:4.");
+        assert_eq!(log.status().0, Level::Info);
+        assert_eq!(
+            log.last().unwrap().text,
+            "Sent “Africa Split” to Programs 7:4."
+        );
+        log.trouble("Could not read the instrument.");
+        assert_eq!(
+            log.status(),
+            (Level::Error, "Could not read the instrument.")
+        );
+        assert_eq!(log.len(), 2);
+    }
+
+    /// Detail written straight to the log never displaces the sentence on the strip.
+    #[test]
+    fn protocol_detail_stays_out_of_the_status_line() {
+        let mut log = Log::default();
+        log.say("Reading Programs — bank 1…");
+        log.info("bank 1: 43 of 50 slots hold something");
+        assert_eq!(log.status().1, "Reading Programs — bank 1…");
+    }
 
     #[test]
     fn the_oldest_entry_is_dropped_once_the_ring_is_full() {

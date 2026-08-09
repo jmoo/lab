@@ -1,15 +1,16 @@
-//! The app shell: theme, the four regions, and the routing between them.
+//! The app shell: theme, the three regions, and the routing between them.
 //!
-//! Left is the workspace (local entities), right is the instrument, the centre
-//! inspects whatever is selected in either, and the bottom keeps the activity log.
+//! The sidebar is the browser — this computer and the instrument. The centre is a tab
+//! per open document. The bottom is one line of plain words, which opens into the full
+//! activity log when there is a reason to read it.
 
 use eframe::egui;
 
+use crate::browser::{self, Browser};
 use crate::device::Device;
-use crate::editor::Editor;
-use crate::inspect::Inspector;
+use crate::document::Document;
 use crate::log::Log;
-use crate::sample_edit::SampleEditor;
+use crate::tabs::Tabs;
 use crate::workspace::{Origin, Workspace};
 
 /// The three status accents. Dark panel, small signals — an instrument tool.
@@ -17,36 +18,35 @@ pub const GOOD: egui::Color32 = egui::Color32::from_rgb(0x60, 0xc0, 0x70);
 pub const WARN: egui::Color32 = egui::Color32::from_rgb(0xe0, 0xa0, 0x30);
 pub const BAD: egui::Color32 = egui::Color32::from_rgb(0xe0, 0x50, 0x40);
 
-/// What the centre is showing.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Centre {
-    Inspect,
-    Edit,
+/// A small filled dot: something changed here, or something is attached here.
+///
+/// ⚠️ Painted rather than typed. The bundled fonts have no glyph for `●`, and a missing
+/// one renders as an empty box — which reads as a checkbox nobody can tick.
+pub fn dot(ui: &mut egui::Ui, color: egui::Color32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(9.0, 9.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 3.5, color);
+    response
 }
 
 pub struct DrawbarApp {
     workspace: Workspace,
     device: Device,
-    inspector: Inspector,
-    editor: Editor,
-    sample_editor: SampleEditor,
-    centre: Centre,
+    browser: Browser,
+    tabs: Tabs,
+    document: Document,
     log: Log,
 }
 
 impl DrawbarApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> DrawbarApp {
         cc.egui_ctx.set_visuals(visuals());
-        let mut log = Log::default();
-        log.info("drawbar — read-only until you confirm an operation that is not");
         DrawbarApp {
             workspace: Workspace::new(cc.egui_ctx.clone()),
             device: Device::new(cc.egui_ctx.clone()),
-            inspector: Inspector::default(),
-            editor: Editor::default(),
-            sample_editor: SampleEditor::default(),
-            centre: Centre::Inspect,
-            log,
+            browser: Browser::default(),
+            tabs: Tabs::default(),
+            document: Document::default(),
+            log: Log::default(),
         }
     }
 
@@ -71,11 +71,13 @@ impl DrawbarApp {
                     Ok(bytes) => Some(bytes),
                     Err(e) => {
                         self.log.error(format!("{name}: {e}"));
+                        self.log.trouble(format!("Could not read {name}."));
                         None
                     }
                 },
                 (None, None) => {
-                    self.log.error(format!("{name}: dropped with no content"));
+                    self.log
+                        .trouble(format!("{name} arrived with no contents."));
                     None
                 }
             };
@@ -85,13 +87,58 @@ impl DrawbarApp {
             }
         }
     }
+
+    /// One line of plain words, and the whole log behind it.
+    fn status_strip(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::bottom("status")
+            .resizable(self.log.open)
+            .default_height(if self.log.open { 200.0 } else { 28.0 })
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let line = match &self.device.state.in_flight {
+                        Some(words) => {
+                            ui.spinner();
+                            egui::RichText::new(&words.doing)
+                        }
+                        None => {
+                            let (level, text) = self.log.status();
+                            egui::RichText::new(text).color(level.color(ui.visuals()))
+                        }
+                    };
+                    if ui
+                        .add(egui::Label::new(line).sense(egui::Sense::click()))
+                        .clicked()
+                    {
+                        self.log.open = !self.log.open;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let label = match self.log.open {
+                            true => "Hide details",
+                            false => "Details",
+                        };
+                        if ui.small_button(label).clicked() {
+                            self.log.open = !self.log.open;
+                        }
+                        if self.log.open && ui.small_button("Clear").clicked() {
+                            self.log.clear();
+                        }
+                    });
+                });
+                if self.log.open {
+                    ui.separator();
+                    self.log.ui(ui);
+                }
+            });
+    }
 }
 
 impl eframe::App for DrawbarApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.log.tick(ctx);
         self.workspace.poll(&mut self.log);
-        self.device.poll(&mut self.log, &mut self.workspace);
+        self.device
+            .poll(&mut self.log, &mut self.workspace, &mut self.tabs);
+        self.tabs.prune(&self.workspace);
         self.take_dropped_files(ctx);
         drop_hint(ctx);
 
@@ -99,111 +146,62 @@ impl eframe::App for DrawbarApp {
             ui.horizontal(|ui| {
                 ui.heading("drawbar");
                 ui.label(
-                    egui::RichText::new("Nord files, and the instrument that holds them")
+                    egui::RichText::new("your sounds, here and on the instrument")
                         .weak()
                         .italics(),
                 );
             });
         });
 
-        egui::TopBottomPanel::bottom("activity")
-            .resizable(true)
-            .default_height(160.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let label = if self.log.open {
-                        "▼ Activity"
-                    } else {
-                        "▶ Activity"
-                    };
-                    if ui.selectable_label(false, label).clicked() {
-                        self.log.open = !self.log.open;
-                    }
-                    ui.label(egui::RichText::new(format!("{} entries", self.log.len())).weak());
-                    if ui.small_button("Clear").clicked() {
-                        self.log.clear();
-                    }
-                    if !self.log.open {
-                        if let Some(last) = self.log.last() {
-                            ui.label(egui::RichText::new(&last.text).monospace().weak());
-                        }
-                    }
-                });
-                if self.log.open {
-                    ui.separator();
-                    self.log.ui(ui);
-                }
-            });
+        self.status_strip(ctx);
 
-        egui::SidePanel::left("workspace")
+        let mut acts = Vec::new();
+        egui::SidePanel::left("places")
             .resizable(true)
-            .default_width(320.0)
+            .default_width(300.0)
             .show(ctx, |ui| {
-                ui.heading("Workspace");
-                // A fresh default exists to be edited, so it opens there — the CLI's
-                // target-less `edit -o`.
-                if let Some(id) = self.workspace.ui(ui, &mut self.log) {
-                    self.editor.open(id);
-                    self.centre = Centre::Edit;
-                }
-            });
-
-        egui::SidePanel::right("instrument")
-            .resizable(true)
-            .default_width(340.0)
-            .show(ctx, |ui| {
-                ui.heading("Instrument");
-                self.device.ui(ui, &self.workspace, &mut self.log);
+                acts = self.browser.ui(ui, &self.workspace, &self.device);
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let editable = self
-                .workspace
-                .selected()
-                .and_then(|entity| entity.entity.as_ref())
-                .map(|entity| {
-                    (
-                        crate::editor::can_edit(entity),
-                        crate::sample_edit::can_edit(entity),
-                    )
-                });
-            let (fields, sample) = editable.unwrap_or((false, false));
-            if !fields && !sample {
-                self.centre = Centre::Inspect;
-            }
-
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(self.centre == Centre::Inspect, "Inspect")
-                    .clicked()
-                {
-                    self.centre = Centre::Inspect;
-                }
-                ui.add_enabled_ui(fields || sample, |ui| {
-                    if ui
-                        .selectable_label(self.centre == Centre::Edit, "Edit")
-                        .on_disabled_hover_text("this format has no editor")
-                        .clicked()
-                    {
-                        self.centre = Centre::Edit;
-                    }
-                });
-            });
+            self.tabs.ui(ui, &self.workspace);
             ui.separator();
-
-            match self.centre {
-                Centre::Inspect => {
-                    if self.inspector.ui(ui, self.workspace.selected()) {
-                        self.centre = Centre::Edit;
-                    }
-                }
-                Centre::Edit if sample => {
-                    self.sample_editor
-                        .ui(ui, &mut self.workspace, &mut self.log)
-                }
-                Centre::Edit => self.editor.ui(ui, &mut self.workspace, &mut self.log),
+            let Some(id) = self.tabs.active() else {
+                ui.label(
+                    egui::RichText::new("Double-click something in the sidebar to open it.")
+                        .weak()
+                        .italics(),
+                );
+                return;
+            };
+            let sent = self.document.ui(
+                ui,
+                id,
+                self.tabs.opened(id),
+                &mut self.workspace,
+                &mut self.device,
+                &mut self.log,
+            );
+            if let Some(send) = sent {
+                acts.push(browser::Act::Send {
+                    id: send.id,
+                    class: send.class,
+                    at: send.at,
+                });
             }
         });
+
+        browser::apply(
+            &mut self.browser,
+            acts,
+            &mut self.workspace,
+            &mut self.device,
+            &mut self.tabs,
+            &mut self.log,
+        );
+        // Last, so a command the user just asked for is ahead of the background read of
+        // the tree in the one slot the protocol allows.
+        self.device.pump();
     }
 }
 

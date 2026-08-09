@@ -2,10 +2,11 @@
 
 An [egui](https://github.com/emilk/egui) app over
 [`nord-format`](../nord-format) and [`nord-usb`](../nord-usb) — everything
-[`nord-cli`](../nord-cli) can do, reachable from a browser tab or a desktop
-window. Same job as the CLI: **dogfood the libraries**, not ship a product.
+[`nord-cli`](../nord-cli) can do that is worth a window, reachable from a browser
+tab or a desktop one. Same job as the CLI: **dogfood the libraries**, not ship a
+product. The engineer's verbs stay in the CLI.
 
-It is named for the nine-drawbar organ register widget the editor will grow.
+It is named for the nine-drawbar organ register widget in its editor.
 
 > [!CAUTION]
 > # ⚠️ 🧱 USE AT YOUR OWN RISK — THIS TOOL CAN BRICK YOUR DEVICE 🧱 ⚠️
@@ -17,102 +18,134 @@ It is named for the nine-drawbar organ register widget the editor will grow.
 
 ## What this build does
 
-The window is four regions:
+The window is a file browser over two places your sounds live:
 
 | region | what it holds |
 |---|---|
-| **Workspace** (left) | local entities: dropped or opened files, objects pulled off the instrument, fresh defaults, duplicates. Each row carries its format tag, where it came from, and a verify badge |
-| **Instrument** (right) | the attached Nord: inventory, a slot browser per object class, and the transfer and organisation verbs |
-| **Inspector** (centre) | the selected entity: identity, CBIN header, the field table, format extras, and a raw `{:#?}` dump |
-| **Activity** (bottom) | every operation, warning and error, collapsible |
+| **Sidebar** (left) | **This computer** — dropped or opened files, copies pulled off the instrument, fresh defaults — and the **instrument**, whose folders (Programs, Set lists, Samples, Pianos, Live, Settings) fill in by themselves once it is attached |
+| **Tabs** (centre) | one document per thing you opened. Double-click anything in the sidebar to open it; something on the instrument is copied here first |
+| **Status strip** (bottom) | one line about what just happened, and a spinner while something is running. Click it for the full activity log, protocol detail and all |
 
-### Files
+### This computer
 
-Files arrive by drag-and-drop or the **Open…** button, and leave either as-is
-(**Export file**) or with the CBIN header stripped (**Export raw body**, the
-same bytes `nord … get --body` writes). Every entity is decoded and immediately
-re-encoded; the badge says whether the bytes came back identical, and names the
-offset of the first difference when they did not. A file that fails to decode
-still gets a row — reporting a bad file is the point of opening it.
-
-The field table comes from `nord-format`'s generated registry, so it lists what
-the library currently knows rather than a handwritten summary that can go stale.
+Files arrive by drag-and-drop or **Open…**, and leave through **Save to disk…**
+on a row's context menu. Every file is decoded and immediately re-encoded to
+check the bytes come back identical; a file that fails to decode still gets a
+row, because reporting a bad file is the point of opening it. **New** makes a
+fresh program, live or settings document.
 
 ### The instrument
 
 **Connect** opens the device (a chooser in the browser, the first attached
-Clavia natively) and reads the inventory. Class tabs cover pianos, samples,
-programs, set lists, live and settings, plus **other…** for a class addressed by
-number. Inventory gives counts but not names, so a bank's slot names are filled
-in one `INFO` at a time by **Scan bank** and cached until something changes them.
-Empty slots are rows, not absences: they are valid targets for a put or a move.
+Clavia natively) and reads what it holds. From there every bank of every folder
+is read in the background, filling names into the tree as they arrive — the
+folder heading says how far it has got. Nothing asks for a bank number. **Read
+again** re-walks one folder; anything you change is re-read on its own, and a
+change made on the panel while the app is attached drops every cached name and
+reads them again.
 
-Select a slot for the verbs — Get (into the workspace), Get raw body, Info, Deps,
-Select, Rename, Move, Duplicate, Delete, and Put from the selected workspace
-entity. The **sweep** tool reads the same slot once per change you make on the
-panel, filing each capture in the workspace under the label you type.
+Empty slots are rows, not absences: they are places something can be dropped.
+Pianos are listed and nothing more — a piano library is hundreds of megabytes,
+and the folder offers no way to pull one down.
+
+### Moving things
+
+Drag between the two places, or within one:
+
+- **instrument → This computer** copies it here.
+- **This computer → a slot** sends it. An occupied slot asks once — *Replace
+  “Squabble B” in Programs 7:4 with “Africa Split”?* — and an empty one just
+  does it.
+- **slot → slot, inside one folder** rearranges them. The instrument swaps the
+  two, so nothing is lost and nothing asks.
+
+A target that cannot take what you are dragging does not light up; drop on it
+anyway and the status strip says why.
+
+Right-click a row for Open, Copy to this computer / Save to disk…, Load on
+instrument, Rename, Duplicate, Delete… and Remove from list. Click the name of a
+row that is already selected — or press F2 — to rename it in place; Enter
+commits, Escape leaves it alone. Renaming on the instrument happens straight
+away, because renaming it back is its own undo.
 
 Progress is painted on the *instrument's own display* by the operations
 themselves — there is no host-side progress callback, so the app shows a spinner
-and the operation's name and does not invent one.
+and does not invent one.
 
 ### Safety
 
 - **Read-only until you say otherwise.** There is no armed mode: a destructive
-  session exists only for the single operation a confirmation released.
-- **Every mutation names its victim first.** "Overwrite 7:4 'Squabble B' with
-  'Africa Split.ne5p'?" Move and duplicate name the *destination's* occupant,
-  because that is the thing about to be lost. A destination whose bank has not
-  been scanned has no name to quote, so those actions stay disabled until it has.
+  session exists only for the single operation the app released.
+- **Replacing and deleting ask first, by name.** Nothing else does — a move
+  loses nothing and a rename undoes itself.
 - **Move is a swap, not an overwrite** — the destination's occupant ends up in
-  the source slot, byte-identical. Confirmed on hardware. The confirmation says
-  so, because calling it an overwrite would invite deleting the destination first
-  and destroy the very thing the swap preserves.
+  the source slot, byte-identical. Confirmed on hardware.
 - **A put is a delete followed by a write** — the instrument refuses to overwrite
   in place. The occupant is read into memory first and written back if the write
-  fails; if the restore fails too, its bytes land in the workspace as a rescued
+  fails; if the restore fails too, its bytes land on This computer as a rescued
   entity rather than being lost.
 - **Live and settings refuse a write.** Whether either survives a delete of its
   own class is unconfirmed on hardware, so an edit of either stops at a file.
 - **Every session closes, including on the error path.** An abandoned transaction
   strands the instrument on its progress screen with no way out but a power
   cycle.
+- **One operation at a time.** What you asked for always goes ahead of the
+  background read of the tree, so a click never waits on it.
 
-### Editing
+### The document
 
-The centre switches between **Inspect** and **Edit**. The editor is the field
-list: every field the library declares, with its current value, the values it
-accepts, and where its bits sit. Widgets follow the field — a checkbox for a
-bool, a menu for a named set, a slider for a gapless numeric range, the stored
-bits for anything too wide to enumerate, and **nine drawbars** for the organ
-register blocks the crate is named after.
+A tab holds a working copy. Its header says where it came from, and something copied
+off the instrument offers **Send to Programs 7:4** to put it back through the flow
+above. **Revert** goes back to the bytes the tab opened with — the only undo there is —
+and **Save to disk…** writes the file.
 
-Edits are **staged**. Nothing touches the entity until Apply: the pending
-`path = value` sets are replayed onto a fresh decode of the unedited bytes, and
-the Changes panel shows each field before→after plus the exact bytes that moved,
-with the CBIN checksum rows annotated so they do not read as a second edit
-nobody made. Revert drops the list. A value the field cannot hold is refused by
-the library, and its message names what the field does accept.
+Looking at a document and changing it are the same thing. There is no Apply: a control
+you move is set on the working copy that instant, the bytes are re-encoded and
+re-checked, and the tab picks up a dot. The sections are the ones on the instrument's
+own front panel — Organ, Piano, Sample, Effects, EQ, Keyboard & split — and a settings
+document is divided the way the instrument's menus are: System, MIDI, Sound, At
+power-on.
 
-> [!WARNING]
-> **Some fields only mean something in pairs.** `center_panel.transpose` is
-> ignored while `center_panel.transpose_enabled` is clear, the instrument never
-> clears that bit once it is set, and an untouched program holds `+1` rather
-> than `0`. Setting one half without the other warns; it is not refused.
+**A document shows what the keyboard would be showing.**
 
-In **b3+bass**, preset 1 is the bass manual: only two drawbars are live and they
-live outside the nine-nibble block, which holds stale leftovers. The editor says
-so and greys those nine bars out rather than offering registration that plays
-nothing.
+- The organ section carries the model picker and **only the selected model's**
+  registrations: two nine-drawbar presets for the B3 with its vibrato and percussion,
+  the Vox's bars and vibrato, the Farfisa's registers (which the instrument reads as
+  on/off tabs at 5 and above), the pipe organ's bars and nothing else. The preset the
+  instrument is playing is marked, and clicking the other one switches it.
+- In **b3+bass**, preset 1 is the bass manual: two drawbars, in their own fields. The
+  nine nibbles they shadow hold stale leftovers and are not shown at all.
+- A section no part is playing starts collapsed rather than disappearing — the picker
+  inside it is how a part comes to play it.
+- **Transpose is one control**, a switch and a number written together, because that is
+  what the panel's button is. The instrument ignores the amount while the switch is
+  clear, and never clears the switch once it is set.
+- A picker offers only values the library can name. A file holding one it cannot reads
+  as *unrecognized value (6)* and keeps it in the list, so changing away from it can be
+  undone.
+- Reserved bits, unexplained fields and the library ids that name a program's piano and
+  sample are not offered. They are all still in **Advanced**.
 
-Sample instruments get their own editor — the name, and each zone's root key and
-top note as note names (`C4` is middle C), zones numbered from 1 at the top of
-the keyboard. Only v2 `.nsmp` content is editable; nsmp3/nsmp4 is carried
-verbatim.
+**Drawbars** are the widget the crate is named after: pull down to draw out, with the
+positions in digits underneath (`88 8800 000`). No hex anywhere in the ordinary view.
 
-Editing a slot on the instrument is **Get → edit → Put**: the read lands in the
-workspace, the editor works on that copy, and the Instrument pane writes it back
-through the put safety flow. Live and settings stop at a file, as above.
+Sample instruments show their name and the stretch of keyboard each zone covers, with
+root key and top note as note names (`C4` is middle C). Only v2 `.nsmp` content can be
+changed; nsmp3/nsmp4 is carried verbatim.
+
+### Advanced
+
+Every document ends with an **Advanced** disclosure, and everything the engineering
+build put in front of you is in it: the verify badge, the CBIN header numbers, the
+bytes that moved since the tab opened (with the checksum rows annotated so they do not
+read as a second edit nobody made), the full field registry with each field's stored
+spelling and bit placement, the `{:#?}` dump, and — for something read off the
+instrument — the slot's own info and dependency list, on request.
+
+### What lives in `nord-cli` instead
+
+Raw browsing by class number and the sweep-capture tool are an engineer's
+`nord raw` and `nord --sweep`; they are not in this window.
 
 ## Build and run — native
 

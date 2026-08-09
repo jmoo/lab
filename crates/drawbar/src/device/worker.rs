@@ -13,11 +13,12 @@ use std::sync::mpsc::Sender;
 
 use eframe::egui;
 use nord_usb::transport::Transport;
-use nord_usb::wire::{Dependency, ProgramInfo, Status};
+use nord_usb::wire::{Dependency, ProgramInfo};
 use nord_usb::{op, Error, Location, ObjectClass, Session};
 
 use super::{DeviceCmd, DeviceEvent};
-use crate::workspace::{shown, Origin};
+use crate::strings::shown;
+use crate::workspace::Origin;
 
 /// The event channel back to the UI thread, with the repaint that makes an event
 /// visible before the next input arrives.
@@ -143,7 +144,7 @@ async fn execute<T: Transport>(
             class,
             at,
             body,
-            label,
+            open,
         } => {
             let (info, bytes) = read_object(t, class, at, body, changed)
                 .await
@@ -154,16 +155,11 @@ async fn execute<T: Transport>(
                 shown(at),
                 bytes.len()
             );
-            let origin = match &label {
-                Some(label) => Origin::Sweep {
-                    label: label.clone(),
-                },
-                None => Origin::Device { class, at },
-            };
             emit.send(DeviceEvent::Got {
-                name: entity_name(&info, body, label.as_deref()),
-                origin,
+                name: entity_name(&info, body),
+                origin: Origin::Device { class, at },
                 bytes,
+                open,
             });
             Ok(Some(note))
         }
@@ -512,11 +508,8 @@ fn unix_now() -> u32 {
 ///
 /// Files store no name — it lives on the instrument — so a read is the one moment the
 /// name and the bytes are together, and it goes into the entity's label here.
-fn entity_name(info: &ProgramInfo, body: bool, label: Option<&str>) -> String {
-    let stem = match label {
-        Some(label) => super::stem(label),
-        None => sanitise(info.name.trim()),
-    };
+fn entity_name(info: &ProgramInfo, body: bool) -> String {
+    let stem = sanitise(info.name.trim());
     // A `--body` dump is a fragment of a file, not one; giving it the format's own
     // extension would invite it back in as a whole object.
     match body {
@@ -546,28 +539,6 @@ fn sanitise(name: &str) -> String {
     match cleaned.is_empty() {
         true => "unnamed".into(),
         false => cleaned,
-    }
-}
-
-/// A one-line description of what a class's inventory row means, for the pane header.
-pub fn describe(status: &Status) -> String {
-    match status.slots() {
-        // Fixed-size classes are far clearer as slots than as raw blocks: programs
-        // report 400, which is exactly an Electro 5's 8 banks x 50.
-        Some(slots) => format!(
-            "{} of {slots} slots, {:.1}% used ({}/{} blocks)",
-            status.count,
-            status.used_percent(),
-            status.used,
-            status.total(),
-        ),
-        None => format!(
-            "{} items, {:.1}% used ({}/{} blocks)",
-            status.count,
-            status.used_percent(),
-            status.used,
-            status.total(),
-        ),
     }
 }
 
@@ -605,12 +576,8 @@ mod tests {
             crc32: Some(0),
             name: "Africa Split".into(),
         };
-        assert_eq!(entity_name(&info, false, None), "Africa-Split.ne5p");
-        assert_eq!(entity_name(&info, true, None), "Africa-Split.body");
-        assert_eq!(
-            entity_name(&info, false, Some("split point C4")),
-            "split-point-C4.ne5p"
-        );
+        assert_eq!(entity_name(&info, false), "Africa-Split.ne5p");
+        assert_eq!(entity_name(&info, true), "Africa-Split.body");
     }
 
     /// A slot whose name is only punctuation still has to produce a usable label.
@@ -624,6 +591,6 @@ mod tests {
             crc32: None,
             name: "  ".into(),
         };
-        assert_eq!(entity_name(&info, false, None), "unnamed.ne5p");
+        assert_eq!(entity_name(&info, false), "unnamed.ne5p");
     }
 }

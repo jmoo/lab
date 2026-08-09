@@ -6,13 +6,16 @@
 //! > ⚠️ 🧱 This project can brick a Nord device. See the crate README.
 
 pub mod app;
+pub mod browser;
 pub mod device;
+pub mod document;
 pub mod drawbar_widget;
-pub mod editor;
-pub mod inspect;
+pub mod fields;
 pub mod log;
 pub mod note;
-pub mod sample_edit;
+pub mod strings;
+pub mod tabs;
+pub mod visibility;
 pub mod workspace;
 
 pub use app::DrawbarApp;

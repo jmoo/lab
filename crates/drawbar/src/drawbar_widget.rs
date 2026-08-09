@@ -66,17 +66,44 @@ const STOP_H: f32 = 15.0;
 const BAR_W: f32 = 21.0;
 const TRACK_H: f32 = 104.0;
 
+/// The positions as the panel groups them — `88 8000 000`: the two sub-octave bars,
+/// the four foundation ranks, then the three upper mutations.
+pub fn digits(positions: &[u8]) -> String {
+    let mut out = String::with_capacity(BARS + 2);
+    for (n, position) in positions.iter().enumerate() {
+        if n == 2 || n == 6 {
+            out.push(' ');
+        }
+        out.push(char::from_digit((*position).min(9) as u32, 10).unwrap_or('?'));
+    }
+    out
+}
+
 /// Nine drawbars. Returns the new positions when one has been pulled.
 ///
 /// `live` false paints them dimmed and ignores input — for a registration the
 /// instrument is not reading, where showing nine draggable bars would assert that
 /// moving them does something.
 pub fn ui(ui: &mut egui::Ui, positions: [u8; BARS], live: bool) -> Option<[u8; BARS]> {
+    ui_count(ui, positions, live, BARS)
+}
+
+/// The first `count` bars of a registration.
+///
+/// ⚠️ The bass manual of b3+bass has two, and they are not the first two nibbles of a
+/// nine-drawbar block — they are their own fields. Drawing nine there would assert a
+/// registration that plays nothing.
+pub fn ui_count(
+    ui: &mut egui::Ui,
+    positions: [u8; BARS],
+    live: bool,
+    count: usize,
+) -> Option<[u8; BARS]> {
     let mut moved = positions;
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
-        for (n, value) in moved.iter_mut().enumerate() {
+        for (n, value) in moved.iter_mut().enumerate().take(count.min(BARS)) {
             if bar(ui, n, value, live) {
                 changed = true;
             }
@@ -185,6 +212,14 @@ mod tests {
         assert_eq!(parse(&spell(value)), Some(value));
         assert_eq!(parse("2290649224"), Some(2290649224));
         assert_eq!(parse("nonsense"), None);
+    }
+
+    /// The readout is the panel's own grouping, so it can be read back onto the bars.
+    #[test]
+    fn the_digits_read_out_in_the_panels_groups() {
+        assert_eq!(digits(&bars(0x8_8880_0000)), "88 8800 000");
+        assert_eq!(digits(&bars(0x0_8765_4321)), "08 7654 321");
+        assert_eq!(digits(&[4, 0]), "40");
     }
 
     #[test]
