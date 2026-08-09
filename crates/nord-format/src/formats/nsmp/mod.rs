@@ -109,6 +109,15 @@ pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Cbin<Sample>, Error>
 /// Every corpus specimen chains `NSMP`, `hdr`, `cat`, `map`, N × `stk`, `sty`,
 /// `meta`, in that order, in both container generations. Inferred from
 /// specimens; not confirmed on hardware.
+///
+/// ⚠️ The stroke payload past the id fields is the encoded audio, and it stays
+/// verbatim deliberately. The block codec independent interop projects describe
+/// (a u32 header of count/order/width fields, fixed binomial predictors, a stop
+/// sentinel) was tested against this corpus and **did not reproduce**: the
+/// layout frames a handful of strokes exactly and fails the rest, and where it
+/// frames, the predictor arithmetic diverges on real data. Do not implement
+/// audio decode from that description without new evidence — a matched
+/// WAV-in/nsmp-out differential pair is the missing oracle.
 #[derive(Debug)]
 pub struct SampleV3 {
     pub sections: Vec<section::Section4>,
