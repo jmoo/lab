@@ -210,6 +210,32 @@ impl Advanced {
         sets.push((field.path.clone(), typed));
     }
 
+    /// Forget the cell being typed into.
+    ///
+    /// ⚠️ One table serves every tab, and a cell is remembered by the **path** it sits on
+    /// — which two documents of the same format both declare. Left standing, a half-typed
+    /// value follows the operator into the next document and lands there on Enter.
+    pub(super) fn leave(&mut self) {
+        self.cell = Cell::default();
+    }
+
+    /// The path of the cell being typed into, if any.
+    #[cfg(test)]
+    pub(super) fn editing(&self) -> Option<&str> {
+        (!self.cell.path.is_empty()).then_some(self.cell.path.as_str())
+    }
+
+    /// Open a cell as a click would, for a test that cannot click.
+    #[cfg(test)]
+    pub(super) fn pretend_editing(&mut self, path: &str, typed: &str) {
+        self.cell = Cell {
+            path: path.to_string(),
+            text: typed.to_string(),
+            fresh: true,
+            error: None,
+        };
+    }
+
     /// Report what the library said about the last cell edit.
     ///
     /// `Ok` closes the cell; a refusal leaves it open with the message under the table.

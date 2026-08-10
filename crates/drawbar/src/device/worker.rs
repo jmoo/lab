@@ -73,11 +73,36 @@ impl Emit {
     }
 }
 
-/// Whether the worker keeps its transport after this command.
-#[derive(PartialEq, Eq)]
+/// Whether the worker keeps its transport after this command, and why it does not.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
     Continue,
-    Stop,
+    /// The operator asked for it back.
+    Released,
+    /// The byte pipe failed, so there is nothing on the other end of it any more.
+    Lost,
+}
+
+/// Whether an error means the instrument has gone.
+///
+/// ⚠️ A device status is an **answer**: the instrument is attached, it understood, and it
+/// said no. Only a failure of the byte pipe itself — a transfer that errored, a device
+/// that stopped answering — is a cable coming out, and only that may put the app back
+/// into its unattached state.
+fn hung_up(e: &Error) -> bool {
+    matches!(e, Error::Transport(_))
+}
+
+/// Turn an error into the sentence for it, noting on the way whether the instrument is
+/// still there. `at` is the slot the operation was aimed at, where it had one.
+fn spoil(gone: &mut bool, at: Option<Location>) -> impl FnOnce(Error) -> String + '_ {
+    move |e| {
+        *gone |= hung_up(&e);
+        match at {
+            Some(at) => explain(e, at),
+            None => e.to_string(),
+        }
+    }
 }
 
 /// Run one command to completion.
@@ -86,13 +111,14 @@ pub enum Flow {
 /// UI's in-flight marker cannot be left set by an operation that failed halfway.
 pub async fn run<T: Transport>(transport: &mut T, cmd: DeviceCmd, emit: &Emit) -> Flow {
     if matches!(cmd, DeviceCmd::Disconnect) {
-        return Flow::Stop;
+        return Flow::Released;
     }
     let what = cmd.label();
     emit.send(DeviceEvent::Started(what.clone()));
 
     let mut changed = false;
-    let result = execute(transport, cmd, emit, &mut changed).await;
+    let mut gone = false;
+    let result = execute(transport, cmd, emit, &mut changed, &mut gone).await;
 
     // Reported before the outcome: state read during this command may already be stale,
     // and that is true whether it succeeded or not.
@@ -105,7 +131,10 @@ pub async fn run<T: Transport>(transport: &mut T, cmd: DeviceCmd, emit: &Emit) -
         Err(e) => emit.send(DeviceEvent::OpFailed(format!("{what}: {e}"))),
     }
     emit.send(DeviceEvent::Finished);
-    Flow::Continue
+    match gone {
+        true => Flow::Lost,
+        false => Flow::Continue,
+    }
 }
 
 /// The command bodies. `Ok(Some(note))` is a line for the log; `Ok(None)` means the
@@ -115,6 +144,7 @@ async fn execute<T: Transport>(
     cmd: DeviceCmd,
     emit: &Emit,
     changed: &mut bool,
+    gone: &mut bool,
 ) -> Result<Option<String>, String> {
     match cmd {
         // Handled by `run`; the transport is closed by the caller, which owns it.
@@ -127,7 +157,7 @@ async fn execute<T: Transport>(
         } => {
             let slots = scan_bank(t, class, bank, count, changed)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(spoil(gone, None))?;
             let filled = slots.iter().filter(|s| s.is_some()).count();
             let note = format!(
                 "bank {bank}: {filled} of {} slots hold something",
@@ -144,7 +174,7 @@ async fn execute<T: Transport>(
         } => {
             let (read, items) = scan_class(t, class, slots, banks, emit, changed)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(spoil(gone, None))?;
             Ok(Some(format!(
                 "{}: {read} banks, {items} items, one session",
                 class.label()
@@ -156,7 +186,7 @@ async fn execute<T: Transport>(
                 Ok(info) => Some(info),
                 // Status 1 is a vacant slot, not a failure.
                 Err(Error::DeviceStatus(1)) => None,
-                Err(e) => return Err(explain(e, at)),
+                Err(e) => return Err(spoil(gone, Some(at))(e)),
             };
             emit.send(DeviceEvent::SlotInfo { class, at, info });
             Ok(None)
@@ -165,7 +195,7 @@ async fn execute<T: Transport>(
         DeviceCmd::Deps { class, at } => {
             let deps = dependencies(t, class, at, changed)
                 .await
-                .map_err(|e| explain(e, at))?;
+                .map_err(spoil(gone, Some(at)))?;
             let note = format!("{}: {} dependencies", shown(at), deps.len());
             emit.send(DeviceEvent::Deps { class, at, deps });
             Ok(Some(note))
@@ -179,7 +209,7 @@ async fn execute<T: Transport>(
         } => {
             let (info, bytes) = read_object(t, class, at, body, changed)
                 .await
-                .map_err(|e| explain(e, at))?;
+                .map_err(spoil(gone, Some(at)))?;
             let note = format!(
                 "read {:?} from {} ({} bytes)",
                 info.name,
@@ -202,49 +232,49 @@ async fn execute<T: Transport>(
             name,
             bytes,
         } => {
-            let note = put_one(t, class, at, &name, bytes, emit, changed)
+            let note = put_one(t, class, at, &name, bytes, emit, changed, gone)
                 .await
-                .map_err(|e| e.to_string())??;
+                .map_err(spoil(gone, Some(at)))??;
             // Raised here rather than inside `put_one`, which runs before its session is
             // committed: nothing is owed to the instrument until the session closes.
             emit.send(DeviceEvent::Sent { id, class, at });
             Ok(Some(note))
         }
 
-        DeviceCmd::SendAll { class, items } => send_all(t, class, items, emit, changed).await,
+        DeviceCmd::SendAll { class, items } => send_all(t, class, items, emit, changed, gone).await,
 
         DeviceCmd::Select { class, at } => {
             select(t, class, at, changed)
                 .await
-                .map_err(|e| explain(e, at))?;
+                .map_err(spoil(gone, Some(at)))?;
             Ok(Some(format!("selected {} on the instrument", shown(at))))
         }
 
         DeviceCmd::Rename { class, at, name } => {
             rename(t, class, at, &name, changed)
                 .await
-                .map_err(|e| explain(e, at))?;
+                .map_err(spoil(gone, Some(at)))?;
             Ok(Some(format!("renamed {} to {name:?}", shown(at))))
         }
 
         DeviceCmd::Move { class, from, to } => {
             move_object(t, class, from, to, changed)
                 .await
-                .map_err(|e| explain(e, from))?;
+                .map_err(spoil(gone, Some(from)))?;
             Ok(Some(format!("moved {} -> {}", shown(from), shown(to))))
         }
 
         DeviceCmd::Duplicate { class, from, to } => {
             duplicate(t, class, from, to, changed)
                 .await
-                .map_err(|e| explain(e, from))?;
+                .map_err(spoil(gone, Some(from)))?;
             Ok(Some(format!("duplicated {} -> {}", shown(from), shown(to))))
         }
 
         DeviceCmd::Delete { class, at } => {
             delete(t, class, at, changed)
                 .await
-                .map_err(|e| explain(e, at))?;
+                .map_err(spoil(gone, Some(at)))?;
             Ok(Some(format!("deleted {}", shown(at))))
         }
     }
@@ -266,11 +296,12 @@ async fn put<T: Transport>(
     what: &str,
     bytes: Vec<u8>,
     emit: &Emit,
+    gone: &mut bool,
 ) -> Result<Result<String, String>, Error> {
     let existing = match op::info(s, at).await {
         Ok(info) => Some(info),
         Err(Error::DeviceStatus(1)) => None,
-        Err(e) => return Ok(Err(explain(e, at))),
+        Err(e) => return Ok(Err(spoil(gone, Some(at))(e))),
     };
 
     // Nothing is deleted until the backup is in hand.
@@ -281,7 +312,7 @@ async fn put<T: Transport>(
                 return Ok(Err(format!(
                     "could not read {} back before replacing it, so it was left alone: {}",
                     shown(at),
-                    explain(e, at)
+                    spoil(gone, Some(at))(e)
                 )))
             }
         },
@@ -294,7 +325,11 @@ async fn put<T: Transport>(
             shown(at)
         )));
         if let Err(e) = op::delete(s, at).await {
-            return Ok(Err(format!("deleting {}: {}", shown(at), explain(e, at))));
+            return Ok(Err(format!(
+                "deleting {}: {}",
+                shown(at),
+                spoil(gone, Some(at))(e)
+            )));
         }
     }
 
@@ -302,8 +337,8 @@ async fn put<T: Transport>(
     let written = op::write_program(s, at, &bytes, timestamp).await;
 
     Ok(match (written, backup) {
-        (Ok(()), _) => Ok(format!("wrote {what} -> {}", shown(at))),
-        (Err(e), None) => Err(explain(e, at)),
+        (Ok(()), _) => Ok(name_slot(s, at, what, emit, gone).await),
+        (Err(e), None) => Err(spoil(gone, Some(at))(e)),
         // Getting the occupant back matters more than reporting the original error,
         // which is carried along and reported once the slot is whole again.
         (Err(e), Some(backup)) => {
@@ -317,6 +352,7 @@ async fn put<T: Transport>(
                     shown(at)
                 )),
                 Err(restore) => {
+                    *gone |= hung_up(&restore);
                     let name = rescue_name(at, &backup);
                     emit.send(DeviceEvent::Rescued {
                         at,
@@ -335,7 +371,80 @@ async fn put<T: Transport>(
     })
 }
 
+/// Give the slot the name the thing just written into it goes by here.
+///
+/// ⚠️ **A write does not carry this app's name for what it wrote.** `BEGIN_WRITE` has a
+/// name argument of its own and nothing in this app chooses it, so without this the slot
+/// ends up called whatever that argument says — and the label the operator has been
+/// reading all along is not what the panel shows afterwards.
+///
+/// Runs inside the caller's session, before it commits, and therefore ahead of the
+/// reselect the UI queues once the whole command has landed. A rename that fails is
+/// reported and nothing more: the bytes are in the slot either way, and stopping a batch
+/// over a name would leave the instrument half-written for the sake of a label.
+async fn name_slot<T: Transport>(
+    s: &mut Session<'_, T, ReadWrite>,
+    at: Location,
+    what: &str,
+    emit: &Emit,
+    gone: &mut bool,
+) -> String {
+    let wrote = format!("wrote {what} -> {}", shown(at));
+    let Some(label) = slot_label(what) else {
+        return wrote;
+    };
+    match op::rename(s, at, &label).await {
+        Ok(()) => format!("{wrote}, named {label:?}"),
+        Err(e) => {
+            let why = spoil(gone, Some(at))(e);
+            emit.send(DeviceEvent::OpFailed(format!(
+                "{} holds the right bytes, but naming it {label:?} failed: {why}",
+                shown(at)
+            )));
+            wrote
+        }
+    }
+}
+
+/// What the instrument is asked to call a slot, from what this app calls the object.
+///
+/// The local list names a program the way a file is named — `Africa-Split.ne5p` — and the
+/// panel has no use for the format tag, so it comes off. Nothing else is changed: the
+/// name is the operator's, and this is the one place it crosses back onto the hardware.
+///
+/// `None` where there would be nothing left to send, which leaves the slot named whatever
+/// the write named it rather than blanking it.
+fn slot_label(name: &str) -> Option<String> {
+    /// ⚠️ This app's own bound, not the instrument's. Nothing on the wire limits a rename
+    /// — the length field is a `u32` — and no capture shows one being refused for length,
+    /// so there is no measured ceiling to hold to. This is here so a name that got out of
+    /// hand cannot be written onto the panel whole.
+    const LONGEST: usize = 64;
+
+    let mut label = name.trim();
+    if let Some((stem, tag)) = label.rsplit_once('.') {
+        // A format tag, not a name that happens to hold a dot: `Bass 2.0` keeps its `0`.
+        let is_tag = (2..=5).contains(&tag.len())
+            && tag.chars().all(|c| c.is_ascii_alphanumeric())
+            && tag.chars().any(|c| c.is_ascii_alphabetic());
+        if is_tag && !stem.trim().is_empty() {
+            label = stem;
+        }
+    }
+    let label = label.trim();
+    if label.is_empty() {
+        return None;
+    }
+    // Cut on a character boundary: a name is UTF-8, and half a character is not a
+    // shorter name.
+    let end = (0..=LONGEST.min(label.len()))
+        .rev()
+        .find(|end| label.is_char_boundary(*end))?;
+    Some(label[..end].trim_end().to_string())
+}
+
 /// One put in a session of its own.
+#[allow(clippy::too_many_arguments)]
 async fn put_one<T: Transport>(
     t: &mut T,
     class: ObjectClass,
@@ -344,9 +453,10 @@ async fn put_one<T: Transport>(
     bytes: Vec<u8>,
     emit: &Emit,
     changed: &mut bool,
+    gone: &mut bool,
 ) -> Result<Result<String, String>, Error> {
     one_session!(write t, class, changed, |s| {
-        put(&mut s, at, what, bytes, emit).await
+        put(&mut s, at, what, bytes, emit, gone).await
     })
 }
 
@@ -355,17 +465,19 @@ async fn put_one<T: Transport>(
 /// ⚠️ A refusal stops the batch where it stands. What has already landed has landed —
 /// the report says which — and the rest stay owed, because carrying on past a failure
 /// would be writing into an instrument whose state nobody has looked at since.
+#[allow(clippy::too_many_arguments)]
 async fn send_all<T: Transport>(
     t: &mut T,
     class: ObjectClass,
     items: Vec<Outgoing>,
     emit: &Emit,
     changed: &mut bool,
+    gone: &mut bool,
 ) -> Result<Option<String>, String> {
     let total = items.len();
     let mut done = 0;
-    let outcome = batch(t, class, &items, total, &mut done, emit, changed).await;
-    let refusal = outcome.map_err(|e| e.to_string())?;
+    let outcome = batch(t, class, &items, total, &mut done, emit, changed, gone).await;
+    let refusal = outcome.map_err(spoil(gone, None))?;
     match refusal {
         None => Ok(Some(format!(
             "wrote {done} of {total} to {}",
@@ -386,6 +498,7 @@ async fn batch<T: Transport>(
     done: &mut usize,
     emit: &Emit,
     changed: &mut bool,
+    gone: &mut bool,
 ) -> Result<Option<String>, Error> {
     one_session!(write t, class, changed, |s| {
         for item in items {
@@ -395,7 +508,7 @@ async fn batch<T: Transport>(
                 shown(item.at),
                 *done + 1
             )));
-            match put(&mut s, item.at, &item.name, item.bytes.clone(), emit).await? {
+            match put(&mut s, item.at, &item.name, item.bytes.clone(), emit, gone).await? {
                 Ok(note) => {
                     *done += 1;
                     emit.send(DeviceEvent::OpOk(note));
@@ -724,6 +837,43 @@ mod tests {
         assert_eq!(entity_name(&info, true), "Africa-Split.body");
     }
 
+    /// The format tag the local list carries is a filename's business, not the panel's;
+    /// everything else the operator typed goes over as it stands.
+    #[test]
+    fn a_slot_is_named_what_this_computer_calls_the_object() {
+        let label = |name: &str| slot_label(name);
+        assert_eq!(label("Africa-Split.ne5p").as_deref(), Some("Africa-Split"));
+        assert_eq!(label("Squabble B.ne5t").as_deref(), Some("Squabble B"));
+        assert_eq!(label("  Rotary Fast  ").as_deref(), Some("Rotary Fast"));
+        // A dot that is not a tag: a name is allowed to hold one.
+        assert_eq!(label("Bass 2.0").as_deref(), Some("Bass 2.0"));
+        assert_eq!(label("Mr. Hammond").as_deref(), Some("Mr. Hammond"));
+        assert_eq!(
+            label(".ne5p").as_deref(),
+            Some(".ne5p"),
+            "a tag and nothing"
+        );
+    }
+
+    /// Nothing to send leaves the slot as the write left it. Blanking a name is not an
+    /// improvement on the wrong one, and it is not what anybody asked for.
+    #[test]
+    fn a_name_with_nothing_in_it_is_not_sent() {
+        for nothing in ["", "   ", "\t"] {
+            assert_eq!(slot_label(nothing), None, "{nothing:?}");
+        }
+    }
+
+    /// A name is UTF-8, and half a character is not a shorter name.
+    #[test]
+    fn a_long_name_is_cut_on_a_character_boundary() {
+        let long = "é".repeat(200);
+        let cut = slot_label(&long).expect("something is left");
+        assert!(cut.len() <= 64, "{} bytes", cut.len());
+        assert!(long.starts_with(&cut));
+        assert_eq!(cut.chars().count(), 32, "whole characters only");
+    }
+
     /// A slot whose name is only punctuation still has to produce a usable label.
     #[test]
     fn a_nameless_slot_still_gets_a_label() {
@@ -736,5 +886,241 @@ mod tests {
             name: "  ".into(),
         };
         assert_eq!(entity_name(&info, false), "unnamed.ne5p");
+    }
+}
+
+/// The write path driven against a stand-in device, which is the only way to see what a
+/// put actually puts on the wire without an instrument on the end of it.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod wire_tests {
+    use std::collections::VecDeque;
+    use std::sync::mpsc::Receiver;
+
+    use super::*;
+    use nord_usb::wire::{cmd, ui, Message, Service};
+    use nord_usb::Transport;
+
+    /// A device that agrees to everything, and remembers what it was told.
+    ///
+    /// Enough of one to drive a whole operation: the framing rule is that a reply carries
+    /// the request's command `+1` and leads with a status word, and nothing on the write
+    /// path reads a reply's payload.
+    ///
+    /// ⚠️ The progress strings are fire-and-forget — the code that sends them never reads
+    /// a reply. Queueing one for those is how the stream desyncs, so they get none.
+    struct Puppet {
+        heard: Vec<Message>,
+        replies: VecDeque<Vec<u8>>,
+        /// The status `INFO` answers with. `1` is a vacant slot.
+        info: u32,
+        /// Every read fails, the way an unplugged device's does.
+        deaf: bool,
+    }
+
+    impl Puppet {
+        fn new(info: u32) -> Puppet {
+            Puppet {
+                heard: Vec::new(),
+                replies: VecDeque::new(),
+                info,
+                deaf: false,
+            }
+        }
+
+        fn deaf() -> Puppet {
+            Puppet {
+                deaf: true,
+                ..Puppet::new(1)
+            }
+        }
+
+        /// The slot commands it was sent, in order.
+        ///
+        /// ⚠️ One service only. The two number their commands independently, and they
+        /// collide: `SESSION_CLOSE` and the UI's progress label are both `0x06`.
+        fn commands(&self) -> Vec<u32> {
+            self.heard
+                .iter()
+                .filter(|msg| matches!(msg.service, Service::Program))
+                .map(|msg| msg.command)
+                .collect()
+        }
+
+        fn first(&self, command: u32) -> Option<&Message> {
+            self.heard.iter().find(|msg| msg.command == command)
+        }
+    }
+
+    impl Transport for Puppet {
+        async fn write(&mut self, buf: &[u8]) -> nord_usb::Result<()> {
+            let msg = Message::decode(buf)?;
+            let spoken = matches!(msg.service, Service::Ui)
+                && matches!(msg.command, ui::LABEL | ui::PERCENT);
+            let status = match msg.command {
+                cmd::INFO => self.info,
+                _ => 0,
+            };
+            if !spoken {
+                let mut args = status.to_be_bytes().to_vec();
+                args.extend_from_slice(&[0; 32]);
+                self.replies.push_back(
+                    Message::new(msg.service, msg.subsystem, msg.command + 1, args).encode(),
+                );
+            }
+            self.heard.push(msg);
+            Ok(())
+        }
+
+        async fn read(&mut self, _max: usize) -> nord_usb::Result<Vec<u8>> {
+            if self.deaf {
+                return Err(Error::Transport("the device stopped answering".into()));
+            }
+            self.replies
+                .pop_front()
+                .ok_or_else(|| Error::Transport("nothing to read".into()))
+        }
+    }
+
+    fn a_program() -> Vec<u8> {
+        let ctx = egui::Context::default();
+        let mut workspace = crate::workspace::Workspace::new(ctx);
+        let mut log = crate::log::Log::default();
+        let id = workspace
+            .create(crate::workspace::Fresh::Program, &mut log)
+            .expect("a fresh default");
+        workspace.get(id).expect("just made").bytes.clone()
+    }
+
+    fn drive(device: &mut Puppet, cmd: DeviceCmd) -> (Flow, Receiver<DeviceEvent>) {
+        let (tx, events) = std::sync::mpsc::channel();
+        let emit = Emit::new(tx, egui::Context::default());
+        let flow = nord_usb::block_on(run(device, cmd, &emit));
+        (flow, events)
+    }
+
+    /// ⚠️ The bug this pins: a slot written into is called whatever `BEGIN_WRITE` named
+    /// it, and this app does not choose that name. Without the rename the operator's own
+    /// label stops at the cable, and the panel shows something else entirely.
+    #[test]
+    fn a_put_names_the_slot_it_wrote_into() {
+        let at = Location { bank: 6, slot: 3 };
+        let mut device = Puppet::new(1);
+        let (flow, _) = drive(
+            &mut device,
+            DeviceCmd::Put {
+                id: 1,
+                class: ObjectClass::Program,
+                at,
+                name: "Africa-Split.ne5p".into(),
+                bytes: a_program(),
+            },
+        );
+        assert!(flow == Flow::Continue, "the instrument is still there");
+
+        let rename = device.first(cmd::RENAME).expect("the slot was named");
+        let mut expected = Vec::new();
+        at.write_to(&mut expected);
+        expected.extend_from_slice(&12u32.to_be_bytes());
+        expected.extend_from_slice(b"Africa-Split");
+        assert_eq!(
+            rename.args, expected,
+            "the location and the operator's name"
+        );
+
+        // After the bytes, and inside the same session: a rename before the write would
+        // name the occupant that is about to be deleted.
+        let commands = device.commands();
+        let order = |command| commands.iter().position(|held| *held == command);
+        assert!(order(cmd::RENAME) > order(cmd::WRITE_DATA), "{commands:x?}");
+        assert!(
+            order(cmd::RENAME) < order(cmd::SESSION_CLOSE),
+            "{commands:x?}"
+        );
+        assert!(
+            order(cmd::RENAME) > order(cmd::BEGIN_WRITE),
+            "{commands:x?}"
+        );
+    }
+
+    /// The bytes are in the slot either way. A name that would not go is worth saying and
+    /// nothing more — least of all worth stopping a batch over.
+    #[test]
+    fn a_nameless_asset_still_gets_its_bytes_written() {
+        let mut device = Puppet::new(1);
+        let (flow, _) = drive(
+            &mut device,
+            DeviceCmd::Put {
+                id: 1,
+                class: ObjectClass::Program,
+                at: Location { bank: 6, slot: 3 },
+                name: "   ".into(),
+                bytes: a_program(),
+            },
+        );
+        assert!(flow == Flow::Continue);
+        assert!(device.first(cmd::WRITE_DATA).is_some(), "the bytes went");
+        assert!(device.first(cmd::RENAME).is_none(), "nothing to name it");
+    }
+
+    /// A batch names every slot it writes into, not just the first.
+    #[test]
+    fn every_item_of_a_batch_is_named() {
+        let bytes = a_program();
+        let item = |slot, name: &str| Outgoing {
+            id: slot as u64,
+            at: Location { bank: 6, slot },
+            name: name.into(),
+            bytes: bytes.clone(),
+        };
+        let mut device = Puppet::new(1);
+        let (flow, _) = drive(
+            &mut device,
+            DeviceCmd::SendAll {
+                class: ObjectClass::Program,
+                items: vec![item(3, "Africa-Split.ne5p"), item(4, "Squabble-B.ne5p")],
+            },
+        );
+        assert!(flow == Flow::Continue);
+        let named: Vec<u32> = device
+            .commands()
+            .into_iter()
+            .filter(|command| *command == cmd::RENAME)
+            .collect();
+        assert_eq!(named.len(), 2, "one rename per item");
+        // And one session around the pair, which is what a batch is for.
+        let opens = device
+            .commands()
+            .into_iter()
+            .filter(|command| *command == cmd::SESSION_OPEN)
+            .count();
+        assert_eq!(opens, 1);
+    }
+
+    /// ⚠️ A device that stopped answering is not a device that said no. Only the first
+    /// puts the app back into its unattached state.
+    #[test]
+    fn a_transport_that_fails_is_the_instrument_going_away() {
+        let (flow, _) = drive(
+            &mut Puppet::deaf(),
+            DeviceCmd::SlotInfo {
+                class: ObjectClass::Program,
+                at: Location { bank: 6, slot: 3 },
+            },
+        );
+        assert!(flow == Flow::Lost);
+    }
+
+    /// A refusal keeps the instrument: it is attached, it understood, and it declined.
+    #[test]
+    fn a_refusal_is_not_a_disconnection() {
+        // Status 3: the slot is outside this instrument's range.
+        let (flow, _) = drive(
+            &mut Puppet::new(3),
+            DeviceCmd::SlotInfo {
+                class: ObjectClass::Program,
+                at: Location { bank: 30, slot: 3 },
+            },
+        );
+        assert!(flow == Flow::Continue);
     }
 }

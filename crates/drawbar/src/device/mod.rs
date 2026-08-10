@@ -259,7 +259,11 @@ impl DeviceCmd {
 pub enum DeviceEvent {
     Connected(DeviceCard),
     ConnectFailed(String),
-    Disconnected,
+    Disconnected {
+        /// The instrument went rather than being let go: the cable, or the transport
+        /// under it, and not a refusal.
+        lost: bool,
+    },
     Started(String),
     Finished,
     /// A class's own counters, read at the head of its walk.
@@ -755,13 +759,21 @@ impl Device {
                     log.trouble("No instrument could be opened.");
                     self.state.connection = Connection::Disconnected;
                 }
-                DeviceEvent::Disconnected => {
-                    log.say("The instrument was released.");
+                // ⚠️ Nothing on this computer is touched. What was waiting to be sent is
+                // still waiting: the instrument coming back is the point of keeping it,
+                // and a badge cleared here would be an edit silently given up on.
+                DeviceEvent::Disconnected { lost } => {
+                    match lost {
+                        true => log.trouble("The instrument went away — reconnect when it's back."),
+                        false => log.say("The instrument was released."),
+                    }
                     self.state.connection = Connection::Disconnected;
                     self.state.in_flight = None;
                     self.state.forget_everything();
                     self.pending.clear();
                     self.reading = None;
+                    self.rescan.clear();
+                    self.reselect.clear();
                 }
                 DeviceEvent::Started(what) => log.info(what),
                 DeviceEvent::Finished => {

@@ -63,6 +63,9 @@ pub struct Document {
     name: String,
     /// The last refusal, and what caused it.
     error: Option<String>,
+    /// Whether this document has already had its dependencies read without being asked.
+    /// One read per document: the button is what asks for another.
+    fetched_deps: bool,
     advanced: Advanced,
 }
 
@@ -74,6 +77,7 @@ impl Default for Document {
             ctx: Ctx::read(&[]),
             name: String::new(),
             error: None,
+            fetched_deps: false,
             advanced: Advanced::default(),
         }
     }
@@ -98,6 +102,8 @@ impl Document {
         if self.target != Some(id) {
             self.target = Some(id);
             self.error = None;
+            self.fetched_deps = false;
+            self.advanced.leave();
             self.ctx = Ctx::read(registry.as_deref().unwrap_or(&[]));
             self.name = decoded
                 .and_then(sample::snapshot)
@@ -148,21 +154,28 @@ impl Document {
             .id_salt(SCROLL)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                match view {
-                    View::Basic => {
-                        self.body(ui, entity, registry.as_deref(), &mut piano, &mut sets)
-                    }
-                    View::Advanced => {
-                        if let Some(fields) = registry.as_deref() {
-                            self.advanced.table(ui, fields, &mut sets);
-                            typed = !sets.is_empty();
-                            ui.add_space(8.0);
+                // ⚠️ Everything below answers to an id of this document's own. A control
+                // is otherwise remembered by the field path it is on, and two tabs of the
+                // same format declare all the same paths — so a knob's half-typed number
+                // and an open picker were shared between them, and committing one landed
+                // on whichever document was in front.
+                ui.push_id(id, |ui| {
+                    match view {
+                        View::Basic => {
+                            self.body(ui, entity, registry.as_deref(), &mut piano, &mut sets)
+                        }
+                        View::Advanced => {
+                            if let Some(fields) = registry.as_deref() {
+                                self.advanced.table(ui, fields, &mut sets);
+                                typed = !sets.is_empty();
+                                ui.add_space(8.0);
+                            }
                         }
                     }
-                }
-                details = self
-                    .advanced
-                    .ui(ui, entity, opened, registry.as_deref(), device);
+                    details = self
+                        .advanced
+                        .ui(ui, entity, opened, registry.as_deref(), device);
+                });
             });
 
         if let Some(details) = details {
@@ -170,8 +183,9 @@ impl Document {
                 device.send(cmd, log);
             }
         }
-        if piano.asked {
-            if let Some((class, at)) = workspace.get(id).and_then(|e| e.origin.slot()) {
+        if let Some((class, at)) = workspace.get(id).and_then(|e| e.origin.slot()) {
+            if piano.asked || self.owes_deps(&piano, at, device) {
+                self.fetched_deps = true;
                 device.send(crate::device::DeviceCmd::Deps { class, at }, log);
             }
         }
@@ -193,6 +207,21 @@ impl Document {
             }
         }
         act.send
+    }
+
+    /// Whether this frame should read the slot's dependencies without being asked to.
+    ///
+    /// The piano's name is the one thing about a program that no file carries, so a
+    /// document opened off a slot with an instrument attached reads it straight away
+    /// rather than sitting on an id until someone clicks. Once per document, and never
+    /// with nothing to learn: no instrument, no piano named, a name already in hand, or a
+    /// list the instrument has already given for this slot and simply did not name it in.
+    fn owes_deps(&self, piano: &panel::PianoLookup, at: Location, device: &Device) -> bool {
+        if self.fetched_deps || !piano.can_ask || piano.id.is_none() || piano.name.is_some() {
+            return false;
+        }
+        let detail = &device.state.detail;
+        !(detail.at == Some(at) && detail.deps.is_some())
     }
 
     /// Mark the open document as owed to the instrument, or say why it is not.
@@ -678,6 +707,38 @@ mod tests {
         assert!(copied.name.is_none(), "still nothing has been asked");
         // A fresh program references no piano at all, and zero is not an id to hunt for.
         assert_eq!(copied.id, None);
+    }
+
+    /// ⚠️ A cell being typed into belongs to the document it was opened in. One table
+    /// serves every tab, and the two programs in front of an operator declare all the
+    /// same paths — so a half-typed value has to be dropped at the door rather than
+    /// following them into the next tab and landing there on Enter.
+    #[test]
+    fn a_half_typed_cell_does_not_follow_the_operator_into_the_next_document() {
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut device = Device::new(ctx.clone());
+        let mut log = Log::default();
+        let mut document = Document::default();
+
+        let first = workspace.create(Fresh::Program, &mut log).unwrap();
+        let second = workspace.create(Fresh::Program, &mut log).unwrap();
+        let bytes = workspace.get(first).unwrap().bytes.clone();
+
+        let mut show = |document: &mut Document, id: u64| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    document.ui(ui, id, &bytes, &mut workspace, &mut device, &mut log);
+                });
+            });
+        };
+
+        show(&mut document, first);
+        document.advanced.pretend_editing("center_panel.gain", "0");
+        assert_eq!(document.advanced.editing(), Some("center_panel.gain"));
+
+        show(&mut document, second);
+        assert_eq!(document.advanced.editing(), None, "left behind");
     }
 
     /// The registry spells an id in decimal; a person spells it the way `nord deps` does.

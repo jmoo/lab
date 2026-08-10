@@ -267,7 +267,7 @@ fn paint(
 
     // The travelled arc, over the whole sweep drawn faintly: how far round a knob is
     // reads off the lit part, the way a panel's own scale does.
-    let track = egui::Stroke::new(2.0, visuals.weak_text_color().gamma_multiply(0.5));
+    let track = egui::Stroke::new(2.0, crate::app::unlit(visuals));
     painter.add(egui::Shape::line(
         arc(centre, radius - 1.0, 0.0, 1.0),
         track,

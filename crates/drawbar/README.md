@@ -22,7 +22,7 @@ The window is a file browser over the places your sounds live:
 
 | region | what it holds |
 |---|---|
-| **Storage** (left) | **This computer** — dropped or opened files, copies pulled off the instrument, fresh defaults. **Connect instrument** sits beside Open… and New; until an instrument answers, this is the whole sidebar. Attached, the **instrument** takes a column of its own alongside — folders (Programs, Set lists, Samples, Pianos, Live, Settings) filling in by themselves — so moving a sound between the two is a short drag. Each column scrolls on its own, and the dock they share is resizable |
+| **Storage** (left) | **This computer** — dropped or opened files, copies pulled off the instrument, fresh defaults. **Connect instrument** sits beside Open… and New; until an instrument answers, this is the whole sidebar. Attached, the **instrument** takes a column of its own alongside — folders (Programs, Set lists, Samples, Pianos, Live, Settings) filling in by themselves — so moving a sound between the two is a short drag. Each column scrolls on its own, and the divider between them is dragged to give one more room than the other; double-click it for an even split, and where it was left is kept between sessions |
 | **Tabs** (centre) | one document per thing you opened. Double-click anything in the sidebar to open it; something on the instrument is copied here first. Each has a **Basic** and an **Advanced** face |
 | **Status strip** (bottom) | one line about what just happened, and a spinner while something is running. Click it for the full activity log, protocol detail and all |
 
@@ -70,6 +70,13 @@ playing what it read before the write, so after a put or a rename that touches
 it, the app asks the instrument to load that slot again. It can only do this for
 a slot **it** selected: a selection made on the panel itself is invisible to the
 host.
+
+**An instrument that goes away says so.** Pull the cable and the column goes with
+it — in a browser the moment the tab is told, and on either target the first time
+an operation finds nothing on the other end of the pipe. A refusal is not a
+disconnection: the instrument answering "no" is an instrument that is still
+there. What was waiting to be sent stays waiting, so plugging back in and
+pressing **Send all** picks up where you were.
 
 ### Moving things
 
@@ -155,10 +162,11 @@ that bring it back are in Keyboard & split, which leads because it never goes.
   and moving the number lights it.
 - **The piano section names the piano** where the instrument can name it. A program
   stores its piano as an id and the panel's own dial position, and no file anywhere
-  carries the name — so with an instrument attached, *Ask the instrument* reads the
-  program's dependencies and the name appears; without one, the id is shown and says as
-  much. The Model dial keeps its number: nothing this app can read maps a dial position
-  to a name.
+  carries the name — so with an instrument attached the document reads the program's
+  dependencies as it opens and the name appears on its own; *Ask again* re-reads it, and
+  *Ask the instrument* is there for a read that found nothing. Without an instrument the
+  id is shown and says as much. The Model dial keeps its number: nothing this app can
+  read maps a dial position to a name.
 - A picker offers only values the library can name. A file holding one it cannot reads
   as *unrecognized value (6)* and keeps it in the list, so changing away from it can be
   undone.
@@ -194,6 +202,13 @@ and it goes nowhere until you say so.
 - **Cmd/Ctrl+S** marks the open document pending. For something that only lives on this
   computer it says so and does nothing, because those edits are already kept. It is
   never a file-export shortcut — that is Export….
+
+**The name goes with the bytes.** A write does not carry one — the instrument names
+the slot itself, from an argument this app does not choose — so every write is
+followed by a rename, inside the same session, to whatever the sound is called
+here. The format tag comes off on the way: `Africa-Split.ne5p` on this computer is
+`Africa-Split` on the panel. A rename that will not go is said out loud and
+nothing more; the bytes are in the slot either way.
 
 ### Advanced
 

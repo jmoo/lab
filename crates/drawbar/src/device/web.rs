@@ -13,9 +13,10 @@ use std::sync::mpsc::Sender;
 use eframe::egui;
 use js_sys::Promise;
 use nord_usb::transport::{web::WebUsbTransport, VENDOR_ID};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
-use web_sys::{UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
+use web_sys::{UsbConnectionEvent, UsbDevice, UsbDeviceFilter, UsbDeviceRequestOptions};
 
 use super::worker::{self, Emit, Flow};
 use super::{DeviceCard, DeviceCmd, DeviceEvent};
@@ -23,14 +24,23 @@ use super::{DeviceCard, DeviceCmd, DeviceEvent};
 #[derive(Default)]
 struct Inner {
     transport: Option<WebUsbTransport>,
+    /// The device the chooser handed over, kept so the browser's own disconnect event
+    /// can be told apart from another Clavia's. WebUSB hands back the same object for
+    /// the same device, so this is an identity and not a description.
+    device: Option<UsbDevice>,
     queue: VecDeque<DeviceCmd>,
     /// A command is running, so the transport is out of the cell.
     busy: bool,
+    /// The device went away. Whatever is running is the last thing that runs.
+    lost: bool,
 }
 
 pub struct Link {
     emit: Emit,
     inner: Rc<RefCell<Inner>>,
+    /// ⚠️ Held for as long as the link is. A closure handed to JS and then dropped here
+    /// leaves the page calling into freed memory the next time the event fires.
+    watch: Option<Closure<dyn FnMut(UsbConnectionEvent)>>,
 }
 
 impl Link {
@@ -38,6 +48,7 @@ impl Link {
         Link {
             emit: Emit::new(events, ctx),
             inner: Rc::new(RefCell::new(Inner::default())),
+            watch: None,
         }
     }
 
@@ -55,6 +66,10 @@ impl Link {
                 return;
             }
         };
+        self.inner.borrow_mut().lost = false;
+        if self.watch.is_none() {
+            self.watch = watch_for_unplug(&self.inner, &self.emit);
+        }
 
         let emit = self.emit.clone();
         let inner = self.inner.clone();
@@ -78,9 +93,13 @@ impl Link {
                 product_id: device.product_id(),
                 serial: device.serial_number(),
             };
+            let chosen = device.clone();
             match WebUsbTransport::open(device).await {
                 Ok(transport) => {
-                    inner.borrow_mut().transport = Some(transport);
+                    let mut state = inner.borrow_mut();
+                    state.transport = Some(transport);
+                    state.device = Some(chosen);
+                    drop(state);
                     emit.send(DeviceEvent::Connected(card));
                 }
                 Err(e) => emit.send(DeviceEvent::ConnectFailed(e.to_string())),
@@ -120,25 +139,73 @@ fn pump(inner: &Rc<RefCell<Inner>>, emit: &Emit) {
     let emit = emit.clone();
     spawn_local(async move {
         let flow = worker::run(&mut transport, cmd, &emit).await;
-        if flow == Flow::Stop {
-            // ⚠️ Release the interface, or Nord Sound Manager and the desktop backend
-            // stay locked out for as long as the tab is open.
+        if flow == Flow::Continue && !inner.borrow().lost {
+            {
+                let mut state = inner.borrow_mut();
+                state.transport = Some(transport);
+                state.busy = false;
+            }
+            return pump(&inner, &emit);
+        }
+        // ⚠️ Release the interface, or Nord Sound Manager and the desktop backend stay
+        // locked out for as long as the tab is open. A device that has already gone has
+        // nothing to release, and closing it can only fail.
+        if flow == Flow::Released {
             if let Err(e) = transport.close().await {
                 emit.send(DeviceEvent::OpFailed(e.to_string()));
             }
+        }
+        let said = {
             let mut state = inner.borrow_mut();
             state.busy = false;
             state.queue.clear();
-            emit.send(DeviceEvent::Disconnected);
+            state.device = None;
+            let said = state.lost;
+            state.lost = said || flow == Flow::Lost;
+            said
+        };
+        // The unplug event may have got here first, and one departure is one message.
+        if !said {
+            emit.send(DeviceEvent::Disconnected {
+                lost: flow == Flow::Lost,
+            });
+        }
+    });
+}
+
+/// Subscribe to the browser's own "that device is gone" event.
+///
+/// ⚠️ Without this a pulled cable is invisible until something is attempted. Nothing in
+/// the app asks the browser whether the device is still there, so the instrument's column
+/// would sit answering clicks with nothing behind it until one of them failed.
+fn watch_for_unplug(
+    inner: &Rc<RefCell<Inner>>,
+    emit: &Emit,
+) -> Option<Closure<dyn FnMut(UsbConnectionEvent)>> {
+    let usb = web_sys::window()?.navigator().usb();
+    let held = inner.clone();
+    let emit = emit.clone();
+    let watch = Closure::wrap(Box::new(move |event: UsbConnectionEvent| {
+        let went = event.device();
+        // Another Clavia leaving the machine is not this one leaving.
+        if held.borrow().device.as_ref() != Some(&went) {
             return;
         }
-        {
-            let mut state = inner.borrow_mut();
-            state.transport = Some(transport);
-            state.busy = false;
+        let mut state = held.borrow_mut();
+        state.queue.clear();
+        state.device = None;
+        // A transport whose device has gone cannot be closed, and there is nothing left
+        // to hand back: dropping it is the whole of the cleanup. While a command is
+        // running the transport is out of the cell, and the pump drops it on the way out.
+        state.transport = None;
+        let said = std::mem::replace(&mut state.lost, true);
+        drop(state);
+        if !said {
+            emit.send(DeviceEvent::Disconnected { lost: true });
         }
-        pump(&inner, &emit);
-    });
+    }) as Box<dyn FnMut(UsbConnectionEvent)>);
+    usb.set_ondisconnect(Some(watch.as_ref().unchecked_ref()));
+    Some(watch)
 }
 
 fn request_device() -> Result<Promise<UsbDevice>, JsValue> {

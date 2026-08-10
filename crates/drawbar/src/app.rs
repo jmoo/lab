@@ -18,24 +18,28 @@ use crate::workspace::{Origin, Workspace};
 /// ⚠️ Each theme gets its own set. A signal picked to glow on a black panel is washed out
 /// on paper, and one picked for paper disappears on the panel — so nothing here is a
 /// constant, and nothing outside this module spells a status colour for itself.
+/// ⚠️ The light half of every pair is a **dark, saturated** colour rather than a pale
+/// tint of the dark one. A signal on paper carries by being darker than the paper; a
+/// pastel of the right hue reads as a smudge, and at small sizes as nothing at all. Each
+/// one below sits at roughly 6:1 against [`light`]'s panel.
 pub fn good(visuals: &egui::Visuals) -> egui::Color32 {
     match visuals.dark_mode {
         true => egui::Color32::from_rgb(0x60, 0xc0, 0x70),
-        false => egui::Color32::from_rgb(0x1e, 0x7a, 0x36),
+        false => egui::Color32::from_rgb(0x0f, 0x62, 0x2a),
     }
 }
 
 pub fn warn(visuals: &egui::Visuals) -> egui::Color32 {
     match visuals.dark_mode {
         true => egui::Color32::from_rgb(0xe0, 0xa0, 0x30),
-        false => egui::Color32::from_rgb(0x8a, 0x5a, 0x00),
+        false => egui::Color32::from_rgb(0x8a, 0x4b, 0x00),
     }
 }
 
 pub fn bad(visuals: &egui::Visuals) -> egui::Color32 {
     match visuals.dark_mode {
         true => egui::Color32::from_rgb(0xe0, 0x50, 0x40),
-        false => egui::Color32::from_rgb(0xb3, 0x2a, 0x1e),
+        false => egui::Color32::from_rgb(0xa3, 0x14, 0x0c),
     }
 }
 
@@ -43,7 +47,19 @@ pub fn bad(visuals: &egui::Visuals) -> egui::Color32 {
 pub fn accent(visuals: &egui::Visuals) -> egui::Color32 {
     match visuals.dark_mode {
         true => egui::Color32::from_rgb(0xd6, 0x46, 0x3a),
-        false => egui::Color32::from_rgb(0xa8, 0x33, 0x2a),
+        false => egui::Color32::from_rgb(0xb0, 0x1e, 0x12),
+    }
+}
+
+/// The unlit half of a control: a knob's untravelled arc, the rim of a dark lens.
+///
+/// ⚠️ A real mid grey per theme, not [`egui::Visuals::weak_text_color`] faded further.
+/// Fading a light theme's grey towards the paper it is on is how a scale disappears: the
+/// mark has to stay a mark for the lit part to mean anything.
+pub fn unlit(visuals: &egui::Visuals) -> egui::Color32 {
+    match visuals.dark_mode {
+        true => egui::Color32::from_gray(0x5a),
+        false => egui::Color32::from_gray(0x82),
     }
 }
 
@@ -163,6 +179,7 @@ impl DrawbarApp {
         };
         if let Some(storage) = cc.storage {
             crate::store::load(storage, &mut app.workspace, &mut app.log);
+            app.browser.restore(storage);
         }
         app.saved = app.workspace.revision();
         app
@@ -291,6 +308,9 @@ impl eframe::App for DrawbarApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         crate::store::save(storage, &self.workspace, &mut self.log);
         storage.set_string(ThemeChoice::KEY, self.theme.stored().to_string());
+        // Not written from the frame that changed it, the way the theme is: a divider
+        // moves on every frame of a drag, and the whole store is rewritten each time.
+        self.browser.keep(storage);
         self.saved = self.workspace.revision();
     }
 
@@ -411,19 +431,36 @@ fn dark() -> egui::Visuals {
     visuals.window_fill = egui::Color32::from_rgb(0x1c, 0x1d, 0x20);
     visuals.faint_bg_color = egui::Color32::from_rgb(0x22, 0x23, 0x26);
     visuals.selection.bg_fill = egui::Color32::from_rgb(0x7a, 0x24, 0x24);
+    // ⚠️ Set, not inherited. egui's own is a pale blue, and it is not only the text on a
+    // selected row: it is the outline a drop target lights up in and the rim on a focused
+    // knob, none of which may be a second accent colour beside the instrument's red.
+    visuals.selection.stroke.color = egui::Color32::from_rgb(0xff, 0xdf, 0xd8);
+    // The same grey the light theme leans on, and for the same reason: it is what a slot
+    // number and a knob's caption are written in.
+    visuals.weak_text_alpha = 0.7;
     visuals.hyperlink_color = bad(&visuals);
     visuals
 }
 
 /// The same instrument under work light: paper rather than panel, and the reds pulled
 /// down to where they still read against it.
+///
+/// ⚠️ egui's own light theme is built out of greys that sit close to the paper — body
+/// text at 80, a weak text alpha of 0.6, separators at 190 — and the result on a real
+/// screen is a page that has to be leaned into. Every one of those is pulled down here.
+/// The weak grey matters most: it carries the slot numbers, the kind chips and the name
+/// under every knob, none of which is decoration.
 fn light() -> egui::Visuals {
     let mut visuals = egui::Visuals::light();
     visuals.panel_fill = egui::Color32::from_rgb(0xf2, 0xf1, 0xee);
     visuals.window_fill = egui::Color32::from_rgb(0xfa, 0xf9, 0xf7);
-    visuals.faint_bg_color = egui::Color32::from_rgb(0xe6, 0xe4, 0xdf);
-    visuals.selection.bg_fill = egui::Color32::from_rgb(0xe4, 0xbc, 0xb8);
+    visuals.faint_bg_color = egui::Color32::from_rgb(0xdc, 0xd8, 0xce);
+    visuals.selection.bg_fill = egui::Color32::from_rgb(0xe9, 0xa9, 0x9f);
     visuals.selection.stroke.color = egui::Color32::from_rgb(0x3a, 0x14, 0x10);
+    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(0x28);
+    visuals.widgets.inactive.fg_stroke.color = egui::Color32::from_gray(0x1c);
+    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(0x9e);
+    visuals.weak_text_alpha = 0.75;
     visuals.hyperlink_color = bad(&visuals);
     visuals
 }
@@ -462,5 +499,78 @@ mod tests {
         // The panel is dark and the paper is light, whatever egui's own defaults do.
         assert!(dark.panel_fill.intensity() < 0.2);
         assert!(light.panel_fill.intensity() > 0.8);
+    }
+
+    /// Relative luminance, as the contrast formula defines it.
+    fn luminance(color: egui::Color32) -> f32 {
+        let channel = egui::ecolor::linear_f32_from_gamma_u8;
+        0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
+    }
+
+    /// ⚠️ Over the background first. A weak grey is a **translucent** colour, and reading
+    /// its own bytes measures a colour nobody ever sees — a `Color32` carries its
+    /// channels already multiplied by its alpha, so the raw value of anything faded is
+    /// far darker than what lands on the screen.
+    fn over(fg: egui::Color32, bg: egui::Color32) -> egui::Color32 {
+        let rest = 1.0 - fg.a() as f32 / 255.0;
+        let mix = |fg: u8, bg: u8| (fg as f32 + bg as f32 * rest).round() as u8;
+        egui::Color32::from_rgb(
+            mix(fg.r(), bg.r()),
+            mix(fg.g(), bg.g()),
+            mix(fg.b(), bg.b()),
+        )
+    }
+
+    fn contrast(fg: egui::Color32, bg: egui::Color32) -> f32 {
+        let (a, b) = (luminance(over(fg, bg)), luminance(bg));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    fn named(visuals: &egui::Visuals) -> &'static str {
+        match visuals.dark_mode {
+            true => "dark",
+            false => "light",
+        }
+    }
+
+    /// ⚠️ The failure this pins is the one an accent set actually has: a colour of the
+    /// right hue and too pale to read. The three status accents are worn by small text,
+    /// so they answer to 4.5; the panel's own red is a lamp and an arc rather than a
+    /// word, and answers to the 3.0 a mark needs.
+    #[test]
+    fn every_accent_carries_against_the_panel_it_is_painted_on() {
+        for visuals in [dark(), light()] {
+            let (where_, panel) = (named(&visuals), visuals.panel_fill);
+            for signal in [good, warn, bad] {
+                let ratio = contrast(signal(&visuals), panel);
+                assert!(ratio >= 4.5, "{where_}: {ratio:.2}:1");
+            }
+            let lit = contrast(accent(&visuals), panel);
+            assert!(lit >= 3.0, "{where_} accent: {lit:.2}:1");
+            // The untravelled part of a sweep is deliberately quieter than a mark: it is
+            // the ghost of a scale, and the lit part means nothing if the two match. It
+            // still has to be there — a track nobody can see is a knob with no scale.
+            let track = contrast(unlit(&visuals), panel);
+            assert!(track >= 2.4, "{where_} track: {track:.2}:1");
+            // A selected row is read through the text on it, and told from an unselected
+            // one by its fill, so both sides of it count.
+            let selected = visuals.selection.bg_fill;
+            let ink = contrast(visuals.selection.stroke.color, selected);
+            assert!(ink >= 4.5, "{where_} selected text: {ink:.2}:1");
+            assert!(contrast(selected, panel) >= 1.4, "{where_} selected fill");
+        }
+    }
+
+    /// The weak grey carries the slot numbers, the kind chips and the name under every
+    /// knob. It is secondary, not optional.
+    #[test]
+    fn weak_text_stays_legible_in_both_themes() {
+        for visuals in [dark(), light()] {
+            let (where_, panel) = (named(&visuals), visuals.panel_fill);
+            let weak = contrast(visuals.weak_text_color(), panel);
+            assert!(weak >= 3.0, "{where_} weak: {weak:.2}:1");
+            let body = contrast(visuals.text_color(), panel);
+            assert!(body >= 4.5, "{where_} body: {body:.2}:1");
+        }
     }
 }

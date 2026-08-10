@@ -61,13 +61,13 @@ pub fn ui(ui: &mut egui::Ui, on: bool, word: &str) -> Option<bool> {
                 // it has to be a grey, or an unlit lamp is invisible against the button.
                 let dark_lens = match visuals.dark_mode {
                     true => visuals.extreme_bg_color,
-                    false => egui::Color32::from_gray(0x9a),
+                    false => egui::Color32::from_gray(0x88),
                 };
                 painter.circle_filled(lens, LENS / 2.0, dark_lens);
                 painter.circle_stroke(
                     lens,
                     LENS / 2.0,
-                    egui::Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.6)),
+                    egui::Stroke::new(1.0, crate::app::unlit(visuals)),
                 );
             }
         }

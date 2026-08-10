@@ -46,15 +46,19 @@ impl Link {
             };
             // `recv` ends when the UI drops its sender, so a disconnect that races the
             // thread still stops it.
+            let mut flow = Flow::Released;
             while let Ok(cmd) = rx.recv() {
-                if nord_usb::block_on(worker::run(&mut transport, cmd, &emit)) == Flow::Stop {
+                flow = nord_usb::block_on(worker::run(&mut transport, cmd, &emit));
+                if flow != Flow::Continue {
                     break;
                 }
             }
             // Dropping the transport releases the claimed interface, which is what lets
             // Nord Sound Manager and nord-cli have the device back.
             drop(transport);
-            emit.send(DeviceEvent::Disconnected);
+            emit.send(DeviceEvent::Disconnected {
+                lost: flow == Flow::Lost,
+            });
         });
     }
 

@@ -119,6 +119,12 @@ impl PianoLookup {
                             .small()
                             .weak(),
                     );
+                    if self.can_ask {
+                        self.asked |= ui
+                            .small_button("Ask again")
+                            .on_hover_text("read this program's dependencies again")
+                            .clicked();
+                    }
                 }
                 None => {
                     ui.label(egui::RichText::new(format!("piano {id:#010x}")).monospace());

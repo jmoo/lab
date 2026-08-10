@@ -41,6 +41,8 @@ wasm-bindgen-futures = "0.4"
 # become a Blob behind an object URL that a synthetic anchor click downloads.
 # Usb*: enumeration lives in the page rather than in nord-usb, because
 # `requestDevice()` needs a user gesture only a page can supply.
+# UsbConnectionEvent: the browser's own "that device is gone", which is the only notice
+# a tab gets that the cable came out.
 web-sys = { version = "0.3", features = [
   "Blob",
   "BlobPropertyBag",
@@ -51,6 +53,7 @@ web-sys = { version = "0.3", features = [
   "Navigator",
   "Url",
   "Usb",
+  "UsbConnectionEvent",
   "UsbDevice",
   "UsbDeviceFilter",
   "UsbDeviceRequestOptions",

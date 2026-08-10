@@ -257,14 +257,54 @@ pub fn renamed(original: &str, typed: &str) -> Option<String> {
     }
 }
 
-#[derive(Default)]
 pub struct Browser {
     selection: Option<Item>,
     rename: Option<Rename>,
     ask: Option<Ask>,
+    /// Where the divider sits between the two columns, as a share of the dock.
+    split: f32,
 }
 
+impl Default for Browser {
+    fn default() -> Browser {
+        Browser {
+            selection: None,
+            rename: None,
+            ask: None,
+            split: EVEN,
+        }
+    }
+}
+
+/// The divider's home: half the dock each.
+const EVEN: f32 = 0.5;
+
+/// Neither column may be dragged out of existence.
+const LEAST: f32 = 0.15;
+
+/// The strip the divider answers on.
+const HANDLE: f32 = 7.0;
+
 impl Browser {
+    /// Where the divider is kept between sessions.
+    pub const SPLIT: &'static str = "drawbar.dock_split";
+
+    /// Put the divider back where it was left.
+    ///
+    /// Anything the store cannot account for is the even split: a fraction outside the
+    /// stops would be one column showing and the other a sliver.
+    pub fn restore(&mut self, storage: &dyn eframe::Storage) {
+        self.split = storage
+            .get_string(Browser::SPLIT)
+            .and_then(|text| text.parse::<f32>().ok())
+            .filter(|share| (LEAST..=1.0 - LEAST).contains(share))
+            .unwrap_or(EVEN);
+    }
+
+    pub fn keep(&self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(Browser::SPLIT, self.split.to_string());
+    }
+
     /// Draw the places a sound can live and collect what the user asked for.
     ///
     /// The instrument gets a column once there is an instrument. Attached, the two sit
@@ -276,14 +316,71 @@ impl Browser {
         let mut acts = Vec::new();
         self.dialog(ui.ctx(), &mut acts);
         match device.state.connected() {
-            true => ui.columns(2, |columns| {
-                self.computer(&mut columns[0], workspace, device, &mut acts);
-                self.instrument(&mut columns[1], workspace, device, &mut acts);
-            }),
+            true => self.dock(ui, workspace, device, &mut acts),
             false => self.computer(ui, workspace, device, &mut acts),
         }
         ghost(ui.ctx());
         acts
+    }
+
+    /// The two columns and the divider between them.
+    ///
+    /// ⚠️ A share of the width rather than a number of points. The sidebar the two live
+    /// in is itself resizable, and a column pinned to points eats the other one as the
+    /// sidebar narrows — at which point the divider has nothing left to give back.
+    fn dock(
+        &mut self,
+        ui: &mut egui::Ui,
+        workspace: &Workspace,
+        device: &Device,
+        acts: &mut Vec<Act>,
+    ) {
+        let whole = ui.available_rect_before_wrap();
+        let usable = (whole.width() - HANDLE).max(1.0);
+        let left = usable * self.split;
+        let divider = egui::Rect::from_min_size(
+            egui::pos2(whole.left() + left, whole.top()),
+            egui::vec2(HANDLE, whole.height()),
+        );
+
+        let dragging = ui
+            .interact(
+                divider,
+                ui.id().with("dock_divider"),
+                egui::Sense::click_and_drag(),
+            )
+            .on_hover_and_drag_cursor(egui::CursorIcon::ResizeHorizontal);
+        if dragging.dragged() {
+            self.split = ((left + dragging.drag_delta().x) / usable).clamp(LEAST, 1.0 - LEAST);
+        }
+        // Somewhere to put it back to, for a divider that has been dragged into a corner.
+        if dragging.double_clicked() {
+            self.split = EVEN;
+        }
+
+        let ends = |from: f32, to: f32| {
+            egui::Rect::from_min_max(
+                egui::pos2(from, whole.top()),
+                egui::pos2(to, whole.bottom()),
+            )
+        };
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(ends(whole.left(), divider.left())),
+            |ui| self.computer(ui, workspace, device, acts),
+        );
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(ends(divider.right(), whole.right())),
+            |ui| self.instrument(ui, workspace, device, acts),
+        );
+
+        let visuals = ui.visuals();
+        let stroke = match dragging.hovered() || dragging.dragged() {
+            true => egui::Stroke::new(2.0, visuals.selection.stroke.color),
+            false => visuals.widgets.noninteractive.bg_stroke,
+        };
+        ui.painter()
+            .vline(divider.center().x, whole.y_range(), stroke);
+        ui.advance_cursor_after_rect(whole);
     }
 
     /// A column heading, and the strip of buttons under it.
@@ -758,8 +855,13 @@ impl Browser {
             }
             return None;
         }
-        let entered = ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if !entered && !output.response.lost_focus() {
+        // ⚠️ The field's own Enter, not the frame's. `Ui::input` answers for the whole
+        // app: an Enter meant for a knob's number box or a table cell reads as one here
+        // too, and would close an editor the operator has not finished with. A single
+        // line surrenders the focus on Enter, so the two together are the gesture.
+        let lost = output.response.lost_focus();
+        let entered = lost && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if !lost {
             return None;
         }
         let typed = std::mem::take(&mut rename.text);
@@ -948,10 +1050,20 @@ fn row(ui: &mut egui::Ui, selected: bool, cells: &Cells) -> Drawn {
         (false, true) => Some(visuals.faint_bg_color),
         (false, false) => None,
     };
-    let weak = visuals.weak_text_color();
+    // ⚠️ A selected row is painted in the instrument's red, and the body grey a row is
+    // otherwise written in does not survive it. The colour that goes with the fill is the
+    // one egui keeps beside it.
+    let ink = match selected {
+        true => visuals.selection.stroke.color,
+        false => visuals.text_color(),
+    };
+    let weak = match selected {
+        true => ink.gamma_multiply(visuals.weak_text_alpha),
+        false => visuals.weak_text_color(),
+    };
     let strong = match cells.faint {
         true => weak,
-        false => visuals.text_color(),
+        false => ink,
     };
     let painter = ui.painter().clone();
     if let Some(fill) = fill {
@@ -1467,6 +1579,109 @@ mod tests {
         }
     }
 
+    /// The divider does what dragging it says, and stops before either column is gone.
+    ///
+    /// ⚠️ The share is what is kept, not a width: the sidebar the two live in is itself
+    /// resizable, so the same fraction has to survive the dock changing size under it.
+    #[test]
+    fn the_divider_moves_and_stops_short_of_squeezing_a_column_out() {
+        use crate::workspace::Fresh;
+
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut device = Device::new(ctx.clone());
+        let mut log = crate::log::Log::default();
+        let mut browser = Browser::default();
+        workspace.create(Fresh::Program, &mut log).unwrap();
+        device.pretend_scanned(ObjectClass::Program, 7, &["Africa Split"]);
+
+        // Far enough left to ask for more than the stop allows.
+        let travel = -400.0;
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+
+        let mut divider = egui::pos2(0.0, 0.0);
+        let mut frame = 0;
+        while frame < 5 {
+            let grip = divider;
+            let moved = grip + egui::vec2(travel, 0.0);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 720.0),
+                )),
+                events: match frame {
+                    0 => Vec::new(),
+                    1 => vec![egui::Event::PointerMoved(grip)],
+                    2 => vec![button(grip, true)],
+                    3 => vec![egui::Event::PointerMoved(moved)],
+                    _ => vec![button(moved, false)],
+                },
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::SidePanel::left("places")
+                    .exact_width(600.0)
+                    .show(ctx, |ui| {
+                        // The same rect the dock lays itself out in, so the test grabs
+                        // the divider where the divider actually is.
+                        let whole = ui.available_rect_before_wrap();
+                        divider = egui::pos2(
+                            whole.left() + (whole.width() - HANDLE) * browser.split + HANDLE / 2.0,
+                            whole.center().y,
+                        );
+                        let _ = browser.ui(ui, &workspace, &device);
+                    });
+            });
+            frame += 1;
+        }
+
+        assert!(browser.split < EVEN, "it moved: {}", browser.split);
+        assert_eq!(browser.split, LEAST, "and stopped at the stop");
+    }
+
+    /// A share the store cannot account for is the even split, never one column and a
+    /// sliver of the other.
+    #[test]
+    fn a_divider_comes_back_where_it_was_left_or_not_at_all() {
+        struct Fake(Option<String>);
+        impl eframe::Storage for Fake {
+            fn get_string(&self, _key: &str) -> Option<String> {
+                self.0.clone()
+            }
+            fn set_string(&mut self, _key: &str, value: String) {
+                self.0 = Some(value);
+            }
+            fn flush(&mut self) {}
+        }
+
+        let restored = |held: Option<&str>| {
+            let mut browser = Browser::default();
+            browser.restore(&Fake(held.map(str::to_string)));
+            browser.split
+        };
+        assert_eq!(restored(Some("0.3")), 0.3);
+        assert_eq!(restored(None), EVEN);
+        for nonsense in ["0.0", "1.0", "-3", "wide", "", "NaN"] {
+            assert_eq!(restored(Some(nonsense)), EVEN, "{nonsense:?}");
+        }
+
+        // And what is written comes back as itself.
+        let mut store = Fake(None);
+        let browser = Browser {
+            split: 0.42,
+            ..Browser::default()
+        };
+        browser.keep(&mut store);
+        let mut after = Browser::default();
+        after.restore(&store);
+        assert_eq!(after.split, 0.42);
+    }
+
     #[test]
     fn the_two_columns_paint_with_nothing_attached() {
         paint(false);
@@ -1490,6 +1705,59 @@ mod tests {
         );
         assert!(!arms_rename(false, false));
         assert!(arms_rename(true, true), "the one gesture that renames");
+    }
+
+    /// The gesture end to end: arm the editor, type, press Enter, and the new name comes
+    /// back as an act.
+    ///
+    /// What this catches is a rename that has stopped committing at all — the unit tests
+    /// on [`renamed`] cannot see the field it is fed from, and the field's own idea of
+    /// "the operator pressed Enter" is the part that is easy to get wrong.
+    #[test]
+    fn typing_a_name_and_pressing_enter_renames_the_row() {
+        use crate::workspace::Fresh;
+
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let device = Device::new(ctx.clone());
+        let mut log = crate::log::Log::default();
+        let mut browser = Browser::default();
+        let id = workspace.create(Fresh::Program, &mut log).unwrap();
+
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        // The editor opens on the first frame and takes the focus; the second types over
+        // what it opened with, selected; the third commits.
+        let frames: [Vec<egui::Event>; 3] = [
+            Vec::new(),
+            vec![egui::Event::Text("LA Grand".into())],
+            vec![key(egui::Key::Enter)],
+        ];
+        browser.start_rename(Item::Local(id), "Africa Split");
+
+        let mut named = None;
+        for events in frames {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::SidePanel::left("places").show(ctx, |ui| {
+                    for act in browser.ui(ui, &workspace, &device) {
+                        if let Act::RenameLocal { name, .. } = act {
+                            named = Some(name);
+                        }
+                    }
+                });
+            });
+        }
+        assert_eq!(named.as_deref(), Some("LA Grand"));
+        assert!(browser.rename.is_none(), "and the editor is done with");
     }
 
     /// Only Enter renames: an armed editor that commits on blur turns a stray keystroke
