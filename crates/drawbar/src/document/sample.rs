@@ -2,8 +2,7 @@
 //!
 //! A sample is mostly encoded audio, so what is settable is what the format can patch in
 //! place without touching a stroke: the name, and each zone's root key and top note.
-//! The Raw generations (nsmp3/nsmp4) have no section accessors at all and are carried
-//! verbatim.
+//! The v3/v4 generations decode read-only and are carried verbatim.
 
 use std::io::Cursor;
 
@@ -233,12 +232,15 @@ mod tests {
         assert_eq!(range(&zones, 1), "up to B4");
     }
 
-    /// Only v2 content has the sections a patch needs.
+    /// Only v2 content has the in-place patches this editor makes; a v3/v4 instrument
+    /// is carried and shown, not edited.
     #[test]
-    fn a_raw_generation_is_carried_rather_than_edited() {
-        let entity = Entity::Sample(nord_format::Sample::Raw(Cbin {
+    fn a_later_generation_is_carried_rather_than_edited() {
+        let entity = Entity::Sample(nord_format::Sample::V3(Cbin {
             header: nord_format::cbin::Header::new("nsmp", (0, 0), 300),
-            body: nord_format::cbin::RawBody(vec![0; 4]),
+            body: nsmp::SampleV3 {
+                sections: Vec::new(),
+            },
         }));
         assert!(is_sample(&entity));
         assert!(!is_editable(&entity));
