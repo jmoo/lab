@@ -282,7 +282,7 @@ WebUSB both fail there.
 
 ⚠️ **`wasm-bindgen-cli` and the `wasm-bindgen` crate must be the same version.**
 The CLI refuses a module built by any other one. nixpkgs currently ships
-**0.2.121**, which is what `nord-web-demo` pins and therefore what the whole
+**0.2.121**, which is what this crate pins and therefore what the whole
 workspace lock holds:
 
 ```sh

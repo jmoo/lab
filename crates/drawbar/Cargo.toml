@@ -34,7 +34,8 @@ nord-usb = { path = "../nord-usb", features = ["blocking", "nusb"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
 # ⚠️ Held at the version `wasm-bindgen-cli` in nixpkgs speaks; the CLI refuses a
-# module built by any other. The pin is workspace-wide — see nord-web-demo's README.
+# module built by any other. The pin is workspace-wide: this is the one crate that
+# holds it, and moving it means moving the CLI version with it.
 wasm-bindgen = "=0.2.121"
 wasm-bindgen-futures = "0.4"
 # Blob/Url/HtmlAnchorElement: saving a file has no picker on the web, so the bytes

@@ -19,7 +19,7 @@ Playground for personal projects and NixOS / nix-darwin config for my machines.
 | 🎹 | [nord-format](crates/nord-format/README.md) | Clavia / Nord file parser/writer implementation in rust |
 | 🎛️ | [nord-cli](crates/nord-cli/README.md) | Command-line tool for interacting with Clavia / Nord keyboards and files |
 | 🔌 | [nord-usb](crates/nord-usb/README.md) | Clavia / Nord USB protocol implementation in rust |
-| 🌐 | [nord-web-demo](crates/nord-web-demo/README.md) | Browser page driving nord-usb's WebUSB backend on real hardware |
+| 🌐 | [drawbar](crates/drawbar/README.md) | Browser app for Clavia / Nord keyboards — file browser, editor, and WebUSB transfers |
 | 🧩 | [vscode-nix-extensions](pkgs/vscode-nix-extensions/README.md) | Generate VS Code extensions from Nix expressions |
 
 
