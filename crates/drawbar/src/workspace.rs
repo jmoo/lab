@@ -202,6 +202,74 @@ impl LocalEntity {
     }
 }
 
+/// The filename an export suggests for a verbatim name: made path-safe, and given the
+/// extension the bytes say it should have unless the name already carries one.
+fn export_filename(name: &str, bytes: &[u8], what: ExportWhat) -> String {
+    let stem = match filename_stem(name) {
+        s if s.is_empty() => "unnamed".to_string(),
+        s => s,
+    };
+    match what {
+        ExportWhat::Body => match stem.ends_with(".body") {
+            true => stem,
+            false => format!("{stem}.body"),
+        },
+        ExportWhat::File => match carries_tag(&stem) {
+            true => stem,
+            false => format!("{stem}.{}", format_tag(bytes)),
+        },
+    }
+}
+
+/// A verbatim name reduced to what a path can carry: whitespace runs and path
+/// separators become one `-`, control characters drop, and nothing hidden or
+/// option-like survives at the edges. Filenames only — the name itself stays verbatim.
+fn filename_stem(label: &str) -> String {
+    // A separator is owed rather than written, so a run of them collapses to one `-`
+    // and nothing trailing survives.
+    let mut owed = false;
+    let mut out = String::with_capacity(label.len());
+    for c in label.chars() {
+        match c {
+            '-' => owed = !out.is_empty(),
+            _ if c.is_whitespace() => owed = !out.is_empty(),
+            // Path separators, plus the characters a Windows filename cannot hold.
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => owed = !out.is_empty(),
+            _ if c.is_control() => {}
+            _ => {
+                if std::mem::take(&mut owed) {
+                    out.push('-');
+                }
+                out.push(c);
+            }
+        }
+    }
+    // A leading dot hides the file and dots alone spell `.` and `..`; a leading dash is
+    // an option to every tool that later reads it.
+    out.trim_matches(['.', '-']).to_string()
+}
+
+/// Whether a name already ends in something shaped like a format tag (`patch.ne5p`,
+/// `x.body`), so an export must not stack a second one on it.
+fn carries_tag(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(stem, tag)| {
+        !stem.trim().is_empty()
+            && (2..=5).contains(&tag.len())
+            && tag.chars().all(|c| c.is_ascii_alphanumeric())
+            && tag.chars().any(|c| c.is_ascii_alphabetic())
+    })
+}
+
+/// The extension a nameless export gets: the CBIN tag the bytes themselves carry, or
+/// `bin` for bytes that carry none.
+fn format_tag(bytes: &[u8]) -> String {
+    bytes
+        .get(8..12)
+        .filter(|tag| tag.iter().all(|b| b.is_ascii_alphanumeric()))
+        .map(|tag| String::from_utf8_lossy(tag).into_owned())
+        .unwrap_or_else(|| "bin".to_string())
+}
+
 /// Re-encode and compare — the check `nord verify` runs on a file.
 fn verify(entity: &Entity, bytes: &[u8]) -> VerifyState {
     if matches!(entity, Entity::Bundle(_)) {
@@ -435,15 +503,14 @@ impl Workspace {
 
     /// The filename an export suggests.
     ///
-    /// ⚠️ The one place a name becomes a filename. A file stores no name of its own —
-    /// the name is this app's metadata, carried since the moment the bytes arrived — so
-    /// nothing may re-derive it from the bytes here or anywhere else.
+    /// ⚠️ The one place a name becomes a filename — and the one place a name is made
+    /// path-safe. Everywhere else the name is verbatim: what the instrument or the
+    /// operator called the thing, spaces and all, and that spelling is what a rename
+    /// sends back to the instrument. Sanitising anywhere earlier is how "Big strings"
+    /// once came back as "Big-strings".
     pub fn export_name(&self, id: u64, what: ExportWhat) -> Option<String> {
         let entity = self.get(id)?;
-        Some(match what {
-            ExportWhat::File => entity.name.clone(),
-            ExportWhat::Body => format!("{}.body", entity.name),
-        })
+        Some(export_filename(&entity.name, &entity.bytes, what))
     }
 
     pub fn export(&self, id: u64, what: ExportWhat) {
@@ -696,6 +763,32 @@ mod tests {
         assert_eq!(
             body.as_slice(),
             &entity.bytes[Generation::V1.body_start() as usize..],
+        );
+    }
+
+    /// The name is verbatim everywhere; only the export dialog sees a path-safe form,
+    /// with the extension supplied from the bytes when the name carries none.
+    #[test]
+    fn an_export_sanitises_the_name_and_supplies_the_extension() {
+        let bytes = Fresh::Program.bytes().unwrap();
+        let file = |name: &str| export_filename(name, &bytes, ExportWhat::File);
+        assert_eq!(file("Big strings"), "Big-strings.ne5p");
+        assert_eq!(file("patch.ne5p"), "patch.ne5p", "a carried tag is kept");
+        assert_eq!(file("Bass 2.0"), "Bass-2.0.ne5p", "a dot is not a tag");
+        assert_eq!(file("../../etc/passwd"), "etc-passwd.ne5p");
+        assert_eq!(file("  "), "unnamed.ne5p");
+        assert_eq!(
+            export_filename("Big strings", b"no header", ExportWhat::File),
+            "Big-strings.bin",
+        );
+        assert_eq!(
+            export_filename("Big strings.body", &bytes, ExportWhat::Body),
+            "Big-strings.body",
+            "a body dump is not double-tagged"
+        );
+        assert_eq!(
+            export_filename("Big strings", &bytes, ExportWhat::Body),
+            "Big-strings.body",
         );
     }
 

@@ -766,12 +766,16 @@ fn unix_now() -> u32 {
 /// Files store no name — it lives on the instrument — so a read is the one moment the
 /// name and the bytes are together, and it goes into the entity's label here.
 fn entity_name(info: &ProgramInfo, body: bool) -> String {
-    let stem = sanitise(info.name.trim());
-    // A `--body` dump is a fragment of a file, not one; giving it the format's own
-    // extension would invite it back in as a whole object.
+    let name = info.name.trim();
+    let name = match name.is_empty() {
+        true => "unnamed",
+        false => name,
+    };
+    // A `--body` dump is a fragment of a file, not one; the suffix keeps it from being
+    // handed back in as a whole object.
     match body {
-        true => format!("{stem}.body"),
-        false => format!("{stem}.{}", info.format),
+        true => format!("{name}.body"),
+        false => name.to_string(),
     }
 }
 
@@ -788,15 +792,6 @@ fn rescue_name(at: Location, backup: &[u8]) -> String {
         .map(|tag| String::from_utf8_lossy(tag).into_owned())
         .unwrap_or_else(|| "bin".to_string());
     format!("nord-rescued-{}-{}.{format}", at.bank + 1, at.slot + 1)
-}
-
-/// A device-supplied name, made safe to hand to a file picker later.
-fn sanitise(name: &str) -> String {
-    let cleaned = super::stem(name);
-    match cleaned.is_empty() {
-        true => "unnamed".into(),
-        false => cleaned,
-    }
 }
 
 #[cfg(test)]
@@ -823,8 +818,11 @@ mod tests {
         assert_eq!(rescue_name(at, b"nonsense"), "nord-rescued-1-1.bin");
     }
 
+    /// The device's name is the name, verbatim — spaces and all. Making it path-safe is
+    /// the export dialog's business, and doing it here is how "Big strings" once went
+    /// back to the instrument as "Big-strings".
     #[test]
-    fn a_read_is_named_for_the_slot_name_and_the_devices_format_tag() {
+    fn a_read_keeps_the_slots_name_verbatim() {
         let info = ProgramInfo {
             location: Location { bank: 6, slot: 3 },
             body_len: 121,
@@ -833,8 +831,8 @@ mod tests {
             crc32: Some(0),
             name: "Africa Split".into(),
         };
-        assert_eq!(entity_name(&info, false), "Africa-Split.ne5p");
-        assert_eq!(entity_name(&info, true), "Africa-Split.body");
+        assert_eq!(entity_name(&info, false), "Africa Split");
+        assert_eq!(entity_name(&info, true), "Africa Split.body");
     }
 
     /// The format tag the local list carries is a filename's business, not the panel's;
@@ -874,7 +872,7 @@ mod tests {
         assert_eq!(cut.chars().count(), 32, "whole characters only");
     }
 
-    /// A slot whose name is only punctuation still has to produce a usable label.
+    /// A slot with a blank name still has to produce a usable label.
     #[test]
     fn a_nameless_slot_still_gets_a_label() {
         let info = ProgramInfo {
@@ -885,7 +883,14 @@ mod tests {
             crc32: None,
             name: "  ".into(),
         };
-        assert_eq!(entity_name(&info, false), "unnamed.ne5p");
+        assert_eq!(entity_name(&info, false), "unnamed");
+    }
+
+    /// A verbatim name goes over the wire verbatim: the round trip the operator sees is
+    /// get "Big strings" → edit → send, and the slot must still read "Big strings".
+    #[test]
+    fn a_spaced_name_survives_to_the_rename() {
+        assert_eq!(slot_label("Big strings").as_deref(), Some("Big strings"));
     }
 }
 

@@ -46,6 +46,12 @@ pub fn program(
                         transpose(ui, fields, sets);
                     }
                     for field in &rows {
+                        if section == Section::Piano
+                            && field.path == "piano_panel.piano_model"
+                            && piano.model_cell(ui, field, sets)
+                        {
+                            continue;
+                        }
                         controls::cell(ui, ctx, field, sets);
                     }
                 }),
@@ -102,10 +108,57 @@ pub struct PianoLookup {
     pub can_ask: bool,
     /// Set when the operator asks. The document turns it into one `DEPENDENCIES` read.
     pub asked: bool,
+    /// The Pianos folder's names for the current category, by Model dial position.
+    /// Empty when the scan cannot answer, and the Model dial stays numeric.
+    pub models: Vec<(u32, String)>,
+    /// The scan's name for the current position, where it disagrees with the
+    /// instrument's dependency reply — the signal that the position mapping is wrong.
+    pub scan_disagrees: Option<String>,
 }
 
 impl PianoLookup {
+    /// The Model dial as a list of the instrument's own pianos, where the Pianos folder
+    /// scan can supply them. `false` where it cannot, and the numeric control stands.
+    fn model_cell(&self, ui: &mut egui::Ui, field: &Field, sets: &mut Sets) -> bool {
+        if self.models.is_empty() {
+            return false;
+        }
+        let current: Option<u32> = field.value.trim().parse().ok();
+        let shown = current
+            .and_then(|n| self.models.iter().find(|(position, _)| *position == n))
+            .map(|(position, name)| format!("{position} — {name}"))
+            // A dial position past the scanned list is shown as the number it is,
+            // not silently snapped to a piano it does not name.
+            .unwrap_or_else(|| field.value.clone());
+        controls::named_cell(ui, &field.path, 230.0, |ui| {
+            egui::ComboBox::from_id_salt("piano-model-names")
+                .selected_text(shown)
+                .width(214.0)
+                .show_ui(ui, |ui| {
+                    for (position, name) in &self.models {
+                        let row = format!("{position} — {name}");
+                        if ui
+                            .selectable_label(current == Some(*position), row)
+                            .clicked()
+                        {
+                            sets.push((field.path.clone(), position.to_string()));
+                        }
+                    }
+                });
+        });
+        true
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui) {
+        if let Some(scanned) = &self.scan_disagrees {
+            ui.colored_label(
+                crate::app::warn(ui.visuals()),
+                format!(
+                    "the model list calls this position {scanned:?}, but the instrument's \
+                     dependency reply names the piano below — trust the instrument",
+                ),
+            );
+        }
         let Some(id) = self.id else {
             return;
         };

@@ -510,36 +510,6 @@ pub fn put_refusal(class: ObjectClass) -> Option<String> {
     }
 }
 
-/// Turn a device-supplied name into something a file picker can take later.
-///
-/// In the local list the name is the only record of what the bytes are, so it stays
-/// readable: whitespace runs become one `-`, and only what a path cannot carry is
-/// dropped.
-pub fn stem(label: &str) -> String {
-    // A separator is owed rather than written, so a run of them collapses to one `-`
-    // and nothing trailing survives.
-    let mut owed = false;
-    let mut out = String::with_capacity(label.len());
-    for c in label.chars() {
-        match c {
-            '-' => owed = !out.is_empty(),
-            _ if c.is_whitespace() => owed = !out.is_empty(),
-            // Path separators, plus the characters a Windows filename cannot hold.
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => owed = !out.is_empty(),
-            _ if c.is_control() => {}
-            _ => {
-                if std::mem::take(&mut owed) {
-                    out.push('-');
-                }
-                out.push(c);
-            }
-        }
-    }
-    // A leading dot hides the file and dots alone spell `.` and `..`; a leading dash is
-    // an option to every tool that later reads it.
-    out.trim_matches(['.', '-']).to_string()
-}
-
 pub struct Device {
     pub state: DeviceState,
     events: Receiver<DeviceEvent>,
@@ -886,33 +856,6 @@ impl Device {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The label is the only description the local list will ever have of a slot's
-    /// contents, so it survives into the name rather than being reduced to something
-    /// opaque.
-    #[test]
-    fn a_name_keeps_the_words_it_was_given() {
-        assert_eq!(stem("split point C4"), "split-point-C4");
-        assert_eq!(stem("  transpose +1  "), "transpose-+1");
-        assert_eq!(stem("organ vol 5 -> 6"), "organ-vol-5-6");
-    }
-
-    /// The name reaches a file picker later, so nothing in it may be a path.
-    #[test]
-    fn a_name_cannot_become_a_path() {
-        assert_eq!(stem("../../etc/passwd"), "etc-passwd");
-        assert_eq!(stem("rotary:fast"), "rotary-fast");
-        assert_eq!(stem(".hidden"), "hidden");
-    }
-
-    /// Nothing usable left is reported as nothing, for the caller to refuse or
-    /// substitute — never silently turned into a default.
-    #[test]
-    fn a_name_with_nothing_in_it_comes_back_empty() {
-        for bad in ["...", "/", "  ", "?*", "-"] {
-            assert!(stem(bad).is_empty(), "{bad:?}");
-        }
-    }
 
     /// The two classes whose write path is unproven must refuse by name, and the rest
     /// must not.

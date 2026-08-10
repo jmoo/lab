@@ -409,14 +409,74 @@ fn piano_lookup(
         // Zero is "this program references no piano", not an id to go looking for.
         .filter(|id| *id != 0);
     let slot = entity.origin.slot();
+    let name = id
+        .and_then(|id| device.state.dependency_name(slot, ObjectClass::Piano, id))
+        .map(str::to_string);
+    let models = registry
+        .map(|fields| piano_models(fields, device))
+        .unwrap_or_default();
+    // The dependency reply is the identity; the scan is a position. Where both answer
+    // and disagree, the position mapping is what is wrong, and saying so beats silently
+    // showing two different names in one section.
+    let scan_disagrees = match (&name, registry) {
+        (Some(named), Some(fields)) => current_model(fields)
+            .and_then(|n| models.iter().find(|(i, _)| *i == n))
+            .map(|(_, scanned)| scanned)
+            .filter(|scanned| scanned.trim() != named.trim())
+            .cloned(),
+        _ => None,
+    };
     panel::PianoLookup {
         id,
-        name: id
-            .and_then(|id| device.state.dependency_name(slot, ObjectClass::Piano, id))
-            .map(str::to_string),
+        name,
         can_ask: slot.is_some() && device.state.connected(),
         asked: false,
+        models,
+        scan_disagrees,
     }
+}
+
+/// The Pianos folder's names for the document's current category, by Model dial
+/// position — what turns the Model dial into a list of pianos.
+///
+/// Bank ↔ category and slot order ↔ dial position: inferred from the panel addressing
+/// the library by position, and from the categories being the folder's own divisions;
+/// not confirmed on hardware. The dependency name is the standing check — see the
+/// mismatch note where this is used.
+fn piano_models(fields: &[Field], device: &Device) -> Vec<(u32, String)> {
+    let Some(category) = fields
+        .iter()
+        .find(|field| field.path == "piano_panel.category")
+    else {
+        return Vec::new();
+    };
+    // The category's stored bits, recovered from its position in the legal list —
+    // `legal_values` walks the bit patterns in stored order.
+    let Some(raw) = (category.spec.legal)()
+        .iter()
+        .position(|value| *value == category.value)
+    else {
+        return Vec::new();
+    };
+    let Some(slots) = device.state.bank(ObjectClass::Piano, raw as u32 + 1) else {
+        return Vec::new();
+    };
+    slots
+        .iter()
+        .enumerate()
+        .filter_map(|(position, info)| {
+            info.as_ref()
+                .map(|piano| (position as u32, piano.name.trim().to_string()))
+        })
+        .collect()
+}
+
+/// The Model dial's current position, as the registry spells it.
+fn current_model(fields: &[Field]) -> Option<u32> {
+    fields
+        .iter()
+        .find(|field| field.path == "piano_panel.piano_model")
+        .and_then(|field| field.value.trim().parse().ok())
 }
 
 /// A library id as the registry spells it — decimal from the field list, hex where a
@@ -707,6 +767,47 @@ mod tests {
         assert!(copied.name.is_none(), "still nothing has been asked");
         // A fresh program references no piano at all, and zero is not an id to hunt for.
         assert_eq!(copied.id, None);
+    }
+
+    /// The Model dial lists the scanned pianos of the document's category — and only
+    /// when the scan can answer. Bank ↔ category is the inferred mapping under test;
+    /// the fallback is the numeric dial, never a guessed name.
+    #[test]
+    fn the_model_dial_lists_the_scanned_pianos_of_the_current_category() {
+        use nord_usb::ObjectClass;
+
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut device = Device::new(ctx);
+        let mut log = Log::default();
+
+        let id = workspace.create(Fresh::Program, &mut log).unwrap();
+        let bytes = workspace.get(id).unwrap().bytes.clone();
+        let fields = fields::apply(&bytes, &[]).unwrap().0;
+
+        // Nothing scanned: the dial stays numeric.
+        let unscanned = piano_lookup(workspace.get(id).unwrap(), Some(&fields), &device);
+        assert!(unscanned.models.is_empty());
+
+        // A fresh program's category sits at stored position 0, so its bank is 1.
+        device.pretend_scanned(ObjectClass::Piano, 1, &["Royal Grand", "", "White Grand"]);
+        let scanned = piano_lookup(workspace.get(id).unwrap(), Some(&fields), &device);
+        assert_eq!(
+            scanned.models,
+            vec![
+                (0, "Royal Grand".to_string()),
+                (2, "White Grand".to_string())
+            ],
+            "vacant slots are positions with no piano, not renumberings"
+        );
+        // No dependency name is in hand, so there is nothing to disagree with.
+        assert!(scanned.scan_disagrees.is_none());
+
+        // A different bank answers a different category, not this one.
+        let mut other = Device::new(egui::Context::default());
+        other.pretend_scanned(ObjectClass::Piano, 3, &["Clav D6"]);
+        let elsewhere = piano_lookup(workspace.get(id).unwrap(), Some(&fields), &other);
+        assert!(elsewhere.models.is_empty());
     }
 
     /// ⚠️ A cell being typed into belongs to the document it was opened in. One table

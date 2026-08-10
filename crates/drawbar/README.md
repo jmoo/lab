@@ -133,7 +133,10 @@ the bytes the tab opened with — the only undo there is — and **Export…** w
 
 A name is this app's own: a Nord file stores none. It is set when the bytes arrive —
 from the slot the instrument read it out of, from the filename, or from the New menu —
-and nothing after that re-derives it.
+and nothing after that re-derives it. It is kept **verbatim**: "Big strings" is
+"Big strings" in the list, in the tab, and on the slot a send renames. Only the
+filename an **Export…** suggests is made path-safe, because that is the one place a
+name meets a filesystem.
 
 Looking at a document and changing it are the same thing. There is no Apply: a control
 you move is set on the working copy that instant, the bytes are re-encoded and
@@ -165,8 +168,12 @@ that bring it back are in Keyboard & split, which leads because it never goes.
   carries the name — so with an instrument attached the document reads the program's
   dependencies as it opens and the name appears on its own; *Ask again* re-reads it, and
   *Ask the instrument* is there for a read that found nothing. Without an instrument the
-  id is shown and says as much. The Model dial keeps its number: nothing this app can
-  read maps a dial position to a name.
+  id is shown and says as much.
+- **The Model dial is a list of pianos** once the instrument's Pianos folder has been
+  read: the scanned names of the document's category, each at its dial position. The
+  bank ↔ category reading is inferred rather than hardware-confirmed, so where the
+  dependency reply and the list disagree, the document says so and trusts the
+  instrument. Unscanned or unattached, the dial stays a number.
 - A picker offers only values the library can name. A file holding one it cannot reads
   as *unrecognized value (6)* and keeps it in the list, so changing away from it can be
   undone.
