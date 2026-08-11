@@ -1,4 +1,4 @@
-//! The Stage 4 organ preset body (`.ns4o`): 139 bytes, 165 parameters.
+//! The Stage 4 organ preset body (`.ns4o`): 139 bytes.
 //!
 //! One organ section as a program stores it, moved down 45 bytes, without the
 //! keyboard zone — that belongs to the program that loads the preset. The two

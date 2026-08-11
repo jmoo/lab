@@ -1,4 +1,4 @@
-//! The Stage 4 program body (`.ns4p`, `.ns4l`): 824 bytes, 878 parameters.
+//! The Stage 4 program body (`.ns4p`, `.ns4l`): 824 bytes, every parameter placed.
 //!
 //! All three sections and the globals that route them. Placements, naming and
 //! provenance are the [module docs](super); values are raw.

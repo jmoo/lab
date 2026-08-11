@@ -1,4 +1,4 @@
-//! The Stage 4 synth preset body (`.ns4y`): 497 bytes, 504 parameters.
+//! The Stage 4 synth preset body (`.ns4y`): 497 bytes.
 //!
 //! One synth section as a program stores it, moved down 327 bytes, without the
 //! two placements a preset has no use for — the keyboard zone, which belongs to

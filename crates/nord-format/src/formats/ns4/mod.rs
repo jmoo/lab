@@ -8,8 +8,8 @@
 //!
 //! # What decodes
 //!
-//! Every parameter placement in the program body and the three preset bodies:
-//! 878 of them in a program, covering 76% of its bits. Values are **raw** — the
+//! Every parameter placement in the program body and the three preset bodies.
+//! Values are **raw** — the
 //! integer the file stores, range-checked to its slot and no further. Nothing
 //! here interprets one: a filter type is a number, not a name, and a two-way
 //! selector is the stored bit under a name that says which two (see
@@ -40,8 +40,8 @@
 //! That mapping is confirmed against the corpus rather than assumed: the tables
 //! place five parameters inside the header (the tag, version, bank, slot and
 //! checksum) and one — `version_echo` — in the first bytes of the body, and all
-//! six agree with the container's own parse on every one of the 937 Stage 4
-//! specimens. The value tables ns4decode also publishes are not used here.
+//! six agree with the container's own parse on every Stage 4 specimen. The value
+//! tables ns4decode also publishes are not used here.
 
 use super::raw::raw_format;
 

@@ -1,4 +1,4 @@
-//! The Stage 4 piano preset body (`.ns4n`): 151 bytes, 165 parameters.
+//! The Stage 4 piano preset body (`.ns4n`): 151 bytes.
 //!
 //! One piano section as a program stores it, moved down 180 bytes, without the
 //! keyboard zone — that belongs to the program that loads the preset.
