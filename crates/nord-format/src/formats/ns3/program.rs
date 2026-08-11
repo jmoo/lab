@@ -672,8 +672,8 @@ pub struct Program {
     pub program_output_sub_source: RangedU8<3>,
     #[bits(2245..=2246)]
     pub program_output_sub_destination: RangedU8<3>,
-    // ── The second panel. The byte maps document one; the body holds two,
-    //    the second repeating the first 263 bytes later.
+    // ── Panel B: the program's second independent setup, same layout 263 bytes
+    //    on. The byte maps document only Panel A.
     #[bits(2288..=2288)]
     pub panel_b_piano_on: bool,
     #[bits(2289..=2292)]

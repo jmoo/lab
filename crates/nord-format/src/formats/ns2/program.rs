@@ -911,8 +911,8 @@ pub struct Program {
     pub eq_bass: RangedU8<127>,
     #[bits(2140..=2146)]
     pub eq_mid_flt_freq: RangedU8<127>,
-    // ── The second slot. The byte maps document one; the body holds two,
-    //    the second repeating the first 249 bytes later.
+    // ── Slot B: the program's second independent setup, same layout 249 bytes
+    //    on. The byte maps document only Slot A.
     #[bits(2176..=2176)]
     pub slot_b_organ_on: bool,
     #[bits(2177..=2184)]
