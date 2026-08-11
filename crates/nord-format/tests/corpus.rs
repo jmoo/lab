@@ -462,6 +462,102 @@ fn stage4_bodies_decode_to_panel_values() {
     assert!(split_on > 0, "no Stage 4 program reads a split");
 }
 
+/// Every Stage 2/3 selector the byte maps enumerate decodes to a value that table
+/// names, across every factory program of both models.
+///
+/// The same check the Stage 4 gets, and it earns more here: these placements come
+/// from a source with known errors in it, and a run read one bit off lands on values
+/// the panel has no name for. `sparse_enum` keeps an unknown rather than coercing it,
+/// so this is the tripwire.
+#[test]
+fn stage_selectors_decode_to_named_values() {
+    use nord_format::{Live, Program};
+
+    let root = corpus_root();
+    let mut unknown: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let (mut ns2, mut ns3) = (0usize, 0usize);
+
+    for path in specimens(&root) {
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        if !matches!(ext, "ns2p" | "ns2l" | "ns3f" | "ns3l") {
+            continue;
+        }
+        let entity = nord_format::from_path(&path).unwrap();
+        let mut check = |field: &'static str, is_unknown: bool| {
+            if is_unknown {
+                *unknown.entry(field).or_default() += 1;
+            }
+        };
+        match &entity {
+            Entity::Program(Program::Stage3(p)) | Entity::Live(Live::Stage3(p)) => {
+                ns3 += 1;
+                check("panel_enable", p.panel_enable.is_unknown());
+                check("piano_layer_detune", p.piano_layer_detune.is_unknown());
+                check("organ_vibrato_mode", p.organ_vibrato_mode.is_unknown());
+                check("piano_type", p.piano_type.is_unknown());
+                check("clavinet_model", p.clavinet_model.is_unknown());
+                check("piano_kb_touch", p.piano_kb_touch.is_unknown());
+                check("piano_timbre", p.piano_timbre.is_unknown());
+                check("synth_arp_range", p.synth_arp_range.is_unknown());
+                check("synth_arp_pattern", p.synth_arp_pattern.is_unknown());
+                check("synth_voice", p.synth_voice.is_unknown());
+                check("synth_unison", p.synth_unison.is_unknown());
+                check("synth_vibrato", p.synth_vibrato.is_unknown());
+                check("synth_lfo_wave", p.synth_lfo_wave.is_unknown());
+                check(
+                    "synth_oscillator_type",
+                    p.synth_oscillator_type.is_unknown(),
+                );
+                check(
+                    "synth_oscillator_config",
+                    p.synth_oscillator_config.is_unknown(),
+                );
+                check("synth_filter_type", p.synth_filter_type.is_unknown());
+                check(
+                    "synth_filter_kb_track",
+                    p.synth_filter_kb_track.is_unknown(),
+                );
+                check("synth_filter_drive", p.synth_filter_drive.is_unknown());
+                check(
+                    "synth_amp_env_velocity",
+                    p.synth_amp_env_velocity.is_unknown(),
+                );
+                check("organ_kb_zone", p.organ_kb_zone.is_unknown());
+                check("organ_type", p.organ_type.is_unknown());
+                check("effect_1_type", p.effect_1_type.is_unknown());
+                check("effect_2_type", p.effect_2_type.is_unknown());
+                check("amp_sim_eq_amp_type", p.amp_sim_eq_amp_type.is_unknown());
+                check("reverb_type", p.reverb_type.is_unknown());
+            }
+            Entity::Program(Program::Stage2(p)) | Entity::Live(Live::Stage2(p)) => {
+                ns2 += 1;
+                // The Stage 2 EX factory live buffers are all-ones — a slot the
+                // instrument never wrote — so every field is legitimately unknown there.
+                let raw = <[u8; 521]>::from(&p.body);
+                if raw.iter().all(|&b| b == 0xff) {
+                    continue;
+                }
+                check("ns2 reverb_type", p.reverb_type.is_unknown());
+                check("ns2 effect_1_type", p.effect_1_type.is_unknown());
+                check("ns2 effect_2_type", p.effect_2_type.is_unknown());
+                check("ns2 organ_kb_zone", p.organ_kb_zone.is_unknown());
+                check("ns2 piano_split_zones", p.piano_split_zones.is_unknown());
+                check("ns2 synth_kb_zone", p.synth_kb_zone.is_unknown());
+            }
+            _ => {}
+        }
+    }
+
+    assert!(ns3 > 290, "only {ns3} Stage 3 programs read");
+    assert!(ns2 > 700, "only {ns2} Stage 2 programs read");
+    assert!(
+        unknown.is_empty(),
+        "selectors decoded to values their table does not name: {unknown:?}"
+    );
+}
+
 /// The drum banks: every member of every bank parses and the counts match the
 /// devices' bank sizes.
 #[cfg(feature = "bundle")]
