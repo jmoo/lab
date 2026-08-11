@@ -1,7 +1,7 @@
 //! Nord Stage 2 and 2 EX (`.ns2p`, `.ns2l`, `.ns2s`, `.ns2y`).
 //!
-//! The program body has a partial decode — the program-wide globals — and the
-//! remaining formats are container-verified stubs. ⚠️ `s` is a synth patch here
+//! The program body decodes in full — every parameter the byte maps document —
+//! and the remaining formats are container-verified stubs. ⚠️ `s` is a synth patch here
 //! (a song on the Stage 3) and `y` is the settings (a synth patch on the 3/4).
 
 use super::raw::raw_format;

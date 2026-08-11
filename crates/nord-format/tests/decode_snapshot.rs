@@ -295,17 +295,12 @@ fn all_programs(root: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// The Stage 4 corpus, which sits beside the Electro 5's under the same root.
-fn stage4_dir() -> PathBuf {
-    corpus_dir()
+/// Every Stage 4 specimen of `ext`, sorted.
+fn stage_files(model: &str, ext: &str) -> Vec<PathBuf> {
+    let root = corpus_dir()
         .parent()
         .expect("NORD_CORPUS_DIR has no parent")
-        .join("ns4")
-}
-
-/// Every Stage 4 specimen of `ext`, sorted.
-fn stage4_files(ext: &str) -> Vec<PathBuf> {
-    let root = stage4_dir();
+        .join(model);
     let mut found = Vec::new();
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
@@ -426,14 +421,14 @@ fn stage4_fields() {
          # the decoded value restates the raw one and only the placement can be wrong.\n",
     );
 
-    for (ext, label) in [
-        ("ns4p", "ns4p program"),
-        ("ns4l", "ns4l live"),
-        ("ns4y", "ns4y synth preset"),
-        ("ns4n", "ns4n piano preset"),
-        ("ns4o", "ns4o organ preset"),
+    for (model, ext, label) in [
+        ("ns4", "ns4p", "ns4p program"),
+        ("ns4", "ns4l", "ns4l live"),
+        ("ns4", "ns4y", "ns4y synth preset"),
+        ("ns4", "ns4n", "ns4n piano preset"),
+        ("ns4", "ns4o", "ns4o organ preset"),
     ] {
-        let files = stage4_files(ext);
+        let files = stage_files(model, ext);
         let mut order = Vec::new();
         let mut placements: BTreeMap<String, String> = BTreeMap::new();
         let mut raws: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -488,6 +483,76 @@ fn stage4_fields() {
     }
 
     compare("decode_stage4_fields.snapshot", &out);
+}
+
+/// The Stage 2 and Stage 3 programs, same idea and the same reason: these placements
+/// were transcribed from a source with known errors in it, so the raw column is what
+/// says a run still sits where it was read.
+#[test]
+fn stage23_fields() {
+    let mut out = String::new();
+    out.push_str(
+        "# Per-field decode over every Stage 2 / Stage 3 program in the corpus. One\n\
+         # line per field: where it sits, and every raw value the corpus has been seen\n\
+         # to put there. UNVARYING marks a field the corpus cannot check.\n",
+    );
+
+    for (model, ext, label) in [
+        ("ns3", "ns3f", "ns3f program"),
+        ("ns3", "ns3l", "ns3l live"),
+        ("ns2", "ns2p", "ns2p program"),
+        ("ns2", "ns2l", "ns2l live"),
+    ] {
+        let files = stage_files(model, ext);
+        let mut order = Vec::new();
+        let mut placements: BTreeMap<String, String> = BTreeMap::new();
+        let mut raws: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+        for path in &files {
+            let entity = nord_format::from_path(path).unwrap();
+            let rows = match &entity {
+                Entity::Program(nord_format::Program::Stage3(p)) => packed("", p.field_values()),
+                Entity::Live(nord_format::Live::Stage3(p)) => packed("", p.field_values()),
+                Entity::Program(nord_format::Program::Stage2(p)) => packed("", p.field_values()),
+                Entity::Live(nord_format::Live::Stage2(p)) => packed("", p.field_values()),
+                other => panic!("{}: decoded to {other:?}", path.display()),
+            };
+            for row in rows {
+                match placements.get(&row.key) {
+                    None => {
+                        order.push(row.key.clone());
+                        placements.insert(row.key.clone(), row.placement.clone());
+                    }
+                    Some(known) => assert_eq!(known, &row.placement, "{}", row.key),
+                }
+                let raw = row.raw_str();
+                raws.entry(row.key).or_default().insert(raw);
+            }
+        }
+
+        let flat = order.iter().filter(|k| raws[*k].len() == 1).count();
+        let _ = write!(
+            out,
+            "\n\n### {label} — {} fields, {flat} unvarying\n\n",
+            order.len()
+        );
+        for key in &order {
+            let single = if raws[key].len() == 1 {
+                "UNVARYING"
+            } else {
+                ""
+            };
+            let _ = writeln!(
+                out,
+                "{key:<48} {:<13} {single:<9} {}",
+                placements[key],
+                summarize(&raws[key]),
+            );
+        }
+        println!("{label}: {} specimens, {} fields", files.len(), order.len());
+    }
+
+    compare("decode_stage23_fields.snapshot", &out);
 }
 
 #[test]
