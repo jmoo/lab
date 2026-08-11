@@ -1,7 +1,10 @@
 //! Nord Stage 2 and 2 EX (`.ns2p`, `.ns2l`, `.ns2s`, `.ns2y`).
 //!
-//! The program body decodes in full — every parameter the byte maps document —
-//! and the remaining formats are container-verified stubs. ⚠️ `s` is a synth patch here
+//! The program body decodes in full, **both slots**: the byte maps document one,
+//! and the body holds two — 23 bytes of globals then two 249-byte slot blocks,
+//! the second repeating the first. Slot A's fields are unprefixed and slot B's
+//! carry `slot_b_`. The remaining formats are container-verified stubs; the synth
+//! file (`ns2s`) is slot A's synth block, located but not yet declared. ⚠️ `s` is a synth patch here
 //! (a song on the Stage 3) and `y` is the settings (a synth patch on the 3/4).
 
 use super::raw::raw_format;

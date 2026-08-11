@@ -170,7 +170,7 @@ pub enum Settings {
 #[derive(Debug)]
 pub enum Synth {
     Stage2(Cbin<RawBody>),
-    Stage3(Cbin<RawBody>),
+    Stage3(Cbin<ns3::SynthPreset>),
     Stage4(Cbin<ns4::synth::SynthPreset>),
     StageClassic(Cbin<RawBody>),
 }
@@ -573,7 +573,7 @@ impl Entity {
                 | St::Wave2(f),
             )
             | Entity::Song(Song::Stage3(f))
-            | Entity::Synth(Sy::Stage2(f) | Sy::Stage3(f) | Sy::StageClassic(f))
+            | Entity::Synth(Sy::Stage2(f) | Sy::StageClassic(f))
             | Entity::Performance(Performance::Lead4(f) | Performance::LeadA1(f))
             | Entity::OrganPreset(OP::Electro3(f))
             | Entity::PianoLibrary(f)
@@ -774,9 +774,10 @@ impl Entity {
             },
             Entity::Song(Song::Electro5(f)) => f.write_to(w),
             Entity::Song(Song::Stage3(f)) => f.write_to(w),
-            Entity::Synth(Synth::Stage2(f))
-            | Entity::Synth(Synth::Stage3(f))
-            | Entity::Synth(Synth::StageClassic(f)) => f.write_to(w),
+            Entity::Synth(Synth::Stage2(f)) | Entity::Synth(Synth::StageClassic(f)) => {
+                f.write_to(w)
+            }
+            Entity::Synth(Synth::Stage3(f)) => f.write_to(w),
             Entity::Synth(Synth::Stage4(f)) => f.write_to(w),
             Entity::Sysex(f) => f.write_to(w),
             #[cfg(feature = "bundle")]

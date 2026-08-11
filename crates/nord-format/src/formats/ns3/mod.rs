@@ -1,7 +1,10 @@
 //! Nord Stage 3 (`.ns3f`, `.ns3l`, `.ns3s`, `.ns3y`, `.ns3t`).
 //!
-//! The program body decodes in full — every parameter the byte maps document —
-//! and the remaining formats are container-verified stubs. ⚠️ The extension letters are
+//! The program body decodes in full, **both panels**: the byte maps document one,
+//! and the body holds two — 22 bytes of globals then two 263-byte panel blocks,
+//! the second repeating the first. Panel A's fields are unprefixed and panel B's
+//! carry `panel_b_`. The synth preset (`ns3y`) is panel A's synth block under its
+//! own tag. The song and settings are container-verified stubs. ⚠️ The extension letters are
 //! traps here: `f` is the program, `s` is a *song* (a set list on the Electro 5),
 //! `y` is a synth patch (the *settings* on the Stage 2), and `t` is the settings.
 //!
@@ -19,6 +22,9 @@ use super::raw::raw_format;
 
 pub mod program;
 pub use program::Program;
+
+pub mod synth;
+pub use synth::SynthPreset;
 
 pub mod live {
     //! The live buffer (`.ns3l`): the panel as it stands, not a saved program.
@@ -43,20 +49,6 @@ raw_format!(
     song,
     "ns3s",
     45
-);
-raw_format!(
-    /// Synth patches (`.ns3y`).
-    ///
-    /// ⚠️ The community docs call this "a subset of the Program file (0x0080 to
-    /// 0x00AC)", which does not reproduce: no `ns3y` body appears verbatim anywhere
-    /// in any of the 300 corpus programs. Distinctive windows from a third of them
-    /// *do* land at program body `0x4f`, five bytes before the documented start, so
-    /// the two share a layout without being a straight relocation — the preset
-    /// carries something the program's copy does not. Decoding it needs that
-    /// difference identified, not another offset guess.
-    synth,
-    "ns3y",
-    58
 );
 raw_format!(
     /// Settings (`.ns3t`).

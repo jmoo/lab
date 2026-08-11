@@ -64,7 +64,7 @@ fn formats() -> Vec<(&'static str, u64, u32)> {
         (ns3::program::FORMAT, ns3::program::BODY_LEN as u64, 304),
         (ns3::live::FORMAT, ns3::program::BODY_LEN as u64, 304),
         (ns3::song::FORMAT, ns3::song::BODY_LEN, 300),
-        (ns3::synth::FORMAT, ns3::synth::BODY_LEN, 300),
+        (ns3::synth::FORMAT, ns3::synth::BODY_LEN as u64, 300),
         (ns3::settings::FORMAT, ns3::settings::BODY_LEN, 300),
         (ns4::program::FORMAT, ns4::program::BODY_LEN as u64, 313),
         (ns4::live::FORMAT, ns4::program::BODY_LEN as u64, 313),

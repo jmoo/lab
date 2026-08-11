@@ -261,7 +261,7 @@ fn observed_body_lengths_match_the_documented_constants() {
         (ns3::program::FORMAT, ns3::program::BODY_LEN as u64),
         (ns3::live::FORMAT, ns3::program::BODY_LEN as u64),
         (ns3::song::FORMAT, ns3::song::BODY_LEN),
-        (ns3::synth::FORMAT, ns3::synth::BODY_LEN),
+        (ns3::synth::FORMAT, ns3::synth::BODY_LEN as u64),
         (ns3::settings::FORMAT, ns3::settings::BODY_LEN),
         (ns4::program::FORMAT, ns4::program::BODY_LEN as u64),
         (ns4::live::FORMAT, ns4::program::BODY_LEN as u64),
@@ -530,6 +530,76 @@ fn stage_selectors_decode_to_named_values() {
                 check("effect_2_type", p.effect_2_type.is_unknown());
                 check("amp_sim_eq_amp_type", p.amp_sim_eq_amp_type.is_unknown());
                 check("reverb_type", p.reverb_type.is_unknown());
+                check("panel_b_piano_type", p.panel_b_piano_type.is_unknown());
+                check(
+                    "panel_b_clavinet_model",
+                    p.panel_b_clavinet_model.is_unknown(),
+                );
+                check(
+                    "panel_b_piano_kb_touch",
+                    p.panel_b_piano_kb_touch.is_unknown(),
+                );
+                check("panel_b_piano_timbre", p.panel_b_piano_timbre.is_unknown());
+                check(
+                    "panel_b_synth_arp_range",
+                    p.panel_b_synth_arp_range.is_unknown(),
+                );
+                check(
+                    "panel_b_synth_arp_pattern",
+                    p.panel_b_synth_arp_pattern.is_unknown(),
+                );
+                check("panel_b_synth_voice", p.panel_b_synth_voice.is_unknown());
+                check("panel_b_synth_unison", p.panel_b_synth_unison.is_unknown());
+                check(
+                    "panel_b_synth_vibrato",
+                    p.panel_b_synth_vibrato.is_unknown(),
+                );
+                check(
+                    "panel_b_synth_lfo_wave",
+                    p.panel_b_synth_lfo_wave.is_unknown(),
+                );
+                check(
+                    "panel_b_synth_oscillator_type",
+                    p.panel_b_synth_oscillator_type.is_unknown(),
+                );
+                check(
+                    "panel_b_synth_oscillator_config",
+                    p.panel_b_synth_oscillator_config.is_unknown(),
+                );
+                check(
+                    "panel_b_synth_filter_type",
+                    p.panel_b_synth_filter_type.is_unknown(),
+                );
+                check(
+                    "panel_b_synth_filter_kb_track",
+                    p.panel_b_synth_filter_kb_track.is_unknown(),
+                );
+                check(
+                    "panel_b_synth_filter_drive",
+                    p.panel_b_synth_filter_drive.is_unknown(),
+                );
+                check(
+                    "panel_b_synth_amp_env_velocity",
+                    p.panel_b_synth_amp_env_velocity.is_unknown(),
+                );
+                check(
+                    "panel_b_organ_kb_zone",
+                    p.panel_b_organ_kb_zone.is_unknown(),
+                );
+                check("panel_b_organ_type", p.panel_b_organ_type.is_unknown());
+                check(
+                    "panel_b_effect_1_type",
+                    p.panel_b_effect_1_type.is_unknown(),
+                );
+                check(
+                    "panel_b_effect_2_type",
+                    p.panel_b_effect_2_type.is_unknown(),
+                );
+                check(
+                    "panel_b_amp_sim_eq_amp_type",
+                    p.panel_b_amp_sim_eq_amp_type.is_unknown(),
+                );
+                check("panel_b_reverb_type", p.panel_b_reverb_type.is_unknown());
             }
             Entity::Program(Program::Stage2(p)) | Entity::Live(Live::Stage2(p)) => {
                 ns2 += 1;
@@ -545,6 +615,14 @@ fn stage_selectors_decode_to_named_values() {
                 check("ns2 organ_kb_zone", p.organ_kb_zone.is_unknown());
                 check("ns2 piano_split_zones", p.piano_split_zones.is_unknown());
                 check("ns2 synth_kb_zone", p.synth_kb_zone.is_unknown());
+                check("slot_b_organ_kb_zone", p.slot_b_organ_kb_zone.is_unknown());
+                check(
+                    "slot_b_piano_split_zones",
+                    p.slot_b_piano_split_zones.is_unknown(),
+                );
+                check("slot_b_synth_kb_zone", p.slot_b_synth_kb_zone.is_unknown());
+                check("slot_b_effect_1_type", p.slot_b_effect_1_type.is_unknown());
+                check("slot_b_effect_2_type", p.slot_b_effect_2_type.is_unknown());
             }
             _ => {}
         }

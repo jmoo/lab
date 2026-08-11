@@ -502,6 +502,7 @@ fn stage23_fields() {
         ("ns3", "ns3l", "ns3l live"),
         ("ns2", "ns2p", "ns2p program"),
         ("ns2", "ns2l", "ns2l live"),
+        ("ns3", "ns3y", "ns3y synth preset"),
     ] {
         let files = stage_files(model, ext);
         let mut order = Vec::new();
@@ -515,6 +516,7 @@ fn stage23_fields() {
                 Entity::Live(nord_format::Live::Stage3(p)) => packed("", p.field_values()),
                 Entity::Program(nord_format::Program::Stage2(p)) => packed("", p.field_values()),
                 Entity::Live(nord_format::Live::Stage2(p)) => packed("", p.field_values()),
+                Entity::Synth(nord_format::Synth::Stage3(y)) => packed("", y.field_values()),
                 other => panic!("{}: decoded to {other:?}", path.display()),
             };
             for row in rows {
