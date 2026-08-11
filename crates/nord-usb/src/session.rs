@@ -87,24 +87,19 @@ impl<'t, T: Transport> Session<'t, T, ReadOnly> {
         // can be released first ([`Self::release`] marks it closed and says the
         // best-effort GOODBYE) — the Drop assertion is there to catch *forgotten*
         // commits, not failed connections.
-        let hello = Message::new(Service::Ui, ui::SUBSYSTEM, ui::HELLO, Vec::new());
-        if let Err(e) = s.notify(&hello).await {
-            s.closed = true; // the write itself failed: the device never saw the HELLO
-            return Err(e);
-        }
-        if let Err(e) = s.response_to(ui::HELLO).await {
-            // The write landed, so the device may already be holding the UI session
-            // even though its reply was unusable.
-            s.release().await;
-            return Err(e);
-        }
+        s.handshake().await?;
 
         let opened = s.open_class(class).await;
 
         // A session left open by an earlier run makes the device refuse this one with
         // `0x12`, and every operation is wrapped in a session — so without this the
         // instrument looks broken and the fix (a bare SESSION_CLOSE) is unreachable
-        // through any normal command. Clearing it is one frame, so try once.
+        // through any normal command.
+        //
+        // ⚠️ This covers an abandoned *class* session only. An abandoned **UI** session
+        // is a different fault with a different cure: the device keeps answering and
+        // reports every slot as empty, with no error to react to. Nothing here can detect
+        // that, and the honest fix is operator-driven — see [`recover`].
         let opened = match opened {
             Err(Error::DeviceStatus(STALE_SESSION)) => {
                 s.discard_stale_session().await?;
@@ -121,6 +116,26 @@ impl<'t, T: Transport> Session<'t, T, ReadOnly> {
                 Err(e)
             }
         }
+    }
+
+    /// The UI half of opening: `HELLO` and its reply.
+    ///
+    /// Split out because the stale-session recovery has to run it a second time — the
+    /// device is only truly well again after a session has been closed properly, so the
+    /// recovery ends one and begins another.
+    async fn handshake(&mut self) -> Result<()> {
+        let hello = Message::new(Service::Ui, ui::SUBSYSTEM, ui::HELLO, Vec::new());
+        if let Err(e) = self.notify(&hello).await {
+            self.closed = true; // the write itself failed: the device never saw the HELLO
+            return Err(e);
+        }
+        if let Err(e) = self.response_to(ui::HELLO).await {
+            // The write landed, so the device may already be holding the UI session
+            // even though its reply was unusable.
+            self.release().await;
+            return Err(e);
+        }
+        Ok(())
     }
 
     async fn open_class(&mut self, class: ObjectClass) -> Result<()> {

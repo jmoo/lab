@@ -585,6 +585,7 @@ fn a_stale_session_that_will_not_clear_is_reported() {
         refused(0x05),
         step(Out, "000000120000000c0000000a000000066500"),
         refused(0x07),
+        // Refused again: the retry happens once, not in a loop.
         step(Out, "000000160000000c0000000a0000000400000004a218"),
         refused(0x05),
         // The failed open still releases the UI session.

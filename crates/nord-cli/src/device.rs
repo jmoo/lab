@@ -484,6 +484,20 @@ pub fn send(
 ) -> Result<(), String> {
     let mut t = open_usb()?;
 
+    // Bounds first, from the device's own geometry. Without this an impossible address
+    // is only discovered once the transfer is under way, and the report is a status code
+    // rather than a reason.
+    let bad = nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, class).await?;
+        let r = usb_op::check_address(&mut s, at).await;
+        let closed = s.commit().await;
+        finish(r, closed)
+    })
+    .map_err(|e| e.to_string())?;
+    if let Some(reason) = bad {
+        return Err(format!("{}: {reason}", shown(at)));
+    }
+
     // Name what is about to be destroyed before destroying it. An empty destination is
     // not a failure: status 1 means the slot is vacant, so there is nothing to report.
     let existing = nord_usb::block_on(async {
@@ -858,6 +872,10 @@ pub fn deps(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
     // index to a library object the program does not actually use — so an unfiltered
     // list names pianos a program's own body records as `none`.
     let (live, idle): (Vec<_>, Vec<_>) = deps.iter().partition(|d| d.flag == 1);
+    // A routed section with nothing assigned still gets a row, with a null id. It is a
+    // real fact about the program but it is not a dependency, and listing it as one
+    // invites a bundle walk to look for an object that does not exist.
+    let (live, unassigned): (Vec<_>, Vec<_>) = live.into_iter().partition(|d| d.id != 0);
 
     if live.is_empty() {
         ui.note(format!("{} depends on nothing", shown(at)));
@@ -878,6 +896,18 @@ pub fn deps(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
         }
     }
 
+    if !unassigned.is_empty() {
+        let which: Vec<String> = unassigned
+            .iter()
+            .map(|d| d.class.label().to_string())
+            .collect();
+        ui.note("");
+        ui.note(format!(
+            "routed but nothing assigned: {}",
+            which.join(", ")
+        ));
+    }
+
     if !idle.is_empty() {
         ui.note("");
         ui.note(format!(
@@ -894,6 +924,15 @@ pub fn deps(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
             ui.note(format!("  {} {:08x} {}", d.class.label(), d.id, named));
         }
     }
+    Ok(())
+}
+
+/// Release anything an interrupted run left open on the instrument.
+pub fn recover(ui: &Ui) -> Result<(), String> {
+    let mut t = open_usb()?;
+    nord_usb::block_on(usb_op::recover(&mut t)).map_err(|e| e.to_string())?;
+    ui.note("released any session the instrument was still holding");
+    ui.note("if slots were reading as empty, re-check them now");
     Ok(())
 }
 
@@ -1040,6 +1079,34 @@ pub fn controls(
         "{answered} of {} request(s) answered",
         u16::from(to) - u16::from(from) + 1
     ));
+    Ok(())
+}
+
+/// Report which object the panel has loaded in this class. Read-only.
+pub fn focus(ui: &Ui, class: ObjectClass) -> Result<(), String> {
+    let mut t = open_usb()?;
+    let (at, info) = nord_usb::block_on(async {
+        let mut s = Session::open(&mut t, class).await?;
+        let r = async {
+            let at = usb_op::focus(&mut s).await?;
+            // An empty focused slot is possible and is not an error to report as one.
+            let info = match usb_op::info(&mut s, at).await {
+                Ok(i) => Some(i),
+                Err(nord_usb::Error::DeviceStatus(1)) => None,
+                Err(e) => return Err(e),
+            };
+            Ok((at, info))
+        }
+        .await;
+        let closed = s.commit().await;
+        finish(r, closed)
+    })
+    .map_err(|e| e.to_string())?;
+
+    match info {
+        Some(info) => ui.out(format!("{}  {:?}", addr(at), info.name)),
+        None => ui.out(format!("{}  (empty)", addr(at))),
+    }
     Ok(())
 }
 

@@ -171,6 +171,14 @@ enum DeviceAction {
     /// no transaction — the first thing to run when nothing else answers.
     Info,
 
+    /// Clear a session an interrupted run left open on the instrument.
+    ///
+    /// Two faults look like a broken instrument and each is one frame to cure: an
+    /// abandoned UI session makes every slot read as empty — a wrong answer that looks
+    /// right — and an abandoned class session makes operations fail with status 0x12.
+    /// Safe to run on a healthy instrument.
+    Recover,
+
     /// Report the instrument's storage layout: partitions, banks and slot capacity.
     ///
     /// Read from the device rather than assumed, so it is correct for models this tool
@@ -426,6 +434,12 @@ enum SlotAction {
         at: String,
     },
 
+    /// Report which object the panel currently has loaded in this class. Read-only.
+    ///
+    /// The read half of `select`: it answers what the player is looking at, rather than
+    /// telling the instrument what to load.
+    Focus,
+
     /// List everything the instrument holds in this class. Read-only.
     ///
     /// Walks the device's own slot cursor, so it reports what is actually stored rather
@@ -544,6 +558,7 @@ fn main() -> ExitCode {
                 device::status(&ui, source, json)
             }
             DeviceAction::Info => device::info(&ui),
+            DeviceAction::Recover => device::recover(&ui),
             DeviceAction::Geometry => device::geometry(&ui),
             DeviceAction::Wedge { class, yes } => {
                 device::wedge(&ui, ObjectClass::from_raw(class), yes)
@@ -650,6 +665,7 @@ fn slot_action(ui: &Ui, action: SlotAction, class: ObjectClass) -> Result<(), St
             slot::Target::File(path) => file::deps(ui, &path, class),
             slot::Target::Slot(at) => device::deps(ui, at, class),
         },
+        SlotAction::Focus => device::focus(ui, class),
         SlotAction::List { cap } => device::list(ui, class, cap),
         SlotAction::Probe {
             op,

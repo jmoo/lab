@@ -21,7 +21,8 @@ use crate::session::ReadWrite;
 use crate::session::Session;
 use crate::transport::Transport;
 use crate::wire::{
-    cmd, ui, Bank, Dependency, Location, ObjectClass, Partition, ProgramInfo, Service, Status,
+    cmd, ui, Bank, Dependency, Location, Message, ObjectClass, Partition, ProgramInfo, Service,
+    Status,
 };
 
 /// Query the inventory for the class the session was opened with.
@@ -277,6 +278,35 @@ pub async fn select<T: Transport, C>(session: &mut Session<'_, T, C>, at: Locati
 ///
 /// **Read-only.** The returned [`Dependency`] ids match the ids the objects carry in
 /// their own files, which is the bridge between wire content and file bytes.
+/// Release anything the instrument is still holding from an abandoned session.
+///
+/// **Operator-driven, and deliberately not automatic.** Two faults hide behind "the
+/// instrument is broken", and each is one frame to cure:
+///
+/// - An abandoned **UI** session (`HELLO` with no `GOODBYE`) makes the device answer
+///   every slot in every class as **empty** — a wrong answer that looks like a right one.
+///   Nothing detects it, because nothing fails. A bare `GOODBYE` clears it.
+/// - An abandoned **class** session makes it refuse operations with status `0x12`.
+///   A bare `SESSION_CLOSE` clears that, and [`Session::open`] already does it.
+///
+/// Both are sent **bare** — no session wrapped around them — because the session
+/// machinery is exactly what is broken. Both are best-effort: sending them to a healthy
+/// instrument is harmless, so this needs no diagnosis first.
+///
+/// This is not folded into [`Session::open`] on purpose. NSM sends no such frame, the
+/// golden replays pin our exchanges against real captures, and quietly diverging from
+/// that ground truth to paper over an operator-caused fault would cost more than it saves.
+pub async fn recover<T: Transport>(transport: &mut T) -> Result<()> {
+    let goodbye = Message::new(Service::Ui, ui::SUBSYSTEM, ui::GOODBYE, Vec::new());
+    transport.write(&goodbye.encode()).await?;
+    let _ = transport.read(crate::transport::READ_BUFFER).await?;
+
+    let close = Message::new(Service::Program, 10, cmd::SESSION_CLOSE, Vec::new());
+    transport.write(&close.encode()).await?;
+    let _ = transport.read(crate::transport::READ_BUFFER).await?;
+    Ok(())
+}
+
 /// Every storage partition the device reports. **Read-only.**
 ///
 /// The index of each entry is its object class code, so this is also the authoritative
