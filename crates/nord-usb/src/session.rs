@@ -43,6 +43,23 @@ pub const DRAIN_CAP: usize = 32;
 /// recoverable without touching the instrument: see [`Session::open`].
 pub const STALE_SESSION: u32 = 0x12;
 
+/// How long any write may take when the caller has set no limit of its own.
+///
+/// Generous on purpose: this is not a latency budget but a liveness one. Frames are small
+/// and a working instrument accepts them in milliseconds, so the only thing this can
+/// catch is an endpoint that has stopped accepting writes altogether — a state where the
+/// alternative is hanging forever with nothing to report.
+pub const WRITE_LIMIT: Duration = Duration::from_secs(10);
+
+/// How long any single read may take when the caller has set no limit of its own.
+///
+/// A liveness bound, not a latency one, and deliberately far longer than
+/// [`WRITE_LIMIT`]: a read waits on the device to *do* something, and an erase before a
+/// large write is genuinely slow. It bounds one frame, not one operation — a piano
+/// transfer is thousands of frames and each arrives promptly — so the only thing this can
+/// catch is a device that has stopped answering, where the alternative is waiting forever.
+pub const READ_LIMIT: Duration = Duration::from_secs(30);
+
 pub struct Session<'t, T: Transport, C = ReadOnly> {
     // `Option` rather than a plain `&mut` so the capability escalation can move the
     // borrow out: a type implementing `Drop` cannot be destructured.
@@ -216,7 +233,7 @@ impl<T: Transport, C> Session<'_, T, C> {
     /// `Ok(None)` means the limit passed with nothing read. The transport has already
     /// cancelled the outstanding transfer by then, so the session is still in step.
     async fn read_frame(&mut self) -> Result<Option<Message>> {
-        let limit = self.read_limit;
+        let limit = Some(self.read_limit.unwrap_or(READ_LIMIT));
         let transport = self
             .transport
             .as_mut()
@@ -379,18 +396,21 @@ impl<T: Transport, C> Session<'_, T, C> {
             .as_mut()
             .ok_or_else(|| Error::Transport("session has no transport".into()))?;
         let encoded = msg.encode();
-        match limit {
-            // A stalled endpoint refuses writes outright, and an unbounded write there
-            // blocks forever — before any read, so a read limit alone never fires.
-            Some(limit) => match transport.write_timeout(&encoded, limit).await? {
-                true => Ok(()),
-                false => Err(Error::Transport(format!(
-                    "the device did not accept command {:#04x} within the session's limit; \
-                     its bulk endpoints are stalled and only a power cycle clears that",
-                    msg.command
-                ))),
-            },
-            None => transport.write(&encoded).await,
+        // Every write is bounded, whether or not the caller asked for a limit. A frame is
+        // small and a healthy device takes it in milliseconds, so [`WRITE_LIMIT`] cannot
+        // plausibly fire on a working instrument — while a stalled endpoint blocks here
+        // forever, before any read, which is how a `--wait 3` probe once hung for minutes.
+        let limit = limit.unwrap_or(WRITE_LIMIT);
+        if transport.write_timeout(&encoded, limit).await? {
+            Ok(())
+        } else {
+            Err(Error::Transport(format!(
+                "the device did not accept command {:#04x} within {}s: its bulk endpoints \
+                 are stalled, and a power cycle is the only way out — `nord device recover` \
+                 cannot help, because that frame cannot be delivered either",
+                msg.command,
+                limit.as_secs()
+            )))
         }
     }
 
