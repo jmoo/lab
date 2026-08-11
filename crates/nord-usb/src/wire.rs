@@ -112,6 +112,24 @@ pub mod cmd {
     /// List an entity's piano/sample dependencies.
     pub const DEPENDENCIES: u32 = 0x28;
 
+    /// List the device's storage partitions. No arguments.
+    ///
+    /// **The partition index is the object class code.** The classes this crate names
+    /// are positions in this table, which is why the numbering has gaps: 0 and 2 are
+    /// `(Native)` variants of the piano and sample libraries, holding the same objects in
+    /// a different order.
+    pub const PARTITIONS: u32 = 0x00;
+
+    /// List one partition's banks and their slot capacity. Args: partition index.
+    ///
+    /// The only source of a class's geometry. Piano "banks" are the panel's categories
+    /// (`Grand`, `Upright`, …), so a piano address is category:position.
+    pub const BANKS: u32 = 0x02;
+
+    /// The object the panel currently has loaded, for the session's class. No arguments;
+    /// the reply is a bank/slot pair. The read half of [`SELECT`].
+    pub const FOCUS: u32 = 0x31;
+
     /// Next occupied slot at or after a position. Args: bank, slot; the reply carries
     /// bank and the next occupied slot.
     ///
@@ -303,10 +321,129 @@ impl ProgramInfo {
 /// The library `id` is the same id the object carries in its own file — a
 /// `PianoPanel`'s piano id, a sample's sample id — so this is the bridge between the
 /// content on the wire and the bytes on disk.
+/// Fixed-size field block trailing each partition record.
+const PARTITION_FIELDS: usize = 29;
+
+fn read_u32(buf: &[u8], at: usize) -> Result<u32> {
+    buf.get(at..at + 4)
+        .map(|b| u32::from_be_bytes(b.try_into().unwrap()))
+        .ok_or(Error::Truncated {
+            got: buf.len(),
+            need: at + 4,
+        })
+}
+
+/// One of the device's storage partitions, from [`cmd::PARTITIONS`].
+///
+/// **The index in the reply is the object class code** — `ObjectClass::from_raw` numbers
+/// positions in this table, gaps included.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Partition {
+    /// Position in the table, and therefore the class code.
+    pub index: u32,
+    /// The device's own name: `Piano`, `Samp Lib`, `Program`, `Set List`, …
+    pub name: String,
+    /// Whether this is the `(Native)` view of a library. Native and user partitions
+    /// describe **one** pool — identical capacity fields — ordered differently.
+    pub native: bool,
+    /// The 29 capacity/flag bytes, verbatim. **Not decoded**: the values do not map
+    /// cleanly onto the block counts `STATUS` reports, so they are carried rather than
+    /// interpreted.
+    pub fields: Vec<u8>,
+}
+
+/// One bank within a partition, from [`cmd::BANKS`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bank {
+    /// Zero-based position, as addresses use it. The panel shows this plus one.
+    pub index: u32,
+    /// The device's name for it. For pianos these are the panel's **categories**
+    /// (`Grand`, `Upright`, `EPiano1`, …), not numbers.
+    pub name: String,
+    /// How many slots the bank holds. `0xfffe` appears for the `(Native)` partitions and
+    /// is a sentinel, not a capacity.
+    pub slots: u32,
+}
+
+impl Partition {
+    /// Decode a [`cmd::PARTITIONS`] reply: `[u8 count]` then that many
+    /// `[u32 name_len][name][29 bytes]` records.
+    ///
+    /// ⚠️ The length prefix is a **`u32`**. Read as a `u16` the first record still parses
+    /// and every one after it lands mid-field, which looks like corruption rather than a
+    /// framing mistake.
+    pub fn decode_all(msg: &Message) -> Result<Vec<Self>> {
+        let p = msg.payload();
+        let count = *p.first().ok_or(Error::Truncated { got: 0, need: 1 })? as usize;
+        let mut out = Vec::with_capacity(count);
+        let mut at = 1;
+        for index in 0..count {
+            let len = read_u32(p, at)? as usize;
+            let end = at + 4 + len;
+            let fields_end = end + PARTITION_FIELDS;
+            if fields_end > p.len() {
+                return Err(Error::Truncated {
+                    got: p.len(),
+                    need: fields_end,
+                });
+            }
+            let name = String::from_utf8_lossy(&p[at + 4..end]).trim_end().to_string();
+            out.push(Partition {
+                index: index as u32,
+                native: name.contains("(Native)"),
+                name,
+                fields: p[end..fields_end].to_vec(),
+            });
+            at = fields_end;
+        }
+        Ok(out)
+    }
+}
+
+impl Bank {
+    /// Decode a [`cmd::BANKS`] reply: the echoed partition, a count, then
+    /// `[u32 name_len][name][u32 slots]` records.
+    pub fn decode_all(msg: &Message) -> Result<Vec<Self>> {
+        let p = msg.payload();
+        let count = *p.get(4).ok_or(Error::Truncated { got: p.len(), need: 5 })? as usize;
+        let mut out = Vec::with_capacity(count);
+        let mut at = 5;
+        for index in 0..count {
+            let len = read_u32(p, at)? as usize;
+            let end = at + 4 + len;
+            let name = if end <= p.len() {
+                String::from_utf8_lossy(&p[at + 4..end]).trim_end().to_string()
+            } else {
+                return Err(Error::Truncated { got: p.len(), need: end });
+            };
+            out.push(Bank {
+                index: index as u32,
+                name,
+                slots: read_u32(p, end)?,
+            });
+            at = end + 4;
+        }
+        Ok(out)
+    }
+
+    /// The sentinel the `(Native)` partitions report instead of a real capacity.
+    pub const UNBOUNDED: u32 = 0xfffe;
+
+    /// Whether [`Self::slots`] is a real capacity rather than the sentinel.
+    pub fn is_bounded(&self) -> bool {
+        self.slots != Self::UNBOUNDED
+    }
+}
+
 pub struct Dependency {
-    /// Leading byte, per-id consistent but not yet understood — ruled out as
-    /// "present", reference count, class and category. Preserved verbatim.
+    /// Whether this reference is **live**: `1` when the section owning it (piano or
+    /// sample) is routed to a keyboard part in that program, `0` otherwise.
+    ///
+    /// ⚠️ Not a presence flag. The device resolves an unrouted section's model index to
+    /// a library object anyway, so a `0` row can name a piano the program's own body
+    /// records as `none` — and the same object reads `1` from one program and `0` from
+    /// another. **Filter on this before treating a row as a dependency**, or a bundle
+    /// walk collects objects nothing plays.
     pub flag: u8,
     /// What kind of object this dependency is (piano, sample, program).
     pub class: ObjectClass,

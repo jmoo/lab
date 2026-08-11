@@ -854,25 +854,96 @@ pub fn deps(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
     })
     .map_err(|e| e.to_string())?;
 
-    if deps.is_empty() {
-        ui.note(format!("{} has no dependencies", shown(at)));
-        return Ok(());
+    // The device reports a row for a section that is not routed, resolving its model
+    // index to a library object the program does not actually use — so an unfiltered
+    // list names pianos a program's own body records as `none`.
+    let (live, idle): (Vec<_>, Vec<_>) = deps.iter().partition(|d| d.flag == 1);
+
+    if live.is_empty() {
+        ui.note(format!("{} depends on nothing", shown(at)));
+    } else {
+        ui.out(ui.dim(format!("{:<8} {:<10} name", "class", "id")));
+        for d in &live {
+            // Library objects report no slot, so most rows carry no location at all.
+            let loc = match d.location.map(shown) {
+                Some(at) => format!("  {}", ui.dim(at)),
+                None => String::new(),
+            };
+            ui.out(format!(
+                "{:<8} {:08x}   {}{loc}",
+                d.class.label(),
+                d.id,
+                d.name.trim_end(),
+            ));
+        }
     }
-    ui.out(ui.dim(format!("{:<4} {:<8} {:<10} name", "flag", "class", "id")));
-    for d in &deps {
-        // Library objects report no slot, so most rows carry no location at all.
-        let loc = match d.location.map(shown) {
-            Some(at) => format!("  {}", ui.dim(at)),
-            None => String::new(),
+
+    if !idle.is_empty() {
+        ui.note("");
+        ui.note(format!(
+            "{} further row(s) reported but not in use — the section is not routed to a \
+             keyboard part, so the instrument names an object this object does not depend on:",
+            idle.len()
+        ));
+        for d in &idle {
+            let named = if d.name.trim_end().is_empty() {
+                "(no name)".to_string()
+            } else {
+                d.name.trim_end().to_string()
+            };
+            ui.note(format!("  {} {:08x} {}", d.class.label(), d.id, named));
+        }
+    }
+    Ok(())
+}
+
+/// Report the instrument's storage layout, from the device's own tables. Read-only.
+pub fn geometry(ui: &Ui) -> Result<(), String> {
+    let mut t = open_usb()?;
+    let rows = nord_usb::block_on(async {
+        // Any class opens a session; the partition table is device-wide.
+        let mut s = Session::open(&mut t, ObjectClass::Program).await?;
+        let r = async {
+            let parts = usb_op::partitions(&mut s).await?;
+            let mut rows = Vec::new();
+            for p in parts {
+                let banks = usb_op::banks(&mut s, p.index).await?;
+                rows.push((p, banks));
+            }
+            Ok(rows)
+        }
+        .await;
+        let closed = s.commit().await;
+        finish(r, closed)
+    })
+    .map_err(|e| e.to_string())?;
+
+    ui.out(ui.dim(format!(
+        "{:<4} {:<18} {:>6} {:>7}  banks",
+        "code", "partition", "banks", "slots"
+    )));
+    for (p, banks) in &rows {
+        // The sentinel is not a capacity and must not be summed into one.
+        let bounded: Vec<&nord_usb::wire::Bank> =
+            banks.iter().filter(|b| b.is_bounded()).collect();
+        let slots = if bounded.len() == banks.len() {
+            bounded.iter().map(|b| b.slots).sum::<u32>().to_string()
+        } else {
+            "—".to_string()
         };
+        let names: Vec<&str> = banks.iter().map(|b| b.name.as_str()).collect();
         ui.out(format!(
-            "{:<4} {:<8} {:08x}   {}{loc}",
-            d.flag,
-            d.class.label(),
-            d.id,
-            d.name.trim_end(),
+            "{:<4} {:<18} {:>6} {:>7}  {}",
+            p.index,
+            p.name,
+            banks.len(),
+            slots,
+            ui.dim(names.join(", ")),
         ));
     }
+    ui.note("");
+    ui.note("the partition index is the object class number; (Native) partitions are a");
+    ui.note("second view of the same library, so their capacity is a sentinel, not a size");
     Ok(())
 }
 

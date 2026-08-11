@@ -20,7 +20,9 @@ use crate::error::{Error, Result};
 use crate::session::ReadWrite;
 use crate::session::Session;
 use crate::transport::Transport;
-use crate::wire::{cmd, ui, Dependency, Location, ObjectClass, ProgramInfo, Service, Status};
+use crate::wire::{
+    cmd, ui, Bank, Dependency, Location, ObjectClass, Partition, ProgramInfo, Service, Status,
+};
 
 /// Query the inventory for the class the session was opened with.
 ///
@@ -275,6 +277,88 @@ pub async fn select<T: Transport, C>(session: &mut Session<'_, T, C>, at: Locati
 ///
 /// **Read-only.** The returned [`Dependency`] ids match the ids the objects carry in
 /// their own files, which is the bridge between wire content and file bytes.
+/// Every storage partition the device reports. **Read-only.**
+///
+/// The index of each entry is its object class code, so this is also the authoritative
+/// answer to "what classes does this instrument have" — including the `(Native)` library
+/// views that have no [`ObjectClass`] name.
+pub async fn partitions<T: Transport, C>(
+    session: &mut Session<'_, T, C>,
+) -> Result<Vec<Partition>> {
+    let resp = session
+        .request(Service::Program, 10, cmd::PARTITIONS, &[])
+        .await?;
+    Partition::decode_all(&resp)
+}
+
+/// One partition's banks and their slot capacities. **Read-only.**
+pub async fn banks<T: Transport, C>(
+    session: &mut Session<'_, T, C>,
+    partition: u32,
+) -> Result<Vec<Bank>> {
+    let resp = session
+        .request(Service::Program, 10, cmd::BANKS, &partition.to_be_bytes())
+        .await?;
+    Bank::decode_all(&resp)
+}
+
+/// Whether an address exists on this instrument, per the device's own geometry.
+///
+/// **Read-only**, and the point is that it answers *before* anything is attempted: a write
+/// to a bad address otherwise fails only once the transfer is under way, and a write to an
+/// occupied one is refused with status `0x4` after the caller has committed to it.
+///
+/// `Ok(None)` means the address is fine. `Ok(Some(reason))` explains why it is not, in
+/// terms of the bank names the instrument itself uses — which for pianos are categories,
+/// so "no bank 7 (this class has 6: Grand, Upright, …)" is a far better error than a
+/// status code.
+pub async fn check_address<T: Transport, C>(
+    session: &mut Session<'_, T, C>,
+    at: Location,
+) -> Result<Option<String>> {
+    let banks = banks(session, session.class().to_raw()).await?;
+    let Some(bank) = banks.get(at.bank as usize) else {
+        let names: Vec<&str> = banks.iter().map(|b| b.name.as_str()).collect();
+        return Ok(Some(format!(
+            "bank {} does not exist; this class has {} ({})",
+            at.bank + 1,
+            banks.len(),
+            names.join(", ")
+        )));
+    };
+    // The `(Native)` partitions report a sentinel rather than a capacity, so there is
+    // nothing to check against there.
+    if bank.is_bounded() && at.slot >= bank.slots {
+        return Ok(Some(format!(
+            "\"{}\" holds {} slots, so slot {} is out of range",
+            bank.name,
+            bank.slots,
+            at.slot + 1
+        )));
+    }
+    Ok(None)
+}
+
+/// The object the panel currently has loaded, for the session's class. **Read-only.**
+///
+/// The read half of [`select`]: together they make the player's own position addressable.
+pub async fn focus<T: Transport, C>(session: &mut Session<'_, T, C>) -> Result<Location> {
+    let resp = session
+        .request(Service::Program, 10, cmd::FOCUS, &[])
+        .await?;
+    let p = resp.payload();
+    if p.len() < 8 {
+        return Err(Error::Truncated {
+            got: p.len(),
+            need: 8,
+        });
+    }
+    Ok(Location {
+        bank: u32::from_be_bytes(p[0..4].try_into().unwrap()),
+        slot: u32::from_be_bytes(p[4..8].try_into().unwrap()),
+    })
+}
+
 /// The next occupied slot after `at`, or `None` once the walk runs off the end.
 ///
 /// **Read-only.** Positions inside a gap are safe to pass: the device answers with the

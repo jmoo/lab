@@ -37,6 +37,12 @@ pub struct ReadWrite;
 /// notifications cannot pin the host in the read loop forever.
 pub const DRAIN_CAP: usize = 32;
 
+/// Device status meaning "the session you are using is no longer valid".
+///
+/// Seen when a previous run left a session open, and after a session reset. It is
+/// recoverable without touching the instrument: see [`Session::open`].
+pub const STALE_SESSION: u32 = 0x12;
+
 pub struct Session<'t, T: Transport, C = ReadOnly> {
     // `Option` rather than a plain `&mut` so the capability escalation can move the
     // borrow out: a type implementing `Drop` cannot be destructured.
@@ -93,14 +99,19 @@ impl<'t, T: Transport> Session<'t, T, ReadOnly> {
             return Err(e);
         }
 
-        let opened = s
-            .request(
-                Service::Program,
-                10,
-                cmd::SESSION_OPEN,
-                &class.to_raw().to_be_bytes(),
-            )
-            .await;
+        let opened = s.open_class(class).await;
+
+        // A session left open by an earlier run makes the device refuse this one with
+        // `0x12`, and every operation is wrapped in a session — so without this the
+        // instrument looks broken and the fix (a bare SESSION_CLOSE) is unreachable
+        // through any normal command. Clearing it is one frame, so try once.
+        let opened = match opened {
+            Err(Error::DeviceStatus(STALE_SESSION)) => {
+                s.discard_stale_session().await?;
+                s.open_class(class).await
+            }
+            other => other,
+        };
 
         match opened {
             Ok(_) => Ok(s),
@@ -110,6 +121,31 @@ impl<'t, T: Transport> Session<'t, T, ReadOnly> {
                 Err(e)
             }
         }
+    }
+
+    async fn open_class(&mut self, class: ObjectClass) -> Result<()> {
+        self.request(
+            Service::Program,
+            10,
+            cmd::SESSION_OPEN,
+            &class.to_raw().to_be_bytes(),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Tell the device to drop a session it still thinks is open.
+    ///
+    /// Sent **bare** — no `HELLO`, no open — because the machinery that would wrap it is
+    /// exactly what the device is refusing. Confirmed on hardware: an instrument that
+    /// answers `0x12` to everything is well again immediately afterwards.
+    async fn discard_stale_session(&mut self) -> Result<()> {
+        let close = Message::new(Service::Program, 10, cmd::SESSION_CLOSE, Vec::new());
+        self.notify(&close).await?;
+        // Its reply is uninteresting — the point is the side effect — but it must be
+        // taken off the wire, or it would be read as the answer to the next request.
+        let _ = self.read_frame().await?;
+        Ok(())
     }
 
     /// Escalate to a session that can mutate the device.
@@ -322,11 +358,25 @@ impl<T: Transport, C> Session<'_, T, C> {
     /// the flag also marks the transaction already released, which `commit` checks
     /// itself.
     pub(crate) async fn notify(&mut self, msg: &Message) -> Result<()> {
+        let limit = self.read_limit;
         let transport = self
             .transport
             .as_mut()
             .ok_or_else(|| Error::Transport("session has no transport".into()))?;
-        transport.write(&msg.encode()).await
+        let encoded = msg.encode();
+        match limit {
+            // A stalled endpoint refuses writes outright, and an unbounded write there
+            // blocks forever — before any read, so a read limit alone never fires.
+            Some(limit) => match transport.write_timeout(&encoded, limit).await? {
+                true => Ok(()),
+                false => Err(Error::Transport(format!(
+                    "the device did not accept command {:#04x} within the session's limit; \
+                     its bulk endpoints are stalled and only a power cycle clears that",
+                    msg.command
+                ))),
+            },
+            None => transport.write(&encoded).await,
+        }
     }
 
     /// Run the closing exchanges. Always prefer this over dropping.

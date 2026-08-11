@@ -171,6 +171,12 @@ enum DeviceAction {
     /// no transaction — the first thing to run when nothing else answers.
     Info,
 
+    /// Report the instrument's storage layout: partitions, banks and slot capacity.
+    ///
+    /// Read from the device rather than assumed, so it is correct for models this tool
+    /// has never seen. Partition indices are the object class numbers.
+    Geometry,
+
     /// Deliberately wedge the instrument by abandoning a session. Test tool.
     ///
     /// Reproduces the half-open HELLO on purpose, so recovery can be tested against a
@@ -538,6 +544,7 @@ fn main() -> ExitCode {
                 device::status(&ui, source, json)
             }
             DeviceAction::Info => device::info(&ui),
+            DeviceAction::Geometry => device::geometry(&ui),
             DeviceAction::Wedge { class, yes } => {
                 device::wedge(&ui, ObjectClass::from_raw(class), yes)
             }

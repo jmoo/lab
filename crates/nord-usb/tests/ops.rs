@@ -501,3 +501,112 @@ fn dependencies_decode_the_capture() {
     assert_eq!(deps[1].name, "africa_split");
     assert!(t.is_exhausted(), "did not consume the whole exchange");
 }
+
+/// A session the device still thinks is open must be cleared and the open retried.
+///
+/// This is the wedge that looked like a hardware fault: every operation is wrapped in a
+/// session, so when the device refuses to open one with `0x12`, nothing built on
+/// [`Session`] can reach it — including the single frame that fixes it. The recovery is a
+/// bare `SESSION_CLOSE`, and the script asserts it is sent *between* the refused open and
+/// a successful retry.
+#[test]
+fn a_stale_session_is_cleared_and_the_open_retried() {
+    use Direction::{In, Out};
+
+    fn program(command: u32, status: u32) -> Step {
+        Step {
+            direction: In,
+            bytes: nord_usb::Message::new(
+                nord_usb::Service::Program,
+                10,
+                command,
+                status.to_be_bytes().to_vec(),
+            )
+            .encode(),
+        }
+    }
+
+    let mut t = ReplayTransport::new(vec![
+        step(Out, "0000001200000006000000010000000006a1"),
+        step(In, "000000160000000600000001000000010000000044ec"),
+        // The open the device refuses because it is still holding one.
+        step(Out, "000000160000000c0000000a0000000400000004a218"),
+        program(0x05, 0x12),
+        // The recovery: SESSION_CLOSE with nothing wrapped around it.
+        step(Out, "000000120000000c0000000a000000066500"),
+        program(0x07, 0),
+        // ...and the same open again, now accepted.
+        step(Out, "000000160000000c0000000a0000000400000004a218"),
+        step(In, "0000001a0000000c0000000a00000005000000000000000467b0"),
+        // Ordinary close.
+        step(Out, "000000120000000c0000000a000000066500"),
+        step(In, "000000160000000c0000000a00000007000000000c4e"),
+        step(Out, "0000001200000006000000010000000226e3"),
+        step(In, "0000001600000006000000010000000300000000006f"),
+    ]);
+
+    block_on(async {
+        let s = Session::open(&mut t, ObjectClass::Program)
+            .await
+            .expect("a stale session should have been cleared and the open retried");
+        s.commit().await.expect("close");
+    });
+    assert!(
+        t.is_exhausted(),
+        "the recovery did not send a bare SESSION_CLOSE before retrying the open"
+    );
+}
+
+/// The retry happens once, not in a loop.
+///
+/// A device that answers `0x12` to the retry as well is genuinely broken, and the caller
+/// is owed that error rather than a hang.
+#[test]
+fn a_stale_session_that_will_not_clear_is_reported() {
+    use Direction::{In, Out};
+
+    fn refused(command: u32) -> Step {
+        Step {
+            direction: In,
+            bytes: nord_usb::Message::new(
+                nord_usb::Service::Program,
+                10,
+                command,
+                0x12u32.to_be_bytes().to_vec(),
+            )
+            .encode(),
+        }
+    }
+
+    let mut t = ReplayTransport::new(vec![
+        step(Out, "0000001200000006000000010000000006a1"),
+        step(In, "000000160000000600000001000000010000000044ec"),
+        step(Out, "000000160000000c0000000a0000000400000004a218"),
+        refused(0x05),
+        step(Out, "000000120000000c0000000a000000066500"),
+        refused(0x07),
+        step(Out, "000000160000000c0000000a0000000400000004a218"),
+        refused(0x05),
+        // The failed open still releases the UI session.
+        step(Out, "0000001200000006000000010000000226e3"),
+        step(In, "0000001600000006000000010000000300000000006f"),
+    ]);
+
+    let err = block_on(async {
+        match Session::open(&mut t, ObjectClass::Program).await {
+            Ok(s) => {
+                s.abort();
+                panic!("the device never accepted the open, but it was reported as success");
+            }
+            Err(e) => e,
+        }
+    });
+    assert!(
+        matches!(err, nord_usb::Error::DeviceStatus(0x12)),
+        "wrong error: {err}"
+    );
+    assert!(
+        t.is_exhausted(),
+        "a session that would not clear did not say GOODBYE"
+    );
+}
