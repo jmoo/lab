@@ -170,6 +170,22 @@ enum DeviceAction {
     /// Identify the attached instrument, from its USB descriptors. Read-only, and opens
     /// no transaction — the first thing to run when nothing else answers.
     Info,
+
+    /// Deliberately wedge the instrument by abandoning a session. Test tool.
+    ///
+    /// Reproduces the half-open HELLO on purpose, so recovery can be tested against a
+    /// known wedge. Nothing stored is harmed, but every slot reads as empty until it
+    /// clears — and clearing it may take a power cycle.
+    #[command(hide = true)]
+    Wedge {
+        /// Object class to open the doomed session on.
+        #[arg(long, value_name = "N", default_value_t = 4)]
+        class: u32,
+
+        /// Confirm. Without this nothing is sent.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// `nord program`: every class-generic verb, plus the one that only programs have.
@@ -442,6 +458,22 @@ enum SlotAction {
         /// read verbs are — the device's response to an unknown code is unknown.
         #[arg(long)]
         yes: bool,
+
+        /// Send with no session around it: no HELLO, no session open, no close.
+        ///
+        /// The only way to reach a command when the session machinery itself is what
+        /// is broken — a wedged instrument refuses to open one, so every ordinary
+        /// probe fails before its command is sent.
+        #[arg(long)]
+        bare: bool,
+
+        /// Service number. 12 is the object/file service, 6 the UI session.
+        #[arg(long, default_value_t = 12)]
+        service: u32,
+
+        /// Subsystem number. 10 for service 12, 1 for service 6.
+        #[arg(long, default_value_t = 10)]
+        subsystem: u32,
     },
 }
 
@@ -506,6 +538,9 @@ fn main() -> ExitCode {
                 device::status(&ui, source, json)
             }
             DeviceAction::Info => device::info(&ui),
+            DeviceAction::Wedge { class, yes } => {
+                device::wedge(&ui, ObjectClass::from_raw(class), yes)
+            }
             DeviceAction::Controls {
                 from,
                 to,
@@ -614,7 +649,10 @@ fn slot_action(ui: &Ui, action: SlotAction, class: ObjectClass) -> Result<(), St
             args,
             wait,
             yes,
-        } => device::probe(ui, class, op, &args, wait, yes),
+            bare,
+            service,
+            subsystem,
+        } => device::probe(ui, class, op, &args, wait, yes, bare, service, subsystem),
     }
 }
 
