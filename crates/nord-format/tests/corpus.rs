@@ -263,11 +263,17 @@ fn observed_body_lengths_match_the_documented_constants() {
         (ns3::song::FORMAT, ns3::song::BODY_LEN),
         (ns3::synth::FORMAT, ns3::synth::BODY_LEN),
         (ns3::settings::FORMAT, ns3::settings::BODY_LEN),
-        (ns4::program::FORMAT, ns4::program::BODY_LEN),
-        (ns4::live::FORMAT, ns4::live::BODY_LEN),
-        (ns4::synth::FORMAT, ns4::synth::BODY_LEN),
-        (ns4::piano_preset::FORMAT, ns4::piano_preset::BODY_LEN),
-        (ns4::organ_preset::FORMAT, ns4::organ_preset::BODY_LEN),
+        (ns4::program::FORMAT, ns4::program::BODY_LEN as u64),
+        (ns4::live::FORMAT, ns4::program::BODY_LEN as u64),
+        (ns4::synth::FORMAT, ns4::synth::BODY_LEN as u64),
+        (
+            ns4::piano_preset::FORMAT,
+            ns4::piano_preset::BODY_LEN as u64,
+        ),
+        (
+            ns4::organ_preset::FORMAT,
+            ns4::organ_preset::BODY_LEN as u64,
+        ),
         (ns4::settings::FORMAT, ns4::settings::BODY_LEN),
         (nsclassic::program::FORMAT, nsclassic::program::BODY_LEN),
         (nsclassic::synth::FORMAT, nsclassic::synth::BODY_LEN),
@@ -368,6 +374,95 @@ fn stage_globals_decode_to_panel_values() {
         ns3_at_default_clock * 2 > ns3_seen,
         "only {ns3_at_default_clock}/{ns3_seen} programs read the 120 bpm default"
     );
+}
+
+/// The Stage 4 decode, whose placements came from an external offset table and
+/// no hardware. Two independent checks that the table was read into the right
+/// bit space: the body echoes the header's version byte at its own offset 3, and
+/// the selector fields — each a fixed-width slot holding a short list of panel
+/// choices — never hold a value past the end of that list. A base offset off by
+/// a byte, or bits numbered the other way round, breaks both at once.
+#[test]
+fn stage4_bodies_decode_to_panel_values() {
+    use nord_format::{Live, OrganPreset, PianoPreset, Program, Synth};
+
+    let root = corpus_root();
+    let (mut programs, mut organs, mut pianos, mut synths) = (0usize, 0usize, 0usize, 0usize);
+    let mut split_on = 0usize;
+
+    // A selector's slot is wider than the choices the panel offers, so the
+    // unused encodings are the check: they must never appear.
+    let octave_shift = |v: u8| matches!(v, 0..=2 | 14 | 15);
+
+    for path in specimens(&root) {
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        if !matches!(ext, "ns4p" | "ns4l" | "ns4o" | "ns4n" | "ns4y") {
+            continue;
+        }
+        let entity = nord_format::from_path(&path).unwrap();
+        let where_ = path.display();
+
+        match (&entity, ext) {
+            (Entity::Program(Program::Stage4(p)), _) | (Entity::Live(Live::Stage4(p)), _) => {
+                assert_eq!(
+                    p.version_echo as u32,
+                    p.header.version & 0xff,
+                    "{where_}: the body's version echo disagrees with the header"
+                );
+                assert!(
+                    p.organ_section_enabled || p.piano_section_enabled || p.synth_section_enabled,
+                    "{where_}: no section is routed to the keyboard"
+                );
+                assert!(p.organ_a_model.as_u8() <= 5, "{where_}");
+                assert!(p.organ_b_model.as_u8() <= 5, "{where_}");
+                assert!(p.piano_a_type.as_u8() <= 5, "{where_}");
+                assert!(p.piano_b_type.as_u8() <= 5, "{where_}");
+                assert!(p.synth_a_filter_type.as_u8() <= 5, "{where_}");
+                assert!(p.synth_a_lfo_shape.as_u8() <= 4, "{where_}");
+                assert!(p.synth_a_voice_priority.as_u8() <= 2, "{where_}");
+                assert!(p.organ_fx_reverb_type.as_u8() <= 11, "{where_}");
+                assert!(octave_shift(p.organ_a_octave_shift.as_u8()), "{where_}");
+                split_on += usize::from(p.split_enabled);
+                programs += 1;
+            }
+            (Entity::OrganPreset(OrganPreset::Stage4(o)), _) => {
+                assert!(o.organ_a_model.as_u8() <= 5, "{where_}");
+                assert!(o.organ_b_model.as_u8() <= 5, "{where_}");
+                assert!(o.organ_fx_reverb_type.as_u8() <= 11, "{where_}");
+                assert!(octave_shift(o.organ_a_octave_shift.as_u8()), "{where_}");
+                organs += 1;
+            }
+            (Entity::PianoPreset(PianoPreset::Stage4(n)), _) => {
+                assert!(n.piano_a_type.as_u8() <= 5, "{where_}");
+                assert!(n.piano_b_type.as_u8() <= 5, "{where_}");
+                assert!(n.piano_a_fx_reverb_type.as_u8() <= 11, "{where_}");
+                assert!(octave_shift(n.piano_a_octave_shift.as_u8()), "{where_}");
+                pianos += 1;
+            }
+            (Entity::Synth(Synth::Stage4(y)), _) => {
+                assert!(y.synth_a_filter_type.as_u8() <= 5, "{where_}");
+                assert!(y.synth_b_filter_type.as_u8() <= 5, "{where_}");
+                assert!(y.synth_a_lfo_shape.as_u8() <= 4, "{where_}");
+                assert!(y.synth_a_voice_priority.as_u8() <= 2, "{where_}");
+                assert!(y.synth_a_fx_reverb_type.as_u8() <= 11, "{where_}");
+                assert!(octave_shift(y.synth_a_octave_shift.as_u8()), "{where_}");
+                synths += 1;
+            }
+            (other, _) => panic!("{where_}: decoded to {other:?}"),
+        }
+    }
+
+    assert_eq!(
+        programs, 392,
+        "the corpus ships 384 programs and 8 live slots"
+    );
+    assert_eq!(organs, 64);
+    assert_eq!(pianos, 96);
+    assert_eq!(synths, 384);
+    // A decode where no factory program ever splits is reading the wrong bits.
+    assert!(split_on > 0, "no Stage 4 program reads a split");
 }
 
 /// The drum banks: every member of every bank parses and the counts match the

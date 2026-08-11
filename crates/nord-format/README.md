@@ -22,7 +22,9 @@ transport stack.
 | `npno` piano | ✅ (container) | ✅ | Body unmapped; carried verbatim, so the file round-trips byte-exact and the checksum is verified. |
 | `ns3f`/`ns3l` Stage 3 program | ✅ | ✅ | Program-wide globals (panels, splits, transpose, master clock, dual keyboard, category) — panel blocks and effects unmapped. Offsets from the community byte maps below; not confirmed on hardware. |
 | `ns2p`/`ns2l` Stage 2 program | ✅ | ✅ | Same globals slice as the Stage 3. |
-| every other corpus format | ✅ (container) | ✅ | Container-verified stubs, one module per tag with its observed body length: Electro 3/4/6/7, Piano 1–5, Grand, Stage Classic/EX, Stage 2/3/4 satellites (songs, synths, settings, the Stage 4 piano/organ presets), Wave 1/2, C2/C2D, `no3`, Lead 4/A1, Drum 2/3P — 60+ CBIN tags in all. |
+| `ns4p`/`ns4l` Stage 4 program | ✅ | ✅ | **Every parameter placed** — 878 of them, all four engines and the globals, covering 76% of the body's bits. Values are raw: the number the file stores, range-checked to its slot, with nothing interpreting it into a panel name yet. Offsets derived from ns4decode's published tables (MIT); not confirmed on hardware. |
+| `ns4y`/`ns4n`/`ns4o` Stage 4 presets | ✅ | ✅ | The synth, piano and organ preset banks: one program section each, same placements and the same raw values. |
+| every other corpus format | ✅ (container) | ✅ | Container-verified stubs, one module per tag with its observed body length: Electro 3/4/6/7, Piano 1–5, Grand, Stage Classic/EX, Stage 2/3 satellites (songs, synths, settings) and the Stage 4 settings, Wave 1/2, C2/C2D, `no3`, Lead 4/A1, Drum 2/3P — 60+ CBIN tags in all. |
 | Lead 1/2/2X/3 SysEx and MIDI banks | ✅ | ✅ | Carried verbatim; the two SysEx envelope families (`F0 33 · 04` vs `F0 33 · 09`) classify the model line. |
 | `.cn3` Electro 2 library | ✅ | ✅ | `CNE3` magic, not CBIN; verbatim. |
 | backup bundle (ZIP) | ✅ | — | Partial; behind the `bundle` feature. Drum 2 banks / Drum 3P kit banks walk to their CBIN members. |
@@ -118,9 +120,11 @@ their body is unmapped; bundles and backups are still incomplete.
 
 Every other model in the corpus now parses and round-trips at the container
 level — 10,000+ specimens across 70 formats in the sweep — with typed stubs
-waiting for their bodies to be mapped, and the Stage 2/3 programs decode their
-program-wide globals. Deeper decode work happens per model from here; the
-Electro 5 remains the only fully-solved body.
+waiting for their bodies to be mapped. The Stage 2/3 programs decode their
+program-wide globals, and the Stage 4's program and preset bodies have every
+parameter placed, though nothing yet interprets the values. Deeper decode work
+happens per model from here; the Electro 5 remains the only body whose values
+are named as well as placed.
 
 Expect refactoring, API changes, and other misc changes until a stable version is released.
 
@@ -133,6 +137,10 @@ Expect refactoring, API changes, and other misc changes until a stable version i
 - **[`Chris55/nord-documentation`](https://github.com/Chris55/nord-documentation)**
   ([rendered](https://chris55.github.io/nord-documentation/)) — community byte-map
   docs for Nord Stage 2/3 and Lead A1, built with the same hex-diff method.
+- **[`ns4decode`](https://ns4decode.netlify.app)** (MIT, © 2024 Randy) — a Stage 4
+  program and preset viewer in Python, which publishes complete offset tables for
+  the `ns4p` body. The Stage 4 placements here are derived from those tables; the
+  value tables it also publishes are not used.
 
 Why maintain a separate project? Primarily because this is a rust learning project for me and I've written enough js in my life to not really want to write it in my free time. Also, the goal of this project are r/w + usb, not just read.
 
@@ -141,7 +149,7 @@ Why maintain a separate project? Primarily because this is a rust learning proje
 Not affiliated with, authorized, or endorsed by Clavia DMI AB. "Nord", "Clavia",
 and "Electro" are trademarks of Clavia DMI AB, used here only to identify the
 hardware these formats come from. All reverse engineering is of files produced by
-hardware the author owns, for interoperability.
+Nord hardware, for interoperability.
 
 [`crcxx`]: https://docs.rs/crcxx
 [`Entity`]: https://docs.rs/nord-format
