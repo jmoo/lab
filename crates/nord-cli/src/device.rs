@@ -875,7 +875,7 @@ pub fn deps(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
     // A routed section with nothing assigned still gets a row, with a null id. It is a
     // real fact about the program but it is not a dependency, and listing it as one
     // invites a bundle walk to look for an object that does not exist.
-    let (live, unassigned): (Vec<_>, Vec<_>) = live.into_iter().partition(|d| d.id != 0);
+    let (live, unassigned): (Vec<_>, Vec<_>) = live.into_iter().partition(|d| d.is_required());
 
     if live.is_empty() {
         ui.note(format!("{} depends on nothing", shown(at)));
@@ -988,6 +988,8 @@ pub fn geometry(ui: &Ui) -> Result<(), String> {
 
 /// Deliberately abandon an open session, wedging the instrument. Test tool.
 ///
+/// Behind the `wedge` feature: it breaks the attached instrument on purpose.
+///
 /// Reproduces the half-open `HELLO` on purpose: opens a transaction and drops it without
 /// the closing exchanges. The instrument then answers "empty" for every slot in every
 /// class, which survives reopening.
@@ -995,10 +997,12 @@ pub fn geometry(ui: &Ui) -> Result<(), String> {
 /// Exists so recovery can be tested against a *known* wedge rather than one arrived at by
 /// accident. Nothing stored is harmed — but until it is cleared, every reading taken from
 /// the instrument is a lie, which is worse than an error.
+#[cfg(feature = "wedge")]
 pub fn wedge(ui: &Ui, class: ObjectClass, yes: bool) -> Result<(), String> {
     if !yes {
         return Err(
-            "refusing to wedge the instrument without --yes; recovery may need a power cycle"
+            "refusing to wedge the instrument without --yes; \
+             clear it afterwards with `nord device recover`"
                 .into(),
         );
     }
@@ -1010,8 +1014,9 @@ pub fn wedge(ui: &Ui, class: ObjectClass, yes: bool) -> Result<(), String> {
     })
     .map_err(|e| e.to_string())?;
 
-    ui.note("session abandoned with no GOODBYE — the instrument should now be wedged");
-    ui.note("every slot will read as empty until it is cleared");
+    ui.note("session abandoned with no GOODBYE — the instrument is now wedged");
+    ui.note("every slot will read as empty, and read *successfully*, until you run");
+    ui.note("`nord device recover`");
     Ok(())
 }
 

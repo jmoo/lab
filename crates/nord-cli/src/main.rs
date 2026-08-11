@@ -187,9 +187,10 @@ enum DeviceAction {
 
     /// Deliberately wedge the instrument by abandoning a session. Test tool.
     ///
-    /// Reproduces the half-open HELLO on purpose, so recovery can be tested against a
-    /// known wedge. Nothing stored is harmed, but every slot reads as empty until it
-    /// clears — and clearing it may take a power cycle.
+    /// Reproduces the abandoned session on purpose, so recovery can be tested against a
+    /// known wedge. Nothing stored is harmed, but every slot then reads as empty —
+    /// successfully, which is worse than an error — until `nord device recover` clears it.
+    #[cfg(feature = "wedge")]
     #[command(hide = true)]
     Wedge {
         /// Object class to open the doomed session on.
@@ -560,6 +561,7 @@ fn main() -> ExitCode {
             DeviceAction::Info => device::info(&ui),
             DeviceAction::Recover => device::recover(&ui),
             DeviceAction::Geometry => device::geometry(&ui),
+            #[cfg(feature = "wedge")]
             DeviceAction::Wedge { class, yes } => {
                 device::wedge(&ui, ObjectClass::from_raw(class), yes)
             }

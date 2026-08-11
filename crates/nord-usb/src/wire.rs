@@ -457,6 +457,24 @@ pub struct Dependency {
 }
 
 impl Dependency {
+    /// Whether this row is a dependency the object actually has.
+    ///
+    /// Two kinds of row are reported but are **not** dependencies, and both look like one
+    /// at a glance:
+    ///
+    /// - The section owning it is not routed to a keyboard part ([`Self::flag`] `0`). The
+    ///   device resolves the section's model index to a library object regardless, so the
+    ///   row can name a piano the object's own body records as `none`.
+    /// - The section *is* routed but nothing is assigned to it, giving a live flag with a
+    ///   null [`Self::id`].
+    ///
+    /// Anything collecting an object's real requirements — a bundle walk above all —
+    /// wants this rather than the raw list, or it goes looking for objects that either
+    /// are not played or do not exist.
+    pub fn is_required(&self) -> bool {
+        self.flag == 1 && self.id != 0
+    }
+
     /// Decode a whole [`cmd::DEPENDENCIES`] response into the list it carries.
     ///
     /// Layout after the leading `bank, slot, count`, each entry is

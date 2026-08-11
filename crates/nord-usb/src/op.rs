@@ -495,6 +495,22 @@ const MAX_BANKS: u32 = 64;
 /// past the last populated one instead of reporting out-of-range.
 const EMPTY_BANKS_BEFORE_STOP: u32 = 2;
 
+/// The library objects an entity actually needs. **Read-only.**
+///
+/// [`dependencies`] returns what the device reports, which includes rows that are not
+/// dependencies at all — see [`Dependency::is_required`]. This is the one to build on;
+/// reach for the unfiltered list only when the extra rows are themselves the subject.
+pub async fn required_dependencies<T: Transport, C>(
+    session: &mut Session<'_, T, C>,
+    at: Location,
+) -> Result<Vec<Dependency>> {
+    Ok(dependencies(session, at)
+        .await?
+        .into_iter()
+        .filter(Dependency::is_required)
+        .collect())
+}
+
 pub async fn dependencies<T: Transport, C>(
     session: &mut Session<'_, T, C>,
     at: Location,
