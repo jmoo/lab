@@ -121,12 +121,16 @@ mod tests {
         };
 
         for rank in 1..=9u8 {
-            assert_eq!(
-                spec(&format!("drawbar_{rank}")).control,
-                ControlKind::Drawbar {
-                    bars: 1,
-                    rank: Some(rank)
-                },
+            assert!(
+                matches!(
+                    spec(&format!("drawbar_{rank}")).control,
+                    ControlKind::Drawbar {
+                        bars: 1,
+                        rank: Some(declared),
+                        ..
+                    } if declared == rank,
+                ),
+                "drawbar_{rank}",
             );
             for control in ["wheel", "aftertouch", "ctrl_pedal"] {
                 let slot = spec(&format!("drawbar_{rank}_{control}"));

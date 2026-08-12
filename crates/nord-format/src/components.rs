@@ -11,7 +11,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 
 use crate::bits::{bits_for, Packed};
 use crate::error::ParseError;
-use crate::fields::{ControlKind, Library, Unit};
+use crate::fields::{ControlKind, Library, PackedOrder, Unit};
 use crate::types::RangedI8;
 
 /// Octave shift. The range and the storage bias are the model's business, so each
@@ -486,6 +486,12 @@ impl<const BITS: u32> PartialEq<u16> for WideSelector<BITS> {
 /// refused, on the same rule as [`crate::types::RangedU8`] — the bound is the slot's, not
 /// the instrument's.
 ///
+/// ⚠️ The two constructors therefore disagree on purpose. [`Self::new`] takes a
+/// *position* and refuses 9 and above; `from_bits` — and so `set_field`, which goes
+/// through the type's own parse — takes a *nibble* and accepts all sixteen, because a
+/// file holding one has to round-trip. A caller offering a bar to a player wants the
+/// former.
+///
 /// ⚠️ On the Stage 2's Farfisa the register is a *tab*, and the file stores a bit rather
 /// than a nibble, so those fields are `bool` and not this type.
 #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -527,6 +533,9 @@ impl Packed for Drawbar {
     const CONTROL: ControlKind = ControlKind::Drawbar {
         bars: 1,
         rank: None,
+        bits_per_bar: Self::MAX_BITS as u8,
+        // One bar: there is no second value for the order to place.
+        order: PackedOrder::HighFirst,
     };
     type Error = ::core::convert::Infallible;
 
@@ -1120,7 +1129,9 @@ impl Packed for ArpPattern {
     const MAX_BITS: u32 = 32;
     const CONTROL: ControlKind = ControlKind::Pattern {
         steps: Self::STEPS as u8,
-        bits_per_step: 2,
+        // The slot divided by its steps, so the two cannot drift apart.
+        bits_per_step: (Self::MAX_BITS / Self::STEPS as u32) as u8,
+        order: PackedOrder::LowFirst,
     };
     type Error = ::core::convert::Infallible;
 
@@ -1175,7 +1186,7 @@ pub struct LibraryRefOf<const LIBRARY: u8> {
 
 impl<const LIBRARY: u8> LibraryRefOf<LIBRARY> {
     /// Which catalogue resolves this id.
-    pub const LIBRARY: Library = Library::from_code(LIBRARY);
+    pub const LIBRARY: Library = Library::expect_code(LIBRARY);
 
     /// The stored id. Zero is "nothing referenced" on every model in the corpus.
     pub fn id(&self) -> u32 {
@@ -1189,7 +1200,7 @@ impl<const LIBRARY: u8> LibraryRefOf<LIBRARY> {
 
 impl<const LIBRARY: u8> Packed for LibraryRefOf<LIBRARY> {
     const MAX_BITS: u32 = 32;
-    const CONTROL: ControlKind = ControlKind::Reference(Library::from_code(LIBRARY));
+    const CONTROL: ControlKind = ControlKind::Reference(Library::expect_code(LIBRARY));
     type Error = ::core::convert::Infallible;
 
     fn from_bits(bits: u64) -> Result<Self, Self::Error> {
@@ -1397,7 +1408,7 @@ sparse_enum!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fields::{ControlKind, Library, Unit};
+    use crate::fields::{ControlKind, Library, PackedOrder, Unit};
 
     /// The whole point of the vocabulary: a field gets its control kind by choosing a
     /// type, so an interface never needs a table of field names of its own.
@@ -1424,14 +1435,20 @@ mod tests {
             <Drawbar as Packed>::CONTROL,
             ControlKind::Drawbar {
                 bars: 1,
-                rank: None
+                rank: None,
+                bits_per_bar: 4,
+                order: PackedOrder::HighFirst,
             }
         );
+        // ⚠️ The two multi-value kinds pack from opposite ends, which is why each says
+        // so: a pattern's first step is in the lowest bits and an Electro 5 register's
+        // first bar is in the highest.
         assert_eq!(
             <ArpPattern as Packed>::CONTROL,
             ControlKind::Pattern {
                 steps: 16,
-                bits_per_step: 2
+                bits_per_step: 2,
+                order: PackedOrder::LowFirst,
             }
         );
         assert_eq!(

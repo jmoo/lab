@@ -175,20 +175,9 @@ mod tests {
         );
         // Nothing named `absent` in this body, so the slot stands alone.
         assert_eq!(of("absent_wheel"), ControlKind::Morph { of: None });
-        assert_eq!(
-            of("drawbar_4"),
-            ControlKind::Drawbar {
-                bars: 1,
-                rank: Some(4)
-            }
-        );
-        assert_eq!(
-            of("bar"),
-            ControlKind::Drawbar {
-                bars: 1,
-                rank: None
-            }
-        );
+        let drawbar = <crate::components::Drawbar as crate::bits::Packed>::CONTROL;
+        assert_eq!(of("drawbar_4"), drawbar.ranked(4));
+        assert_eq!(of("bar"), drawbar);
         // The knob a morph slot is named after is untouched by the binding.
         assert_eq!(of("volume"), ControlKind::Knob(Unit::Panel10));
     }

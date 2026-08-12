@@ -484,10 +484,13 @@ impl Drawbars {
 
 impl Packed for Drawbars {
     const MAX_BITS: u32 = 4 * Drawbars::BARS as u32;
-    /// The whole register in one field, so the first bar is the 16' one.
+    /// The whole register in one field, so the first bar is the leftmost one and the
+    /// nibbles run down from the top of the slot.
     const CONTROL: crate::fields::ControlKind = crate::fields::ControlKind::Drawbar {
         bars: Drawbars::BARS as u8,
         rank: Some(1),
+        bits_per_bar: (Self::MAX_BITS / Drawbars::BARS as u32) as u8,
+        order: crate::fields::PackedOrder::HighFirst,
     };
     type Error = ::core::convert::Infallible;
 

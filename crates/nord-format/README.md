@@ -85,9 +85,10 @@ accepts, and `set_field(path, value)` writes one back through the type's own par
 fall behind the library.
 
 A field's type says what *kind* of control it is (`fields::ControlKind`): a knob
-with a unit, a bipolar knob, a selector, a drawbar with its bar count and footage
-rank, a morph slot with the parameter it moves, a pattern grid with its step
-shape, a library reference with the catalogue that resolves it. So a UI picks a
+with a unit, a bipolar knob, a selector, a drawbar with its position in the
+register and how the register is packed, a morph slot with the parameter it
+moves, a pattern grid with its step shape, a library reference with the
+catalogue that resolves it. So a UI picks a
 widget from the registry rather than from a table of field names of its own.
 
 What placement cannot say — which controls sit together, in what order, and which

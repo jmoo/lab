@@ -98,15 +98,29 @@ pub enum ControlKind {
     Bipolar(Unit),
     /// One or more drawbars, each `0..=8`, drawn as bars rather than numbers.
     Drawbar {
-        /// How many bars the field holds, in footage order. The Stage models give each
+        /// How many bars the field holds, in register order. The Stage models give each
         /// bar its own field and the Electro 5 packs a whole register into one, so this
         /// is what tells a caller which it is holding.
         bars: u8,
-        /// The footage rank of the field's **first** bar: 1 is the 16' bar and 9 the 1',
-        /// so a nine-bar register starts at 1 and a single Stage bar carries its own
-        /// place. `None` where the declaration does not place the bar in a register —
-        /// the Electro 5's bass manual, whose two bars no published table names.
+        /// Where the field's **first** bar sits in the register: 1 is the leftmost bar,
+        /// 9 the rightmost of a nine-bar manual. A whole register starts at 1 and a
+        /// single Stage bar carries its own position.
+        ///
+        /// ⚠️ A position, not a pitch. Which harmonic each position draws is the organ
+        /// model's business — the B3's 16'/5⅓'/8' series is not the Vox's or the
+        /// Farfisa's, and the same nine positions serve all of them here — so labelling
+        /// them is for a caller that knows which model the field belongs to.
+        ///
+        /// `None` where the declaration does not place the bar in a register at all: the
+        /// Electro 5's bass manual, whose two bars nothing establishes the position of.
         rank: Option<u8>,
+        /// Bits one bar occupies.
+        bits_per_bar: u8,
+        /// Which end of the field the first bar sits at. Only meaningful above one bar,
+        /// and the reason it is here: the Electro 5 packs its nine nibbles high-first
+        /// while the arpeggiator packs its steps low-first, so a caller reading one by
+        /// the other's convention draws the register mirrored.
+        order: PackedOrder,
     },
     /// The value a performance control morphs its parent parameter *to*. Belongs on that
     /// parent's control, not on one of its own.
@@ -119,8 +133,13 @@ pub enum ControlKind {
         /// name implies, so the slot stands alone until one is placed beside it.
         of: Option<&'static str>,
     },
-    /// A per-step pattern grid, `steps` steps of `bits_per_step` bits, lowest bits first.
-    Pattern { steps: u8, bits_per_step: u8 },
+    /// A per-step pattern grid: `steps` steps of `bits_per_step` bits, the first step at
+    /// the `order` end.
+    Pattern {
+        steps: u8,
+        bits_per_step: u8,
+        order: PackedOrder,
+    },
     /// An opaque id into one of the instrument's libraries.
     Reference(Library),
     /// A signed shift, reading in `unit`.
@@ -143,28 +162,49 @@ impl ControlKind {
         }
     }
 
-    /// Place a drawbar in its register: `rank` 1 is the 16' bar, 9 the 1'.
+    /// Place a drawbar in its register: `rank` 1 is the leftmost bar.
     ///
     /// Applied by `#[bitbody]` from a `…_N` field name, and ignored by every other kind
     /// — a field whose name happens to end in a digit is not a drawbar unless its type
     /// says so.
     pub const fn ranked(self, rank: u8) -> ControlKind {
         match self {
-            ControlKind::Drawbar { bars, .. } => ControlKind::Drawbar {
+            ControlKind::Drawbar {
+                bars,
+                bits_per_bar,
+                order,
+                ..
+            } => ControlKind::Drawbar {
                 bars,
                 rank: Some(rank),
+                bits_per_bar,
+                order,
             },
             other => other,
         }
     }
 }
 
+/// Which end of a field the first of its packed values sits at.
+///
+/// Only a field holding several values in one slot needs it — a drawbar register, a
+/// pattern row — and such a field cannot be drawn without it: read from the wrong end,
+/// the register comes out mirrored and looks like a plausible registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PackedOrder {
+    /// The first value occupies the most significant bits.
+    HighFirst,
+    /// The first value occupies the least significant bits.
+    LowFirst,
+}
+
 /// One of the instrument's stored libraries — what a [`ControlKind::Reference`] id is an
 /// id *into*.
 ///
-/// The vocabulary is the instrument's own storage classes, which is also what a device
-/// session opens and what a backup archive is divided by. A file carries the id alone, so
-/// nothing but this says which catalogue resolves it.
+/// A file carries the id alone, so nothing but this says which catalogue resolves it.
+/// Listed here are the libraries something in a decoded body actually refers to; the
+/// instruments hold others (the live slots, the settings singleton) that no reference
+/// points at, and they are not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Library {
     /// Piano instruments (`.npno`).
@@ -182,9 +222,12 @@ impl Library {
     ///
     /// It exists because a const generic parameter cannot be an enum: a type that carries
     /// its library — [`LibraryRefOf`](crate::components::LibraryRefOf) — carries this
-    /// instead and turns it back with [`from_code`](Self::from_code). The numbers are the
-    /// object-class codes the instruments use on the wire, so the two vocabularies line
-    /// up when a caller has both.
+    /// instead and turns it back with [`from_code`](Self::from_code).
+    ///
+    /// The numbers are the object-class codes the instruments use on the wire, chosen so
+    /// the two vocabularies line up for a caller holding both. ⚠️ Nothing enforces that:
+    /// `nord-usb` owns its own table and this crate does not depend on it, so a change
+    /// there is not a compile error here.
     pub const fn code(self) -> u8 {
         match self {
             Library::Piano => 1,
@@ -194,15 +237,29 @@ impl Library {
         }
     }
 
-    /// The library a [`code`](Self::code) names. A code naming none is a compile error at
-    /// the type that spelled it.
-    pub const fn from_code(code: u8) -> Library {
+    /// The library a [`code`](Self::code) names, or `None` — most bytes name none.
+    pub const fn from_code(code: u8) -> Option<Library> {
         match code {
-            1 => Library::Piano,
-            3 => Library::Sample,
-            4 => Library::Program,
-            5 => Library::SetList,
-            _ => panic!("no library has this code"),
+            1 => Some(Library::Piano),
+            3 => Some(Library::Sample),
+            4 => Some(Library::Program),
+            5 => Some(Library::SetList),
+            _ => None,
+        }
+    }
+
+    /// The library a [`code`](Self::code) names, for the type-level parameter this
+    /// vocabulary exists to carry.
+    ///
+    /// ⚠️ Panics on a code naming none. That is a build failure only where the value is
+    /// *forced* at compile time, which the aliases in [`components`](crate::components)
+    /// are — a `LibraryRefOf<7>` nobody places compiles clean and fails when a field
+    /// declared with it asks for its control kind. Use [`from_code`](Self::from_code)
+    /// anywhere a code arrives at runtime.
+    pub const fn expect_code(code: u8) -> Library {
+        match Library::from_code(code) {
+            Some(library) => library,
+            None => panic!("no library has this code"),
         }
     }
 
@@ -441,17 +498,13 @@ mod tests {
                 of: Some("organ_a_volume")
             }
         );
-        assert_eq!(
-            ControlKind::Drawbar {
-                bars: 1,
-                rank: None
-            }
-            .ranked(7),
-            ControlKind::Drawbar {
-                bars: 1,
-                rank: Some(7)
-            }
-        );
+        let bar = |rank| ControlKind::Drawbar {
+            bars: 1,
+            rank,
+            bits_per_bar: 4,
+            order: PackedOrder::HighFirst,
+        };
+        assert_eq!(bar(None).ranked(7), bar(Some(7)));
 
         let knob = ControlKind::Knob(Unit::Panel10);
         assert_eq!(knob.morphing("delay_tempo"), knob);
