@@ -60,6 +60,7 @@ use crate::{Entity, Live, Program};
 /// ⚠️ Not the Electro 5's `CenterPanel` and friends, which are *bodies* — nested
 /// `#[bitbody]`s at a byte range. This is the panel as a reader sees it, and it cuts
 /// across those bodies freely.
+#[derive(Debug)]
 pub struct Panel {
     /// The sections, in the order a reader meets them.
     pub groups: &'static [Group],
@@ -72,6 +73,7 @@ pub struct Panel {
 }
 
 /// One run of controls under a title, and the state that makes them relevant.
+#[derive(Debug)]
 pub struct Group {
     pub title: &'static str,
     /// Registry paths, in reading order.
@@ -88,11 +90,13 @@ pub struct Group {
 }
 
 /// A condition on the body's own values: satisfied when **any** match holds.
+#[derive(Debug)]
 pub struct Relevance {
     pub any_of: &'static [Match],
 }
 
 /// One field holding one of a set of values.
+#[derive(Debug)]
 pub struct Match {
     /// A registry path of the same body.
     pub field: &'static str,
