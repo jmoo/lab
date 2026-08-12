@@ -45,6 +45,8 @@
 
 use super::raw::raw_format;
 
+pub mod fx;
+pub use fx::FxChain;
 pub mod program;
 pub use program::Program;
 

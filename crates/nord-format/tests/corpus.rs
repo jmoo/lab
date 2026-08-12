@@ -422,7 +422,7 @@ fn stage4_bodies_decode_to_panel_values() {
                 assert!(p.synth_a_filter_type.as_u8() <= 5, "{where_}");
                 assert!(p.synth_a_lfo_shape.as_u8() <= 4, "{where_}");
                 assert!(p.synth_a_voice_priority.as_u8() <= 2, "{where_}");
-                assert!(p.organ_fx_reverb_type.as_u8() <= 11, "{where_}");
+                assert!(p.organ_fx.reverb_type.as_u8() <= 11, "{where_}");
                 assert!(octave_shift(p.organ_a_octave_shift.as_u8()), "{where_}");
                 split_on += usize::from(p.split_enabled);
                 programs += 1;
@@ -430,14 +430,14 @@ fn stage4_bodies_decode_to_panel_values() {
             (Entity::OrganPreset(OrganPreset::Stage4(o)), _) => {
                 assert!(o.organ_a_model.as_u8() <= 5, "{where_}");
                 assert!(o.organ_b_model.as_u8() <= 5, "{where_}");
-                assert!(o.organ_fx_reverb_type.as_u8() <= 11, "{where_}");
+                assert!(o.organ_fx.reverb_type.as_u8() <= 11, "{where_}");
                 assert!(octave_shift(o.organ_a_octave_shift.as_u8()), "{where_}");
                 organs += 1;
             }
             (Entity::PianoPreset(PianoPreset::Stage4(n)), _) => {
                 assert!(n.piano_a_type.as_u8() <= 5, "{where_}");
                 assert!(n.piano_b_type.as_u8() <= 5, "{where_}");
-                assert!(n.piano_a_fx_reverb_type.as_u8() <= 11, "{where_}");
+                assert!(n.piano_a_fx.reverb_type.as_u8() <= 11, "{where_}");
                 assert!(octave_shift(n.piano_a_octave_shift.as_u8()), "{where_}");
                 pianos += 1;
             }
@@ -446,7 +446,7 @@ fn stage4_bodies_decode_to_panel_values() {
                 assert!(y.synth_b_filter_type.as_u8() <= 5, "{where_}");
                 assert!(y.synth_a_lfo_shape.as_u8() <= 4, "{where_}");
                 assert!(y.synth_a_voice_priority.as_u8() <= 2, "{where_}");
-                assert!(y.synth_a_fx_reverb_type.as_u8() <= 11, "{where_}");
+                assert!(y.synth_a_fx.reverb_type.as_u8() <= 11, "{where_}");
                 assert!(octave_shift(y.synth_a_octave_shift.as_u8()), "{where_}");
                 synths += 1;
             }

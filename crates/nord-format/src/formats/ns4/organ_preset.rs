@@ -4,6 +4,7 @@
 //! keyboard zone — that belongs to the program that loads the preset. The two
 //! layers still share one effects chain, so its fields carry no layer.
 
+use super::fx::FxChain;
 use crate::cbin::{self, Cbin};
 use crate::error::Error;
 use crate::types::RangedU8;
@@ -222,130 +223,10 @@ pub struct OrganPreset {
     pub organ_b_percussion_decay_fast_enabled: bool,
     #[bits(660..=660)]
     pub organ_b_percussion_volume_soft_enabled: bool,
-    #[bits(680..=680)]
-    pub organ_fx_mod_1_enabled: bool,
-    #[bits(681..=681)]
-    pub organ_fx_mod_1_master_clock_enabled: bool,
-    #[bits(682..=688)]
-    pub organ_fx_mod_1_rate: RangedU8<127>,
-    #[bits(689..=696)]
-    pub organ_fx_mod_1_rate_wheel: u8,
-    #[bits(697..=704)]
-    pub organ_fx_mod_1_rate_aftertouch: u8,
-    #[bits(705..=712)]
-    pub organ_fx_mod_1_rate_ctrl_pedal: u8,
-    #[bits(713..=719)]
-    pub organ_fx_mod_1_amount: RangedU8<127>,
-    #[bits(720..=727)]
-    pub organ_fx_mod_1_amount_wheel: u8,
-    #[bits(728..=735)]
-    pub organ_fx_mod_1_amount_aftertouch: u8,
-    #[bits(736..=743)]
-    pub organ_fx_mod_1_amount_ctrl_pedal: u8,
-    #[bits(744..=747)]
-    pub organ_fx_mod_1_mode: RangedU8<15>,
-    #[bits(748..=748)]
-    pub organ_fx_mod_2_enabled: bool,
-    #[bits(749..=755)]
-    pub organ_fx_mod_2_rate: RangedU8<127>,
-    #[bits(756..=763)]
-    pub organ_fx_mod_2_rate_wheel: u8,
-    #[bits(764..=771)]
-    pub organ_fx_mod_2_rate_aftertouch: u8,
-    #[bits(772..=779)]
-    pub organ_fx_mod_2_rate_ctrl_pedal: u8,
-    #[bits(780..=786)]
-    pub organ_fx_mod_2_amount: RangedU8<127>,
-    #[bits(787..=794)]
-    pub organ_fx_mod_2_amount_wheel: u8,
-    #[bits(795..=802)]
-    pub organ_fx_mod_2_amount_aftertouch: u8,
-    #[bits(803..=810)]
-    pub organ_fx_mod_2_amount_ctrl_pedal: u8,
-    #[bits(811..=814)]
-    pub organ_fx_mod_2_mode: RangedU8<15>,
-    #[bits(815..=815)]
-    pub organ_fx_amp_sim_eq_enabled: bool,
-    #[bits(816..=822)]
-    pub organ_fx_amp_sim_eq_treb: RangedU8<127>,
-    #[bits(823..=829)]
-    pub organ_fx_amp_sim_eq_mid: RangedU8<127>,
-    #[bits(830..=836)]
-    pub organ_fx_amp_sim_eq_bass: RangedU8<127>,
-    #[bits(837..=843)]
-    pub organ_fx_amp_sim_eq_freq: RangedU8<127>,
-    #[bits(844..=851)]
-    pub organ_fx_amp_sim_eq_freq_wheel: u8,
-    #[bits(852..=859)]
-    pub organ_fx_amp_sim_eq_freq_aftertouch: u8,
-    #[bits(860..=867)]
-    pub organ_fx_amp_sim_eq_freq_ctrl_pedal: u8,
-    #[bits(868..=874)]
-    pub organ_fx_amp_sim_eq_drive: RangedU8<127>,
-    #[bits(875..=882)]
-    pub organ_fx_amp_sim_eq_drive_wheel: u8,
-    #[bits(883..=890)]
-    pub organ_fx_amp_sim_eq_drive_aftertouch: u8,
-    #[bits(891..=898)]
-    pub organ_fx_amp_sim_eq_drive_ctrl_pedal: u8,
-    #[bits(903..=903)]
-    pub organ_fx_comp_enabled: bool,
-    #[bits(904..=910)]
-    pub organ_fx_comp_amount: RangedU8<127>,
-    #[bits(911..=911)]
-    pub organ_fx_comp_response: bool,
-    #[bits(912..=912)]
-    pub organ_fx_delay_enabled: bool,
-    #[bits(913..=913)]
-    pub organ_fx_delay_tempo_master_clock_enabled: bool,
-    #[bits(914..=920)]
-    pub organ_fx_delay_tempo: RangedU8<127>,
-    #[bits(928..=935)]
-    pub organ_fx_delay_tempo_wheel: u8,
-    #[bits(936..=943)]
-    pub organ_fx_delay_tempo_aftertouch: u8,
-    #[bits(944..=951)]
-    pub organ_fx_delay_tempo_ctrl_pedal: u8,
-    #[bits(973..=979)]
-    pub organ_fx_delay_mix: RangedU8<127>,
-    #[bits(980..=987)]
-    pub organ_fx_delay_mix_wheel: u8,
-    #[bits(988..=995)]
-    pub organ_fx_delay_mix_aftertouch: u8,
-    #[bits(996..=1003)]
-    pub organ_fx_delay_mix_ctrl_pedal: u8,
-    #[bits(1004..=1004)]
-    pub organ_fx_delay_normal_analog: bool,
-    #[bits(1005..=1005)]
-    pub organ_fx_delay_ping_pong_enabled: bool,
-    #[bits(1006..=1007)]
-    pub organ_fx_delay_filter_type: RangedU8<3>,
-    #[bits(1008..=1014)]
-    pub organ_fx_delay_feedback: RangedU8<127>,
-    #[bits(1015..=1022)]
-    pub organ_fx_delay_feedback_wheel: u8,
-    #[bits(1023..=1030)]
-    pub organ_fx_delay_feedback_aftertouch: u8,
-    #[bits(1031..=1038)]
-    pub organ_fx_delay_feedback_ctrl_pedal: u8,
-    #[bits(1039..=1042)]
-    pub organ_fx_delay_effects: RangedU8<15>,
-    #[bits(1043..=1043)]
-    pub organ_fx_reverb_enabled: bool,
-    #[bits(1044..=1050)]
-    pub organ_fx_reverb_amount: RangedU8<127>,
-    #[bits(1051..=1058)]
-    pub organ_fx_reverb_amount_wheel: u8,
-    #[bits(1059..=1066)]
-    pub organ_fx_reverb_amount_aftertouch: u8,
-    #[bits(1067..=1074)]
-    pub organ_fx_reverb_amount_ctrl_pedal: u8,
-    #[bits(1075..=1076)]
-    pub organ_fx_reverb_dark_bright: RangedU8<3>,
-    #[bits(1077..=1080)]
-    pub organ_fx_reverb_type: RangedU8<15>,
-    #[bits(1085..=1088)]
-    pub organ_fx_amp_sim_eq_mode: RangedU8<15>,
+
+    /// The organ section's effects chain.
+    #[at(85..137)]
+    pub organ_fx: FxChain,
 }
 
 pub fn read_from(reader: &mut (impl Read + Seek)) -> Result<Cbin<OrganPreset>, Error> {
