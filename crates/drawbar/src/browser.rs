@@ -621,8 +621,13 @@ impl Browser {
         let mut disconnect = false;
         let mut send_all = false;
         let owed = workspace.pending().len();
+        let firmware = device.state.firmware();
         self.heading(ui, &product, |ui| {
             dot(ui, crate::app::good(ui.visuals())).on_hover_text("attached");
+            if let Some(firmware) = &firmware {
+                ui.label(egui::RichText::new(firmware).small().weak())
+                    .on_hover_text("the firmware version the instrument reports");
+            }
             disconnect = ui.small_button("Disconnect").clicked();
             if owed > 0 {
                 send_all = ui
@@ -678,8 +683,9 @@ impl Browser {
                     }
                 });
                 // One flat list, labelled the way the panel and the CLI label a slot.
-                // Banks are a numbering, not a container: grouping by them buried the
-                // row you were looking for behind a header you had to open.
+                // Banks are a numbering, not a container. A bank the device gave a name
+                // of its own gets a caption over its rows — for pianos those names are
+                // the panel's categories, and this is the only place they appear.
                 let banks = device.state.banks_of(class);
                 if banks.is_empty() {
                     ui.label(egui::RichText::new("nothing read yet").small().weak());
@@ -688,6 +694,18 @@ impl Browser {
                     let Some(slots) = device.state.bank(class, bank) else {
                         continue;
                     };
+                    if let Some(name) = device
+                        .state
+                        .bank_name(class, bank)
+                        .filter(|name| worth_captioning(bank, name))
+                    {
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new(format!("{bank} · {name}"))
+                                .small()
+                                .weak(),
+                        );
+                    }
                     for index in 0..slots.len() {
                         let at = Location::from_user(bank, index as u32 + 1);
                         self.slot_row(ui, device, class, at, acts);
@@ -722,6 +740,7 @@ impl Browser {
             return;
         }
 
+        let loaded = device.state.focused(class) == Some(at);
         let drawn = row(
             ui,
             selected,
@@ -729,10 +748,14 @@ impl Browser {
                 at: Some(shown(at)),
                 name: held.as_deref().unwrap_or("empty"),
                 faint: held.is_none(),
+                loaded,
                 ..Cells::default()
             },
         );
-        let response = drawn.response;
+        let mut response = drawn.response;
+        if loaded {
+            response = response.on_hover_text("on the instrument's panel now");
+        }
 
         // ⚠️ A piano is a library of hundreds of megabytes, read whole into memory by
         // anything that fetches it. The folder lists what is installed and offers no way
@@ -1018,6 +1041,8 @@ pub struct Cells<'a> {
     /// The name is a stand-in rather than a real one.
     pub faint: bool,
     pub dirty: bool,
+    /// The instrument's panel has this slot loaded.
+    pub loaded: bool,
 }
 
 /// A drawn row: what it answered, and where its name ended up.
@@ -1071,11 +1096,17 @@ fn row(ui: &mut egui::Ui, selected: bool, cells: &Cells) -> Drawn {
     }
 
     let mut x = rect.left() + 4.0;
+    let gutter = egui::pos2(x + 3.5, rect.center().y);
+    // One gutter, two marks that never meet: only a local asset is dirty, and only a slot
+    // is loaded on the panel. A ring rather than a second disc, because two dots that
+    // differ in nothing but colour read as the same mark.
     if cells.dirty {
-        painter.circle_filled(
-            egui::pos2(x + 3.5, rect.center().y),
-            3.5,
-            crate::app::warn(ui.visuals()),
+        painter.circle_filled(gutter, 3.5, crate::app::warn(ui.visuals()));
+    } else if cells.loaded {
+        painter.circle_stroke(
+            gutter,
+            3.0,
+            egui::Stroke::new(1.5, crate::app::good(ui.visuals())),
         );
     }
     x += 10.0;
@@ -1107,6 +1138,18 @@ fn row(ui: &mut egui::Ui, selected: bool, cells: &Cells) -> Drawn {
         );
     }
     Drawn { response, name }
+}
+
+/// Whether a bank's own name says anything the number beside every row does not.
+///
+/// Programs come back called "Bank 1", "Bank 2" — a caption repeating the number the
+/// location column already carries is a line of furniture. Pianos come back called
+/// "Grand" and "Upright", which is the whole reason to show a caption at all.
+fn worth_captioning(bank: u32, name: &str) -> bool {
+    let name = name.trim();
+    !name.is_empty()
+        && name != bank.to_string()
+        && !name.eq_ignore_ascii_case(&format!("bank {bank}"))
 }
 
 /// Where an asset is owed, for the badge that says so.
@@ -1457,11 +1500,15 @@ mod tests {
             workspace.create(kind, &mut log).unwrap();
         }
         if with_device {
-            // Every row shape a list can hold: a named slot, a vacant one, and a class
-            // that was never read.
+            // Every row shape a list can hold: a named slot, a vacant one, the slot the
+            // panel is on, and a class that was never read.
             device.pretend_scanned(ObjectClass::Program, 7, &["Africa Split", "", "Squabble B"]);
             device.pretend_scanned(ObjectClass::Program, 8, &["Bass Manual"]);
             device.pretend_scanned(ObjectClass::SetList, 1, &["Sunday"]);
+            device.pretend_focused(ObjectClass::Program, Location { bank: 6, slot: 2 });
+            // Named banks, which is what a piano's categories arrive as.
+            device.pretend_scanned(ObjectClass::Piano, 1, &["Royal Grand 3D"]);
+            device.pretend_geometry(ObjectClass::Piano, &[("Grand", 1), ("Upright", 1)]);
         }
 
         // Twice: the second pass runs with the widget state the first left behind.
@@ -1785,6 +1832,20 @@ mod tests {
             renamed("Africa Split", "  LA Grand  "),
             Some("LA Grand".into())
         );
+    }
+
+    /// A caption earns its line by saying something the location column does not. The
+    /// piano categories do; "Bank 1" over the rows already labelled `1:…` does not.
+    #[test]
+    fn a_bank_caption_only_shows_what_the_number_does_not_say() {
+        assert!(worth_captioning(1, "Grand"));
+        assert!(worth_captioning(2, "Upright"));
+        for furniture in ["Bank 1", "bank 1", "BANK 1", "1", " ", ""] {
+            assert!(!worth_captioning(1, furniture), "{furniture:?}");
+        }
+        // The number has to match to be redundant — "Bank 2" over bank 1 is worth saying,
+        // because one of the two is wrong and hiding it would hide that.
+        assert!(worth_captioning(1, "Bank 2"));
     }
 
     /// A folder holds exactly the kind named after it.

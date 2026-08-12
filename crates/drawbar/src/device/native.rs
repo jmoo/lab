@@ -96,16 +96,23 @@ fn open() -> Result<(DeviceCard, UsbTransport), String> {
         ));
     }
 
+    let transport = UsbTransport::open(&info).map_err(|e| e.to_string())?;
+    // Endpoint 0, outside the bulk protocol and outside any session, so it is answerable
+    // here and on an instrument that has stopped serving the protocol entirely. A device
+    // that will not answer is still a device this app can drive, so a failure costs the
+    // version line and nothing else.
+    let firmware = transport.identity().ok().map(|id| id.firmware);
+
     let card = DeviceCard {
+        firmware,
+        manufacturer: info.manufacturer_string().map(str::to_string),
         product: info
             .product_string()
             .unwrap_or("unnamed device")
             .to_string(),
-        manufacturer: info.manufacturer_string().map(str::to_string),
-        vendor_id: info.vendor_id(),
         product_id: info.product_id(),
         serial: info.serial_number().map(str::to_string),
+        vendor_id: info.vendor_id(),
     };
-    let transport = UsbTransport::open(&info).map_err(|e| e.to_string())?;
     Ok((card, transport))
 }

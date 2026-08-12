@@ -85,13 +85,17 @@ impl Link {
                 }
             };
             let card = DeviceCard {
+                // ⚠️ The desktop reads this over a vendor control transfer on endpoint 0.
+                // WebUSB can issue one, but nothing in `nord_usb`'s web transport does,
+                // so the browser build shows no firmware rather than a guess at one.
+                firmware: None,
+                manufacturer: device.manufacturer_name(),
                 product: device
                     .product_name()
                     .unwrap_or_else(|| "unnamed device".into()),
-                manufacturer: device.manufacturer_name(),
-                vendor_id: device.vendor_id(),
                 product_id: device.product_id(),
                 serial: device.serial_number(),
+                vendor_id: device.vendor_id(),
             };
             let chosen = device.clone();
             match WebUsbTransport::open(device).await {

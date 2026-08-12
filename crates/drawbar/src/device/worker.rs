@@ -10,11 +10,12 @@
 //! reports.
 
 use std::sync::mpsc::Sender;
+use std::time::Duration;
 
 use eframe::egui;
 use nord_usb::session::ReadWrite;
 use nord_usb::transport::Transport;
-use nord_usb::wire::{Dependency, ProgramInfo};
+use nord_usb::wire::{Bank, Dependency, ProgramInfo};
 use nord_usb::{op, Error, Location, ObjectClass, Session};
 
 use super::{DeviceCmd, DeviceEvent, Outgoing};
@@ -172,12 +173,15 @@ async fn execute<T: Transport>(
             slots,
             banks,
         } => {
-            let (read, items) = scan_class(t, class, slots, banks, emit, changed)
+            let walked = scan_class(t, class, slots, banks, emit, changed)
                 .await
                 .map_err(spoil(gone, None))?;
             Ok(Some(format!(
-                "{}: {read} banks, {items} items, one session",
-                class.label()
+                "{}: {} banks, {} items, {}, one session",
+                class.label(),
+                walked.banks,
+                walked.items,
+                walked.how,
             )))
         }
 
@@ -298,6 +302,20 @@ async fn put<T: Transport>(
     emit: &Emit,
     gone: &mut bool,
 ) -> Result<Result<String, String>, Error> {
+    // The destination exists, per the device's own geometry, before anything is deleted
+    // for it. Without this an impossible address is discovered once the transfer is under
+    // way and reported as a status code rather than as "there is no bank 7".
+    //
+    // ⚠️ **Fails open, and the single arm is the whole of it.** Only a check that came
+    // back and said no may stop a write; a check that could not be *made* — a truncated
+    // reply, a read that timed out — must not, because this is a read-only preflight and
+    // the write path answers for the address itself. Handing its error out of here would
+    // also feed the transport test that decides the instrument has gone, so a preflight
+    // that merely timed out would drop every cached name in the browser.
+    if let Ok(Some(why)) = op::check_address(s, at).await {
+        return Ok(Err(format!("{}: {why}", shown(at))));
+    }
+
     let existing = match op::info(s, at).await {
         Ok(info) => Some(info),
         Err(Error::DeviceStatus(1)) => None,
@@ -564,11 +582,32 @@ async fn slot_info<T: Transport>(
     finish(r, closed)
 }
 
+/// How long any single read in a walk may take.
+///
+/// Every read is bounded either way — a session with no limit of its own still holds to
+/// [`nord_usb::session::READ_LIMIT`] — so this buys speed of failure and nothing else: a
+/// walk that has wedged reports in ten seconds rather than thirty, and its closing
+/// exchanges are bounded with it. A walk is dozens of small reads that a working
+/// instrument answers in milliseconds, which is what makes the tighter bound safe here
+/// and not on a transfer.
+const SCAN_READ_LIMIT: Duration = Duration::from_secs(10);
+
+/// ⚠️ A ceiling on a walk, not a device fact. What really ends a walk is the device's own
+/// out-of-range answer; this bounds the total for an instrument that never gives one.
+const MOST_OCCUPIED: usize = 4096;
+
+/// How many vacant slots in a row end a walk over a bank whose capacity the device would
+/// not state.
+///
+/// ⚠️ A guard, not a device fact: such a bank has no stated end, so without this a device
+/// that answers "empty" rather than "out of range" past its last item would be asked
+/// [`MOST_OCCUPIED`] times.
+const VACANT_RUN: u32 = 32;
+
 /// Every slot of one bank, in one session.
 ///
 /// A vacant slot is a `None` row rather than an error, and the walk stops where the
-/// device says the class's slot space ends. That matters because nothing on the wire
-/// reports how the panel divides a class into banks.
+/// device says the class's slot space ends.
 async fn scan_bank<T: Transport>(
     t: &mut T,
     class: ObjectClass,
@@ -577,14 +616,40 @@ async fn scan_bank<T: Transport>(
     changed: &mut bool,
 ) -> Result<Vec<Option<ProgramInfo>>, Error> {
     one_session!(t, class, changed, |s| {
+        s.set_read_limit(SCAN_READ_LIMIT);
         walk_bank(&mut s, bank, slots).await
     })
 }
 
-/// One class end to end: its counters, then every bank, all inside one session.
+/// One bank a walk will read.
+struct Planned {
+    /// The bank number the panel labels it with.
+    bank: u32,
+    /// Slots the device says it holds. `None` where it reported the unbounded sentinel,
+    /// or where nobody asked it and the guess stands in.
+    slots: Option<u32>,
+}
+
+/// What one class's walk did, for the line the activity log gets.
+struct Walked {
+    banks: u32,
+    items: usize,
+    /// Which of the two walks found the slots.
+    how: &'static str,
+}
+
+/// One class end to end, all inside one session: its geometry, its counters, the slot the
+/// panel is on, then every bank.
 ///
-/// The status is read here rather than beforehand because it is what bounds the walk —
-/// and reading it in the same session is the whole point of the shape.
+/// The device is asked to divide the class into banks itself ([`op::banks`]) — which for
+/// pianos names the panel's categories — and only where it will not does the caller's
+/// `per_bank`/`cap` guess stand in.
+///
+/// Slots are found by cursor ([`op::occupied_slots`]) on a class sparse enough for it to
+/// pay — see [`worth_the_cursor`] — and by asking about every address otherwise. The
+/// cursor is also refused outright with [`op::ENUMERATION_DISABLED`]; see that constant
+/// for when. Either way a vacant slot is a `None` row, so the banks that leave here have
+/// the same shape.
 async fn scan_class<T: Transport>(
     t: &mut T,
     class: ObjectClass,
@@ -592,34 +657,213 @@ async fn scan_class<T: Transport>(
     cap: u32,
     emit: &Emit,
     changed: &mut bool,
-) -> Result<(u32, usize), Error> {
+) -> Result<Walked, Error> {
     let mut banks = 0;
     let mut items = 0;
+    let mut how = "slot by slot";
     let counted = one_session!(t, class, changed, |s| {
+        // Bounds the closing exchanges as well as the walk, which is the half a
+        // per-command timeout would not cover — see [`SCAN_READ_LIMIT`].
+        s.set_read_limit(SCAN_READ_LIMIT);
+
         let status = op::status(&mut s).await?;
-        let expected = status.slots().map(|slots| slots.div_ceil(per_bank));
+        let held = status.count;
+        let geometry = match op::banks(&mut s, class.to_raw()).await {
+            Ok(geometry) => Some(geometry),
+            // The instrument answered, and what it said is that it will not divide this
+            // class up. A refusal leaves the session in step, so the walk carries on.
+            Err(Error::DeviceStatus(_)) => None,
+            Err(e) => return Err(e),
+        };
+
+        let counted = status.slots().map(|slots| slots.div_ceil(per_bank));
+        let (plan, ends_known) = match &geometry {
+            Some(geometry) => (planned(geometry), true),
+            None => (
+                guessed(counted.unwrap_or(cap).min(cap), per_bank),
+                counted.is_some(),
+            ),
+        };
+        let expected = match geometry.is_some() {
+            true => Some(plan.len() as u32),
+            false => counted,
+        };
+        if let Some(geometry) = geometry {
+            emit.send(DeviceEvent::Geometry {
+                class,
+                banks: geometry,
+            });
+        }
         emit.send(DeviceEvent::ClassStatus {
             class,
             status,
             banks: expected,
         });
-        for bank in 1..=expected.unwrap_or(cap).min(cap) {
-            let slots = walk_bank(&mut s, bank, per_bank).await?;
-            // A bank the device refused outright is past the end of the class.
-            if slots.is_empty() {
+
+        // Where the panel is, which the browser marks. A refusal is an ordinary answer —
+        // nothing of the class is loaded, and the library classes have no focus at all —
+        // so it costs a dot and not a word.
+        match op::focus(&mut s).await {
+            Ok(at) => emit.send(DeviceEvent::Focus { class, at }),
+            Err(Error::DeviceStatus(_)) => {}
+            Err(e) => return Err(e),
+        }
+
+        // Two gates, and they are different questions. The cursor reports content and
+        // never the end of a class, so a plan with only a guessed ceiling has nothing to
+        // stop it painting empty banks past the last real one; and on a full class the
+        // cursor costs more round trips than it saves.
+        let capacity: Option<u32> = plan.iter().map(|planned| planned.slots).sum();
+        let sparse = capacity.is_none_or(|capacity| worth_the_cursor(held, capacity));
+        let found = match ends_known && sparse {
+            true => occupied(&mut s, cap_slots(&plan, held)).await?,
+            false => None,
+        };
+
+        if let Some(found) = found {
+            how = "by cursor";
+            for planned in &plan {
+                let slots = shape(&found, planned);
+                banks += 1;
+                items += slots.iter().filter(|slot| slot.is_some()).count();
+                emit.send(DeviceEvent::BankScanned {
+                    class,
+                    bank: planned.bank,
+                    slots,
+                });
+            }
+            return Ok::<(), Error>(());
+        }
+
+        for planned in &plan {
+            let slots = match planned.slots {
+                Some(capacity) => walk_bank(&mut s, planned.bank, capacity).await?,
+                None => walk_open_bank(&mut s, planned.bank).await?,
+            };
+            // A bank the device refused outright is past the end of the class — but only
+            // where nothing said where that end is. Told its banks, the walk reads them
+            // all, because an empty one is not a last one.
+            if slots.is_empty() && !ends_known {
                 break;
             }
-            let short = slots.len() as u32 != per_bank;
+            let short = planned
+                .slots
+                .is_some_and(|asked| slots.len() as u32 != asked);
             banks += 1;
             items += slots.iter().filter(|slot| slot.is_some()).count();
-            emit.send(DeviceEvent::BankScanned { class, bank, slots });
-            if short {
+            emit.send(DeviceEvent::BankScanned {
+                class,
+                bank: planned.bank,
+                slots,
+            });
+            // A short bank is the end of the class only when nothing said where that is.
+            // Told the banks, the walk trusts them: a category that holds fewer than its
+            // capacity is a short bank and not a last one.
+            if short && !ends_known {
                 break;
             }
         }
         Ok::<(), Error>(())
     });
-    counted.map(|()| (banks, items))
+    counted.map(|()| Walked { banks, items, how })
+}
+
+/// The device's own banks, as a walk plan.
+fn planned(geometry: &[Bank]) -> Vec<Planned> {
+    geometry
+        .iter()
+        .map(|bank| Planned {
+            bank: bank.index + 1,
+            slots: bank.is_bounded().then_some(bank.slots),
+        })
+        .collect()
+}
+
+/// A walk plan for an instrument that would not report its banks.
+fn guessed(banks: u32, per_bank: u32) -> Vec<Planned> {
+    (1..=banks)
+        .map(|bank| Planned {
+            bank,
+            slots: Some(per_bank),
+        })
+        .collect()
+}
+
+/// Whether the cursor walk is worth its round trips on a class this full.
+///
+/// The cursor costs roughly two exchanges per **occupied** slot — one to step onto it and
+/// one to read its name — plus a probe per bank; asking about every address costs one per
+/// **address**. So the cursor wins on a sparse class, loses on a full one, and the two
+/// cross at half full.
+///
+/// ⚠️ Not a micro-optimisation: a factory instrument's program banks are full, so the
+/// wrong answer here makes the commonest scan there is pay double.
+fn worth_the_cursor(held: u32, capacity: u32) -> bool {
+    capacity > 0 && held.saturating_mul(2) < capacity
+}
+
+/// How many occupied slots the cursor walk may report before it is cut off.
+///
+/// ⚠️ A bank the device stated no capacity for contributes the whole remaining budget,
+/// never the caller's per-bank guess. A sample library is one such bank, and capping it at
+/// the 50 a program bank holds would report the first 50 of 120 samples as though that
+/// were all of them — with no error raised anywhere, and the folder's own header saying
+/// otherwise.
+fn cap_slots(plan: &[Planned], held: u32) -> usize {
+    let stated: Option<u32> = plan.iter().map(|planned| planned.slots).sum();
+    match stated {
+        Some(stated) => (stated as usize).max(held as usize),
+        None => MOST_OCCUPIED,
+    }
+    .clamp(1, MOST_OCCUPIED)
+}
+
+/// Every occupied slot of the session's class, with the name of what is in it.
+///
+/// `Ok(None)` where the instrument refused to enumerate — [`op::ENUMERATION_DISABLED`]
+/// above all, whose documentation says when — which is the caller's cue to walk every
+/// slot instead. A refusal leaves the session in step, so it may.
+async fn occupied<T: Transport, C>(
+    s: &mut Session<'_, T, C>,
+    cap: usize,
+) -> Result<Option<Vec<(Location, ProgramInfo)>>, Error> {
+    let found = match op::occupied_slots(s, cap).await {
+        Ok(found) => found,
+        Err(Error::DeviceStatus(_)) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut out = Vec::with_capacity(found.len());
+    for at in found {
+        match op::info(s, at).await {
+            Ok(info) => out.push((at, info)),
+            // A slot the cursor named and the read found vacant: something emptied it
+            // between the two. Skipped rather than failed — the rest of the class is
+            // still good, and one row is not worth losing a folder over.
+            Err(Error::DeviceStatus(1)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(Some(out))
+}
+
+/// One bank's rows, from what the cursor walk found across the whole class.
+///
+/// ⚠️ **A bank is sized to its stated capacity, or to the last thing in it where the
+/// device stated none** — and [`walk_open_bank`] holds to the same rule. The two walks
+/// have to agree: a folder that gains or loses trailing rows depending on which one read
+/// it is one the operator cannot drag into with any confidence.
+fn shape(found: &[(Location, ProgramInfo)], planned: &Planned) -> Vec<Option<ProgramInfo>> {
+    let bank = planned.bank - 1;
+    let mine: Vec<&(Location, ProgramInfo)> =
+        found.iter().filter(|(at, _)| at.bank == bank).collect();
+    let past = mine.iter().map(|(at, _)| at.slot + 1).max().unwrap_or(0);
+    let mut slots = vec![None; planned.slots.unwrap_or(past).max(past) as usize];
+    for (at, info) in mine {
+        if let Some(cell) = slots.get_mut(at.slot as usize) {
+            *cell = Some(info.clone());
+        }
+    }
+    slots
 }
 
 /// One bank's worth of `INFO`, inside a session the caller owns.
@@ -638,6 +882,40 @@ async fn walk_bank<T: Transport, C>(
             Err(Error::DeviceStatus(3)) => break,
             Err(e) => return Err(e),
         }
+    }
+    Ok(out)
+}
+
+/// One bank's worth of `INFO` where the device stated no capacity for it.
+///
+/// ⚠️ Sized to the last thing in it, which is the shape [`shape`] gives the same bank —
+/// see the invariant there. Ends on the device's out-of-range answer, on [`VACANT_RUN`]
+/// vacant slots in a row, or on the budget, in that order of preference.
+async fn walk_open_bank<T: Transport, C>(
+    s: &mut Session<'_, T, C>,
+    bank: u32,
+) -> Result<Vec<Option<ProgramInfo>>, Error> {
+    let mut out = Vec::new();
+    let mut vacant = 0;
+    for slot in 1..=MOST_OCCUPIED as u32 {
+        match op::info(s, Location::from_user(bank, slot)).await {
+            Ok(info) => {
+                vacant = 0;
+                out.push(Some(info));
+            }
+            Err(Error::DeviceStatus(1)) => {
+                vacant += 1;
+                if vacant >= VACANT_RUN {
+                    break;
+                }
+                out.push(None);
+            }
+            Err(Error::DeviceStatus(3)) => break,
+            Err(e) => return Err(e),
+        }
+    }
+    while matches!(out.last(), Some(None)) {
+        out.pop();
     }
     Ok(out)
 }
@@ -909,18 +1187,52 @@ mod wire_tests {
     ///
     /// Enough of one to drive a whole operation: the framing rule is that a reply carries
     /// the request's command `+1` and leads with a status word, and nothing on the write
-    /// path reads a reply's payload.
+    /// path reads a reply's payload. The read paths do, so the commands a scan sends —
+    /// `STATUS`, `BANKS`, `FOCUS`, `NEXT_SLOT`, `INFO` — are answered from the geometry
+    /// and contents below rather than with the blanket reply.
     ///
     /// ⚠️ The progress strings are fire-and-forget — the code that sends them never reads
     /// a reply. Queueing one for those is how the stream desyncs, so they get none.
     struct Puppet {
         heard: Vec<Message>,
         replies: VecDeque<Vec<u8>>,
-        /// The status `INFO` answers with. `1` is a vacant slot.
+        /// The status `INFO` answers with where [`Puppet::filled`] is not keeping the
+        /// contents. `1` is a vacant slot.
         info: u32,
         /// Every read fails, the way an unplugged device's does.
         deaf: bool,
+        /// The banks this device actually has, as name and capacity. `INFO` answers
+        /// out-of-range past them whether or not it will name them.
+        banks: Vec<(&'static str, u32)>,
+        /// Whether `BANKS` reports [`Puppet::banks`] or refuses to divide the class up.
+        reports_geometry: bool,
+        /// `BANKS` answers success with a reply too short to decode, which is neither a
+        /// refusal nor a dead pipe.
+        garbles_geometry: bool,
+        /// Whether `STATUS` reports counters that divide into whole items. An instrument
+        /// whose class holds variable-size things gives a walk no bank count to work
+        /// from.
+        reports_counters: bool,
+        /// Occupied addresses and their names. `None` leaves `INFO` answering
+        /// [`Puppet::info`] for every slot and nothing to enumerate.
+        filled: Option<Vec<(Location, &'static str)>>,
+        /// Whether `NEXT_SLOT` works, or answers [`op::ENUMERATION_DISABLED`].
+        enumerates: bool,
+        /// What `FOCUS` reports. `None` answers "nothing loaded".
+        focus: Option<Location>,
     }
+
+    /// The Electro 5's own division, which is what an unremarkable Puppet stands for.
+    const EIGHT_BANKS: [(&str, u32); 8] = [
+        ("Bank 1", 50),
+        ("Bank 2", 50),
+        ("Bank 3", 50),
+        ("Bank 4", 50),
+        ("Bank 5", 50),
+        ("Bank 6", 50),
+        ("Bank 7", 50),
+        ("Bank 8", 50),
+    ];
 
     impl Puppet {
         fn new(info: u32) -> Puppet {
@@ -929,6 +1241,13 @@ mod wire_tests {
                 replies: VecDeque::new(),
                 info,
                 deaf: false,
+                banks: EIGHT_BANKS.to_vec(),
+                reports_geometry: true,
+                garbles_geometry: false,
+                reports_counters: true,
+                filled: None,
+                enumerates: true,
+                focus: None,
             }
         }
 
@@ -936,6 +1255,139 @@ mod wire_tests {
             Puppet {
                 deaf: true,
                 ..Puppet::new(1)
+            }
+        }
+
+        /// A device with contents: the banks it divides them into, and what is in them.
+        fn stocked(banks: &[(&'static str, u32)], filled: &[(Location, &'static str)]) -> Puppet {
+            Puppet {
+                banks: banks.to_vec(),
+                filled: Some(filled.to_vec()),
+                ..Puppet::new(1)
+            }
+        }
+
+        /// An instrument that will not answer for its own geometry. It still has the
+        /// banks — it just will not name them.
+        fn mute_about_geometry(mut self) -> Puppet {
+            self.reports_geometry = false;
+            self
+        }
+
+        /// An instrument whose counters divide into nothing, so neither `BANKS` nor
+        /// `STATUS` says where the class ends.
+        fn mute_about_counters(mut self) -> Puppet {
+            self.reports_counters = false;
+            self
+        }
+
+        /// An instrument whose `BANKS` reply cannot be decoded — a success that yields an
+        /// error, which is neither a refusal nor a dead pipe.
+        fn garbling_geometry(mut self) -> Puppet {
+            self.garbles_geometry = true;
+            self
+        }
+
+        /// An instrument that will not enumerate its contents.
+        fn no_enumeration(mut self) -> Puppet {
+            self.enumerates = false;
+            self
+        }
+
+        fn focused_on(mut self, at: Location) -> Puppet {
+            self.focus = Some(at);
+            self
+        }
+
+        /// The contents of one address, where this device is keeping any.
+        fn holds(&self, at: Location) -> Option<&'static str> {
+            self.filled
+                .as_ref()?
+                .iter()
+                .find(|(held, _)| *held == at)
+                .map(|(_, name)| *name)
+        }
+
+        /// A scan command's answer: its status and the payload behind it. `None` leaves
+        /// the blanket reply to stand.
+        ///
+        /// ⚠️ One service only, and the guard is load-bearing: the two number their
+        /// commands independently and they collide — `BANKS` and the UI's `GOODBYE` are
+        /// both `0x02`, `PARTITIONS` and `HELLO` both `0x00`.
+        fn answer(&self, msg: &Message) -> Option<(u32, Vec<u8>)> {
+            if !matches!(msg.service, Service::Program) {
+                return None;
+            }
+            let at = || Location {
+                bank: u32::from_be_bytes(msg.args[0..4].try_into().unwrap()),
+                slot: u32::from_be_bytes(msg.args[4..8].try_into().unwrap()),
+            };
+            match msg.command {
+                cmd::STATUS if !self.reports_counters => Some((0, words(&[0, 0, 0]))),
+                cmd::STATUS => {
+                    let count = self.filled.as_ref().map_or(0, Vec::len) as u32;
+                    let total: u32 = self.banks.iter().map(|(_, slots)| slots).sum();
+                    // One block per item, so `Status::slots()` answers the bank capacity
+                    // total rather than a coincidence of the division.
+                    Some((0, words(&[count, total.saturating_sub(count), count])))
+                }
+                // A refusal, and the code is immaterial: what the walk keys on is that
+                // the instrument answered rather than that the pipe failed.
+                cmd::BANKS if !self.reports_geometry => Some((2, Vec::new())),
+                // Success, and a body `Bank::decode_all` cannot read.
+                cmd::BANKS if self.garbles_geometry => Some((0, vec![0xff, 0xff])),
+                cmd::BANKS => {
+                    let mut p = msg.args[0..4].to_vec();
+                    p.push(self.banks.len() as u8);
+                    for (name, slots) in &self.banks {
+                        p.extend_from_slice(&(name.len() as u32).to_be_bytes());
+                        p.extend_from_slice(name.as_bytes());
+                        p.extend_from_slice(&slots.to_be_bytes());
+                    }
+                    Some((0, p))
+                }
+                cmd::FOCUS => match self.focus {
+                    Some(at) => Some((0, words(&[at.bank, at.slot]))),
+                    None => Some((1, Vec::new())),
+                },
+                cmd::NEXT_SLOT if !self.enumerates => Some((op::ENUMERATION_DISABLED, Vec::new())),
+                cmd::NEXT_SLOT => {
+                    let from = at();
+                    let next =
+                        self.filled
+                            .as_ref()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|(held, _)| {
+                                (held.bank == from.bank && held.slot > from.slot)
+                                    .then_some(held.slot)
+                            });
+                    match next.min() {
+                        Some(slot) => Some((0, words(&[from.bank, slot]))),
+                        None => Some((1, Vec::new())),
+                    }
+                }
+                cmd::INFO => {
+                    let at = at();
+                    // Status 3 is "outside this instrument's slot space", which is how a
+                    // walk with nothing else to go on finds the end of a bank and of the
+                    // class.
+                    let capacity = self.banks.get(at.bank as usize).map(|(_, slots)| *slots);
+                    if capacity.is_none_or(|slots| at.slot >= slots) {
+                        return Some((3, Vec::new()));
+                    }
+                    match &self.filled {
+                        Some(_) => match self.holds(at) {
+                            Some(name) => Some((0, info_payload(at, name))),
+                            None => Some((1, Vec::new())),
+                        },
+                        None => match self.info {
+                            0 => Some((0, info_payload(at, "something"))),
+                            status => Some((status, Vec::new())),
+                        },
+                    }
+                }
+                _ => None,
             }
         }
 
@@ -956,18 +1408,36 @@ mod wire_tests {
         }
     }
 
+    /// Big-endian words, the way every argument list on this wire is laid out.
+    fn words(of: &[u32]) -> Vec<u8> {
+        of.iter().flat_map(|w| w.to_be_bytes()).collect()
+    }
+
+    /// An `INFO` reply body: the fixed words, then the length-prefixed name, then the
+    /// `0xffffffff` that stands for "this device reported no checksum".
+    fn info_payload(at: Location, name: &str) -> Vec<u8> {
+        let mut p = words(&[at.bank, at.slot, 121]);
+        p.extend_from_slice(b"ne5p");
+        p.extend_from_slice(&words(&[4, u32::MAX, u32::MAX, name.len() as u32]));
+        p.extend_from_slice(name.as_bytes());
+        p.extend_from_slice(&u32::MAX.to_be_bytes());
+        p
+    }
+
     impl Transport for Puppet {
         async fn write(&mut self, buf: &[u8]) -> nord_usb::Result<()> {
             let msg = Message::decode(buf)?;
             let spoken = matches!(msg.service, Service::Ui)
                 && matches!(msg.command, ui::LABEL | ui::PERCENT);
-            let status = match msg.command {
-                cmd::INFO => self.info,
-                _ => 0,
+            // A scan reads its replies, so those are answered from the device's state;
+            // everything else takes the blanket agreement.
+            let (status, payload) = match self.answer(&msg) {
+                Some(answered) => answered,
+                None => (0, vec![0; 32]),
             };
             if !spoken {
                 let mut args = status.to_be_bytes().to_vec();
-                args.extend_from_slice(&[0; 32]);
+                args.extend_from_slice(&payload);
                 self.replies.push_back(
                     Message::new(msg.service, msg.subsystem, msg.command + 1, args).encode(),
                 );
@@ -1113,6 +1583,328 @@ mod wire_tests {
             },
         );
         assert!(flow == Flow::Lost);
+    }
+
+    /// Two categories of unequal size — 80 addresses — holding two pianos between them.
+    fn a_small_library() -> Puppet {
+        Puppet::stocked(
+            &[("Grand", 50), ("Upright", 30)],
+            &[
+                (Location { bank: 0, slot: 0 }, "Royal Grand 3D"),
+                (Location { bank: 1, slot: 2 }, "Queen Upright"),
+            ],
+        )
+    }
+
+    /// What one bank came back as: its number, how many rows it has, and what is in them.
+    fn holdings(bank: &(u32, Vec<Option<String>>)) -> (u32, usize, Vec<(usize, &str)>) {
+        let held = bank
+            .1
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, name)| Some((slot, name.as_deref()?)))
+            .collect();
+        (bank.0, bank.1.len(), held)
+    }
+
+    fn scan(class: ObjectClass) -> DeviceCmd {
+        DeviceCmd::ScanClass {
+            class,
+            slots: crate::device::slots_per_bank(class),
+            banks: crate::device::MAX_BANKS,
+        }
+    }
+
+    /// Every bank a scan reported, in the order it reported them.
+    fn scanned(events: Receiver<DeviceEvent>) -> Vec<(u32, Vec<Option<String>>)> {
+        events
+            .try_iter()
+            .filter_map(|event| match event {
+                DeviceEvent::BankScanned { bank, slots, .. } => Some((
+                    bank,
+                    slots
+                        .into_iter()
+                        .map(|slot| slot.map(|info| info.name))
+                        .collect(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn counted(device: &Puppet, command: u32) -> usize {
+        device
+            .commands()
+            .into_iter()
+            .filter(|held| *held == command)
+            .count()
+    }
+
+    /// ⚠️ The whole point of the cursor walk: an `INFO` per *occupied* slot rather than
+    /// per address. Eighty addresses holding two pianos is a handful of reads instead of
+    /// eighty, and the banks that come out are the same shape either way.
+    #[test]
+    fn a_scan_asks_only_about_the_slots_that_hold_something() {
+        let mut device = a_small_library();
+        let (flow, events) = drive(&mut device, scan(ObjectClass::Piano));
+        assert!(flow == Flow::Continue);
+
+        let banks = scanned(events);
+        assert_eq!(
+            banks.iter().map(holdings).collect::<Vec<_>>(),
+            vec![
+                (1, 50, vec![(0, "Royal Grand 3D")]),
+                (2, 30, vec![(2, "Queen Upright")]),
+            ]
+        );
+        assert!(counted(&device, cmd::NEXT_SLOT) > 0, "the cursor was used");
+        // Each bank probed at its first slot, one probe past the last bank to find the
+        // end, and one read per thing found.
+        assert_eq!(counted(&device, cmd::INFO), 5, "not the 80 addresses");
+    }
+
+    /// ⚠️ An instrument can refuse to enumerate at all — see [`op::ENUMERATION_DISABLED`]
+    /// for the conditions — so the walk has to fall back to asking about every address,
+    /// and come back with the same banks.
+    #[test]
+    fn a_device_that_refuses_to_enumerate_is_walked_slot_by_slot() {
+        let mut device = a_small_library().no_enumeration();
+        let (flow, events) = drive(&mut device, scan(ObjectClass::Piano));
+        assert!(flow == Flow::Continue, "a refusal is not a disconnection");
+
+        let banks = scanned(events);
+        assert_eq!(
+            banks.iter().map(holdings).collect::<Vec<_>>(),
+            vec![
+                (1, 50, vec![(0, "Royal Grand 3D")]),
+                (2, 30, vec![(2, "Queen Upright")]),
+            ],
+            "the same folder, found the long way"
+        );
+        assert!(counted(&device, cmd::NEXT_SLOT) > 0, "it was tried");
+        // Every address of both banks, plus the one probe the cursor walk spends before
+        // the refusal shows up.
+        assert_eq!(counted(&device, cmd::INFO), 81);
+    }
+
+    /// The device's own banks decide the shape, names and all. Told a category of 50 and
+    /// one of 30, the walk must paint neither two banks of 50 nor one of 80.
+    #[test]
+    fn the_devices_own_geometry_shapes_the_scan() {
+        let mut device = a_small_library();
+        let (_, events) = drive(&mut device, scan(ObjectClass::Piano));
+
+        let mut named = Vec::new();
+        let mut widths = Vec::new();
+        for event in events.try_iter() {
+            match event {
+                DeviceEvent::Geometry { banks, .. } => {
+                    named = banks
+                        .into_iter()
+                        .map(|bank| (bank.name, bank.slots))
+                        .collect()
+                }
+                DeviceEvent::BankScanned { slots, .. } => widths.push(slots.len()),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            named,
+            vec![("Grand".to_string(), 50), ("Upright".to_string(), 30)],
+            "the categories reach the browser by name"
+        );
+        assert_eq!(widths, vec![50, 30], "and its capacities, not the guess");
+    }
+
+    /// An instrument that will not report its banks is still read: the counters divide
+    /// into a bank count, and that bounds the walk instead.
+    #[test]
+    fn a_scan_falls_back_to_the_counters_when_the_banks_are_not_reported() {
+        let mut device = Puppet::stocked(
+            &[("Bank 1", 50)],
+            &[(Location { bank: 0, slot: 1 }, "Africa Split")],
+        )
+        .mute_about_geometry();
+        let (flow, events) = drive(&mut device, scan(ObjectClass::Program));
+        assert!(flow == Flow::Continue);
+
+        let banks = scanned(events);
+        assert_eq!(
+            banks.iter().map(holdings).collect::<Vec<_>>(),
+            vec![(1, 50, vec![(1, "Africa Split")])],
+            "one bank of the guessed 50, and nothing past it"
+        );
+    }
+
+    /// ⚠️ The bug this pins: a bank the device states no capacity for was capped at the
+    /// caller's per-bank guess, so a library of 60 read back as 50 — no error anywhere,
+    /// and the folder's own header saying 60.
+    #[test]
+    fn an_unbounded_bank_is_not_cut_off_at_the_guess() {
+        let filled: Vec<(Location, &'static str)> = (0..60)
+            .map(|slot| (Location { bank: 0, slot }, "Marimba"))
+            .collect();
+        let mut device = Puppet::stocked(&[("Samp Lib", Bank::UNBOUNDED)], &filled);
+        let (flow, events) = drive(&mut device, scan(ObjectClass::Sample));
+        assert!(flow == Flow::Continue);
+
+        let banks = scanned(events);
+        assert_eq!(banks.len(), 1);
+        assert_eq!(banks[0].1.len(), 60, "all of them, not the 50 guessed");
+        assert!(banks[0].1.iter().all(Option::is_some));
+    }
+
+    /// A bank with nothing in it and no stated capacity has one shape, whichever walk
+    /// found it. Two answers for the same folder is a folder nobody can drag into.
+    #[test]
+    fn an_empty_unbounded_bank_looks_the_same_to_both_walks() {
+        let library = || Puppet::stocked(&[("Samp Lib", Bank::UNBOUNDED)], &[]);
+        let (_, by_cursor) = drive(&mut library(), scan(ObjectClass::Sample));
+        let (_, slot_by_slot) = drive(&mut library().no_enumeration(), scan(ObjectClass::Sample));
+        assert_eq!(scanned(by_cursor), scanned(slot_by_slot));
+    }
+
+    /// ⚠️ A factory instrument's program banks are full, so the commonest scan there is
+    /// must not take the walk that costs two exchanges per occupied slot.
+    #[test]
+    fn a_full_class_is_read_slot_by_slot_and_a_sparse_one_by_cursor() {
+        let full: Vec<(Location, &'static str)> = (0..2)
+            .flat_map(|bank| (0..50).map(move |slot| (Location { bank, slot }, "Africa Split")))
+            .collect();
+        let banks = [("Bank 1", 50), ("Bank 2", 50)];
+
+        let mut dense = Puppet::stocked(&banks, &full);
+        drive(&mut dense, scan(ObjectClass::Program));
+        assert_eq!(counted(&dense, cmd::NEXT_SLOT), 0, "the cursor was skipped");
+        assert_eq!(
+            counted(&dense, cmd::INFO),
+            100,
+            "one per address, and no more"
+        );
+
+        let mut sparse = Puppet::stocked(&banks, &full[..2]);
+        drive(&mut sparse, scan(ObjectClass::Program));
+        assert!(counted(&sparse, cmd::NEXT_SLOT) > 0, "the cursor earned it");
+        assert!(counted(&sparse, cmd::INFO) < 100);
+    }
+
+    /// ⚠️ The address preflight is read-only, so a preflight that could not be *made* must
+    /// not stop a write — nor look like the instrument going away, which would drop every
+    /// cached name in the browser over a reply that failed to decode.
+    #[test]
+    fn a_preflight_that_cannot_be_made_does_not_stop_the_write() {
+        let mut device = Puppet::stocked(&[("Bank 1", 50)], &[]).garbling_geometry();
+        let (flow, _) = drive(
+            &mut device,
+            DeviceCmd::Put {
+                id: 1,
+                class: ObjectClass::Program,
+                at: Location { bank: 0, slot: 3 },
+                name: "Africa-Split.ne5p".into(),
+                bytes: a_program(),
+            },
+        );
+        assert!(flow == Flow::Continue, "not a disconnection");
+        assert_eq!(counted(&device, cmd::WRITE_DATA), 1, "the bytes still went");
+    }
+
+    /// ⚠️ The bottom of the ladder: no geometry and no counters that divide, so nothing
+    /// says where the class ends but the device's own out-of-range answer. The walk has
+    /// to find it slot by slot and still stop.
+    #[test]
+    fn a_scan_with_nothing_to_go_on_stops_where_the_device_says_it_ends() {
+        let mut device = Puppet::stocked(
+            &[("Bank 1", 4)],
+            &[(Location { bank: 0, slot: 1 }, "Africa Split")],
+        )
+        .mute_about_geometry()
+        .mute_about_counters();
+        let (flow, events) = drive(&mut device, scan(ObjectClass::Program));
+        assert!(flow == Flow::Continue);
+
+        let banks = scanned(events);
+        assert_eq!(
+            banks.iter().map(holdings).collect::<Vec<_>>(),
+            vec![(1, 4, vec![(1, "Africa Split")])],
+            "the one bank there is, cut where the device refused"
+        );
+    }
+
+    /// The slot the panel is on is read while the class's session is open, so the browser
+    /// can mark it without a transaction of its own.
+    #[test]
+    fn a_scan_reports_the_slot_the_panel_has_loaded() {
+        let panel = Location { bank: 1, slot: 2 };
+        let mut device = a_small_library().focused_on(panel);
+        let (_, events) = drive(&mut device, scan(ObjectClass::Piano));
+
+        let focused: Vec<Location> = events
+            .try_iter()
+            .filter_map(|event| match event {
+                DeviceEvent::Focus { at, .. } => Some(at),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(focused, vec![panel]);
+    }
+
+    /// ⚠️ An address the instrument does not have must be refused *before* the occupant
+    /// of anything is deleted for it. The reason is the device's own — bank names and a
+    /// count — rather than a status code arriving mid-transfer.
+    #[test]
+    fn a_write_past_the_end_is_refused_before_anything_is_deleted() {
+        let mut device = a_small_library();
+        let (flow, events) = drive(
+            &mut device,
+            DeviceCmd::Put {
+                id: 1,
+                class: ObjectClass::Program,
+                at: Location { bank: 6, slot: 0 },
+                name: "Africa-Split.ne5p".into(),
+                bytes: a_program(),
+            },
+        );
+        assert!(flow == Flow::Continue, "it said no, it did not go away");
+
+        let refused: Vec<String> = events
+            .try_iter()
+            .filter_map(|event| match event {
+                DeviceEvent::OpFailed(why) => Some(why),
+                _ => None,
+            })
+            .collect();
+        let why = refused.join(" | ");
+        assert!(why.contains("bank 7 does not exist"), "{why}");
+        assert!(
+            why.contains("Grand, Upright"),
+            "in the panel's own words: {why}"
+        );
+
+        assert_eq!(counted(&device, cmd::DELETE), 0, "nothing was emptied");
+        assert_eq!(
+            counted(&device, cmd::BEGIN_WRITE),
+            0,
+            "and nothing was sent"
+        );
+    }
+
+    /// A destination the device does have is not refused, so the guard cannot become a
+    /// wall in front of every write.
+    #[test]
+    fn a_write_to_a_real_address_still_goes() {
+        let mut device = Puppet::stocked(&[("Bank 1", 50)], &[]);
+        let (flow, _) = drive(
+            &mut device,
+            DeviceCmd::Put {
+                id: 1,
+                class: ObjectClass::Program,
+                at: Location { bank: 0, slot: 3 },
+                name: "Africa-Split.ne5p".into(),
+                bytes: a_program(),
+            },
+        );
+        assert!(flow == Flow::Continue);
+        assert_eq!(counted(&device, cmd::WRITE_DATA), 1, "the bytes went");
     }
 
     /// A refusal keeps the instrument: it is attached, it understood, and it declined.

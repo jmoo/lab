@@ -14,7 +14,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::Receiver;
 
 use eframe::egui;
-use nord_usb::wire::{Dependency, ProgramInfo, Status};
+use nord_usb::wire::{Bank, Dependency, ProgramInfo, Status};
 use nord_usb::{Location, ObjectClass};
 
 use crate::log::Log;
@@ -55,9 +55,10 @@ pub enum DeviceCmd {
     /// streaming a [`DeviceEvent::BankScanned`] as each bank lands.
     ScanClass {
         class: ObjectClass,
-        /// Slots to ask each bank for.
+        /// Slots to ask each bank for, where the device will not say.
         slots: u32,
-        /// Ceiling on the walk, for a class whose size the counters cannot divide.
+        /// Ceiling on the walk, for a class whose size neither the geometry nor the
+        /// counters can divide.
         banks: u32,
     },
     /// One `INFO` per slot of a single bank. What a mutation owes: only the bank it
@@ -270,8 +271,19 @@ pub enum DeviceEvent {
     ClassStatus {
         class: ObjectClass,
         status: Status,
-        /// Banks the counters say to expect, where they divide.
+        /// Banks to expect: the device's own count where it gave one, otherwise what the
+        /// counters divide into.
         banks: Option<u32>,
+    },
+    /// The device's own division of a class into banks, read at the head of its walk.
+    Geometry {
+        class: ObjectClass,
+        banks: Vec<Bank>,
+    },
+    /// The slot the instrument's panel has loaded in a class.
+    Focus {
+        class: ObjectClass,
+        at: Location,
     },
     BankScanned {
         class: ObjectClass,
@@ -325,6 +337,11 @@ pub struct DeviceCard {
     pub vendor_id: u16,
     pub product_id: u16,
     pub serial: Option<String>,
+    /// Firmware version in hundredths: `204` is 2.04.
+    ///
+    /// Read over a vendor control transfer, which only the desktop transport offers, so
+    /// the browser build always answers `None`.
+    pub firmware: Option<u16>,
 }
 
 #[derive(Default)]
@@ -357,10 +374,14 @@ pub struct DeviceState {
     pub scan: Scan,
     /// The slot this app last asked the instrument to load, per class.
     ///
-    /// ⚠️ Only what **this app** selected. A selection made on the panel itself is
-    /// invisible to the host — nothing on the wire reports it — so this is a record of
-    /// our own commands, not of what the instrument is actually playing.
+    /// ⚠️ Only what **this app** selected, and kept for the reselect a write owes. What
+    /// the panel is actually on is [`DeviceState::focused`], which is a device answer
+    /// rather than a record of our own commands.
     selected: HashMap<u32, Location>,
+    /// The slot the panel had loaded when the class was last read, per class.
+    focus: HashMap<u32, Location>,
+    /// The device's own banks, per class: their names and their capacities.
+    geometry: HashMap<u32, Vec<Bank>>,
     banks: HashMap<(u32, u32), Vec<Option<ProgramInfo>>>,
     pub detail: Detail,
 }
@@ -375,6 +396,52 @@ impl DeviceState {
             Connection::Connected(card) => Some(card.product.as_str()),
             _ => None,
         }
+    }
+
+    /// The firmware version as the panel writes it — `2.04` — where the transport could
+    /// ask for it.
+    pub fn firmware(&self) -> Option<String> {
+        let card = match &self.connection {
+            Connection::Connected(card) => card,
+            _ => return None,
+        };
+        // 204/100 = 2 and 204%100 = 04, and the panel reads 2.04.
+        card.firmware
+            .map(|held| format!("{}.{:02}", held / 100, held % 100))
+    }
+
+    /// What the instrument calls a bank, by the number the panel labels it with.
+    ///
+    /// For pianos these are the panel's categories — `Grand`, `Upright` — rather than
+    /// numbers, which is the whole reason the browser shows them.
+    pub fn bank_name(&self, class: ObjectClass, bank: u32) -> Option<&str> {
+        let name = self
+            .geometry
+            .get(&class.to_raw())?
+            .iter()
+            .find(|held| held.index + 1 == bank)?
+            .name
+            .trim();
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// How many slots the device says a bank holds. `None` where it did not say, or
+    /// where it answered the sentinel the unbounded library views carry.
+    pub fn slots_in(&self, class: ObjectClass, bank: u32) -> Option<u32> {
+        self.geometry
+            .get(&class.to_raw())?
+            .iter()
+            .find(|held| held.index + 1 == bank)
+            .filter(|held| held.is_bounded())
+            .map(|held| held.slots)
+    }
+
+    /// The slot the panel had loaded in a class when it was last read.
+    ///
+    /// ⚠️ Read once per walk, so a selection made on the panel afterwards is not in here
+    /// until the class is read again.
+    pub fn focused(&self, class: ObjectClass) -> Option<Location> {
+        self.focus.get(&class.to_raw()).copied()
     }
 
     /// What the last dependency list called a library id.
@@ -441,6 +508,8 @@ impl DeviceState {
 
     fn forget_everything(&mut self) {
         self.banks.clear();
+        self.focus.clear();
+        self.geometry.clear();
         self.inventory.clear();
         self.detail = Detail::default();
         self.scan.clear();
@@ -448,18 +517,18 @@ impl DeviceState {
     }
 }
 
-/// ⚠️ A ceiling on a walk whose end the device alone decides. Nothing on the wire says a
-/// class cannot hold more banks than this; the cap is here so an instrument that never
-/// answers "out of range" cannot walk forever.
+/// ⚠️ A ceiling on a walk whose end the device alone decides, used only where the
+/// device would not report its own geometry. The cap is here so an instrument that
+/// never answers "out of range" cannot walk forever.
 pub const MAX_BANKS: u32 = 32;
 
-/// Slots per bank, per class.
+/// Slots per bank, per class, where the device will not say.
 ///
-/// ⚠️ The protocol reports a class's total slot count but never how the panel divides
-/// it into banks. These are the Electro 5's divisions — 50 programs and 50 set lists to
-/// a bank, three live slots, one settings singleton — inferred from the corpus and the
-/// panel's own labels, not read off the device. A scan is not held to them: the device
-/// answers status 3 past the end of its slot space, and that is where the walk stops.
+/// ⚠️ These are the Electro 5's divisions — 50 programs and 50 set lists to a bank,
+/// three live slots, one settings singleton — inferred from the corpus and the panel's
+/// own labels, not read off the device. The walk asks the device for its real banks
+/// first and only falls back here; either way it is not held to the number, because the
+/// device answers status 3 past the end of its slot space.
 pub fn slots_per_bank(class: ObjectClass) -> u32 {
     match class {
         ObjectClass::Live => 3,
@@ -685,6 +754,7 @@ impl Device {
             vendor_id: 0x0ffc,
             product_id: 0,
             serial: None,
+            firmware: Some(204),
         });
         let slots = names
             .iter()
@@ -702,6 +772,27 @@ impl Device {
             })
             .collect();
         self.state.banks.insert((class.to_raw(), bank), slots);
+    }
+
+    /// Give a class the banks the device would have reported, for a headless render.
+    #[cfg(test)]
+    pub fn pretend_geometry(&mut self, class: ObjectClass, banks: &[(&str, u32)]) {
+        let banks = banks
+            .iter()
+            .enumerate()
+            .map(|(index, (name, slots))| Bank {
+                index: index as u32,
+                name: (*name).to_string(),
+                slots: *slots,
+            })
+            .collect();
+        self.state.geometry.insert(class.to_raw(), banks);
+    }
+
+    /// Put the panel on a slot, as a walk's `FOCUS` read would have.
+    #[cfg(test)]
+    pub fn pretend_focused(&mut self, class: ObjectClass, at: Location) {
+        self.state.focus.insert(class.to_raw(), at);
     }
 
     /// Drain the worker's events into the cache, the local list and the tabs. Call once
@@ -756,11 +847,12 @@ impl Device {
                         self.pending.push_back(DeviceCmd::Select { class, at });
                     }
                     for (class, bank) in std::mem::take(&mut self.rescan) {
-                        self.pending.push_back(DeviceCmd::ScanBank {
-                            class,
-                            bank,
-                            slots: slots_per_bank(class),
-                        });
+                        let slots = self
+                            .state
+                            .slots_in(class, bank)
+                            .unwrap_or_else(|| slots_per_bank(class));
+                        self.pending
+                            .push_back(DeviceCmd::ScanBank { class, bank, slots });
                     }
                     self.state.in_flight = None;
                 }
@@ -772,6 +864,12 @@ impl Device {
                     self.state.inventory.retain(|held| held.class != class);
                     self.state.inventory.push(status);
                     self.state.scan.expect(class, banks);
+                }
+                DeviceEvent::Geometry { class, banks } => {
+                    self.state.geometry.insert(class.to_raw(), banks);
+                }
+                DeviceEvent::Focus { class, at } => {
+                    self.state.focus.insert(class.to_raw(), at);
                 }
                 DeviceEvent::BankScanned { class, bank, slots } => {
                     if !slots.is_empty() {
