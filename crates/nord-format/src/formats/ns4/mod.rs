@@ -47,6 +47,14 @@ use super::raw::raw_format;
 
 pub mod fx;
 pub use fx::FxChain;
+pub mod organ_layers;
+pub use organ_layers::OrganLayer;
+pub mod piano_layers;
+pub use piano_layers::PianoLayer;
+pub mod synth_performance;
+pub use synth_performance::SynthPerformance;
+pub mod synth_voice;
+pub use synth_voice::SynthVoice;
 pub mod program;
 pub use program::Program;
 

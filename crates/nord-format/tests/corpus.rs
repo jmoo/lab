@@ -415,15 +415,18 @@ fn stage4_bodies_decode_to_panel_values() {
                     p.organ_section_enabled || p.piano_section_enabled || p.synth_section_enabled,
                     "{where_}: no section is routed to the keyboard"
                 );
-                assert!(p.organ_a_model.as_u8() <= 5, "{where_}");
-                assert!(p.organ_b_model.as_u8() <= 5, "{where_}");
-                assert!(p.piano_a_type.as_u8() <= 5, "{where_}");
-                assert!(p.piano_b_type.as_u8() <= 5, "{where_}");
-                assert!(p.synth_a_filter_type.as_u8() <= 5, "{where_}");
-                assert!(p.synth_a_lfo_shape.as_u8() <= 4, "{where_}");
-                assert!(p.synth_a_voice_priority.as_u8() <= 2, "{where_}");
+                assert!(p.organ_a.model.as_u8() <= 5, "{where_}");
+                assert!(p.organ_b.model.as_u8() <= 5, "{where_}");
+                assert!(p.piano_a.piano_type.as_u8() <= 5, "{where_}");
+                assert!(p.piano_b.piano_type.as_u8() <= 5, "{where_}");
+                assert!(p.synth_a_voice.filter_type.as_u8() <= 5, "{where_}");
+                assert!(p.synth_a_voice.lfo_shape.as_u8() <= 4, "{where_}");
+                assert!(
+                    p.synth_a_performance.voice_priority.as_u8() <= 2,
+                    "{where_}"
+                );
                 assert!(p.organ_fx.reverb_type.as_u8() <= 11, "{where_}");
-                assert!(octave_shift(p.organ_a_octave_shift.as_u8()), "{where_}");
+                assert!(octave_shift(p.organ_a.octave_shift.as_u8()), "{where_}");
                 split_on += usize::from(p.split_enabled);
                 programs += 1;
             }
