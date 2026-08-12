@@ -44,8 +44,10 @@ struct Cli {
 enum Command {
     /// Parse Nord file(s) and print a summary of the decoded contents.
     Inspect {
-        /// Files to read (.ne5p program, .ne5l live slot, .ne5t song, .ne5s
-        /// settings, .npno piano, .nsmp sample, or a ZIP backup bundle).
+        /// Files to read — any format nord-format knows: programs, live slots,
+        /// songs, settings, synth patches, performances, presets, libraries,
+        /// samples, SysEx/MIDI dumps, or a ZIP backup/bank bundle. A format
+        /// whose body is unmapped still reports what it is.
         #[arg(required = true)]
         files: Vec<PathBuf>,
 
