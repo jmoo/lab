@@ -43,13 +43,16 @@ struct Header {
 }
 
 /// Which face of a document is showing.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum View {
     /// The panel, in the instrument's own words. Happy-path edits.
     #[default]
     Basic,
-    /// The whole body as a table, plus the record. Nothing hidden.
+    /// The whole body as a table. Nothing hidden.
     Advanced,
+    /// The record: the container, the bytes that moved, and what the instrument says
+    /// about the slot. Nothing here is a control.
+    Meta,
 }
 
 #[derive(Default)]
@@ -98,36 +101,25 @@ impl Document {
                 .map_or(String::new(), |snapshot| snapshot.name);
         }
 
-        // Something with no friendly view has only the record to show.
-        let basic_exists = entity.entity.as_ref().is_some_and(|e| {
-            fields::has_registry(e) || fields::is_set_list(e) || sample::is_sample(e)
-        });
-        let view = match basic_exists {
-            true => self.views.get(&id).copied().unwrap_or_default(),
-            false => View::Advanced,
-        };
+        let faces = faces(entity, registry.as_deref());
+        let view = showing(&faces, self.views.get(&id).copied().unwrap_or_default());
 
         let mut sets: Sets = Vec::new();
         let mut act = Header::default();
 
         self.header(ui, entity, opened, &mut act);
-        if basic_exists {
-            let mut want = view;
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .selectable_label(view == View::Advanced, "Advanced")
-                        .clicked()
-                    {
-                        want = View::Advanced;
+        let mut want = view;
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Right to left, so the labels read in their own order left to right.
+                for (face, label) in faces.iter().rev() {
+                    if ui.selectable_label(view == *face, *label).clicked() {
+                        want = *face;
                     }
-                    if ui.selectable_label(view == View::Basic, "Basic").clicked() {
-                        want = View::Basic;
-                    }
-                });
+                }
             });
-            self.views.insert(id, want);
-        }
+        });
+        self.views.insert(id, want);
         if let Some(why) = &self.error {
             ui.label(egui::RichText::new(why).color(crate::app::bad(ui.visuals())));
         }
@@ -145,22 +137,17 @@ impl Document {
                 // same format declare all the same paths — so a knob's half-typed number
                 // and an open picker were shared between them, and committing one landed
                 // on whichever document was in front.
-                ui.push_id(id, |ui| {
-                    match view {
-                        View::Basic => {
-                            self.body(ui, entity, registry.as_deref(), &mut piano, &mut sets)
-                        }
-                        View::Advanced => {
-                            if let Some(fields) = registry.as_deref() {
-                                self.advanced.table(ui, fields, &mut sets);
-                                typed = !sets.is_empty();
-                                ui.add_space(8.0);
-                            }
+                ui.push_id(id, |ui| match view {
+                    View::Basic => {
+                        self.body(ui, entity, registry.as_deref(), &mut piano, &mut sets)
+                    }
+                    View::Advanced => {
+                        if let Some(fields) = registry.as_deref() {
+                            self.advanced.table(ui, fields, &mut sets);
+                            typed = !sets.is_empty();
                         }
                     }
-                    details = self
-                        .advanced
-                        .ui(ui, entity, opened, registry.as_deref(), device);
+                    View::Meta => details = self.advanced.meta(ui, entity, opened, device),
                 });
             });
 
@@ -378,6 +365,42 @@ impl Document {
     }
 }
 
+/// The faces this document offers, in the order they are shown.
+///
+/// Meta is always one of them — every asset has a record, even bytes that decoded into
+/// nothing. Where it is the *only* one it is called by its full name: a lone "Meta"
+/// beside nothing reads as an abbreviation of something missing.
+fn faces(entity: &LocalEntity, registry: Option<&[Field]>) -> Vec<(View, &'static str)> {
+    let mut faces = Vec::new();
+    let friendly = entity
+        .entity
+        .as_ref()
+        .is_some_and(|e| fields::has_registry(e) || fields::is_set_list(e) || sample::is_sample(e));
+    if friendly {
+        faces.push((View::Basic, "Basic"));
+    }
+    if registry.is_some() {
+        faces.push((View::Advanced, "Advanced"));
+    }
+    faces.push((
+        View::Meta,
+        match faces.is_empty() {
+            true => "Metadata",
+            false => "Meta",
+        },
+    ));
+    faces
+}
+
+/// The face to show: the one this document was last left on, where that face still
+/// exists — the panel otherwise, and the record where there is no panel either.
+fn showing(faces: &[(View, &'static str)], remembered: View) -> View {
+    match faces.iter().any(|(face, _)| *face == remembered) {
+        true => remembered,
+        false => faces.first().map_or(View::Meta, |(face, _)| *face),
+    }
+}
+
 /// What is known about the piano a program plays.
 ///
 /// ⚠️ The name can only come from the instrument. A `.ne5p` stores the piano's **id** and
@@ -509,22 +532,15 @@ mod tests {
     /// have — a section that indexes past its fields, or a control asked for a value the
     /// field cannot hold.
     fn render(sets: &[(&str, &str)], kind: Fresh) {
-        render_with(sets, kind, false);
+        render_view(sets, kind, View::Basic);
     }
 
-    fn render_with(sets: &[(&str, &str)], kind: Fresh, advanced: bool) {
-        render_view(sets, kind, advanced, View::Basic);
-    }
-
-    fn render_view(sets: &[(&str, &str)], kind: Fresh, advanced: bool, view: View) {
+    fn render_view(sets: &[(&str, &str)], kind: Fresh, view: View) {
         let ctx = egui::Context::default();
         let mut workspace = Workspace::new(ctx.clone());
         let mut device = Device::new(ctx.clone());
         let mut log = Log::default();
         let mut document = Document::default();
-        if advanced {
-            document.advanced.start_open();
-        }
 
         let id = workspace.create(kind, &mut log).expect("a fresh default");
         document.views.insert(id, view);
@@ -565,20 +581,87 @@ mod tests {
         }
     }
 
-    /// The disclosure carries the byte diff, the registry table and the raw dump, none
-    /// of which the closed pass reaches.
+    /// The record: the container grid, the byte diff — with something in it and with
+    /// nothing — and the folded dump.
     #[test]
-    fn the_advanced_disclosure_paints() {
-        render_with(&[("center_panel.gain", "96")], Fresh::Program, true);
-        render_with(&[], Fresh::Settings, true);
+    fn the_meta_face_paints() {
+        render_view(&[("center_panel.gain", "96")], Fresh::Program, View::Meta);
+        render_view(&[], Fresh::Settings, View::Meta);
     }
 
     /// The engineer's table paints, filters and holds an edit — for a body with ninety
     /// fields and for one with forty.
     #[test]
     fn the_advanced_table_paints() {
-        render_view(&[], Fresh::Program, true, View::Advanced);
-        render_view(&[], Fresh::Settings, true, View::Advanced);
+        render_view(&[], Fresh::Program, View::Advanced);
+        render_view(&[], Fresh::Settings, View::Advanced);
+    }
+
+    /// A body with a registry has all three faces; one with a view of its own but no
+    /// registry has no field table to offer; bytes with neither have only the record,
+    /// and then it is called by its full name.
+    #[test]
+    fn the_faces_offered_are_the_ones_the_asset_has() {
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut log = Log::default();
+
+        let labels = |workspace: &Workspace, id: u64| -> Vec<&'static str> {
+            let entity = workspace.get(id).unwrap();
+            let registry = entity.entity.as_ref().and_then(fields::fields_of);
+            faces(entity, registry.as_deref())
+                .iter()
+                .map(|(_, label)| *label)
+                .collect()
+        };
+
+        let program = workspace.create(Fresh::Program, &mut log).unwrap();
+        assert_eq!(labels(&workspace, program), ["Basic", "Advanced", "Meta"]);
+
+        let song = workspace.ingest(
+            "blank.ne5t".into(),
+            Origin::File("blank.ne5t".into()),
+            crate::fields::blank::electro5_song(),
+            &mut log,
+        );
+        assert_eq!(labels(&workspace, song), ["Basic", "Meta"]);
+
+        let stub = workspace.ingest(
+            "blank.ns3s".into(),
+            Origin::File("blank.ns3s".into()),
+            crate::fields::blank::stage3_song(),
+            &mut log,
+        );
+        assert_eq!(labels(&workspace, stub), ["Metadata"]);
+
+        let junk = workspace.ingest(
+            "junk.bin".into(),
+            Origin::File("junk.bin".into()),
+            b"not a nord file".to_vec(),
+            &mut log,
+        );
+        assert_eq!(labels(&workspace, junk), ["Metadata"]);
+    }
+
+    /// A document opens on the face it was left on, and on something that has no such
+    /// face falls back rather than showing an empty page.
+    #[test]
+    fn a_document_falls_back_to_a_face_it_actually_has() {
+        let all = [
+            (View::Basic, "Basic"),
+            (View::Advanced, "Advanced"),
+            (View::Meta, "Meta"),
+        ];
+        assert_eq!(showing(&all, View::Meta), View::Meta);
+        assert_eq!(showing(&all[..2], View::Meta), View::Basic);
+
+        let record_only = [(View::Meta, "Metadata")];
+        for left_on in [View::Basic, View::Advanced, View::Meta] {
+            assert_eq!(showing(&record_only, left_on), View::Meta);
+        }
+        // A set list has no field table: the table's operator lands on the panel.
+        let no_table = [(View::Basic, "Basic"), (View::Meta, "Meta")];
+        assert_eq!(showing(&no_table, View::Advanced), View::Basic);
     }
 
     /// A cell the library refuses stays open with what was typed in it, because that is
@@ -901,7 +984,7 @@ mod tests {
         let song = nord_format::from_stream(&mut std::io::Cursor::new(&bytes)).unwrap();
         assert!(!fields::is_set_list(&song));
         assert!(!fields::has_registry(&song));
-        render_file("blank.ns3s", bytes, View::Advanced);
+        render_file("blank.ns3s", bytes, View::Meta);
     }
 
     /// Bytes that do not decode still have a document — it says so and shows the record.

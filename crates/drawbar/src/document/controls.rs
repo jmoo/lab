@@ -156,7 +156,7 @@ pub fn control(ui: &mut egui::Ui, ctx: &Ctx, field: &Field) -> Option<String> {
         Control::Bar => bar(ui, field),
         Control::Register => register(ui, field, true),
         // A field with no control here has only its stored value, and that is an
-        // engineer's business — the Advanced dump is where it is legible.
+        // engineer's business — the Advanced table is where it is legible.
         Control::Stored => {
             ui.label(
                 egui::RichText::new(&field.display)

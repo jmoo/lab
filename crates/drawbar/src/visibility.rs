@@ -250,7 +250,7 @@ pub fn shown(section: Section, fields: &[Field]) -> bool {
 
 /// Fields the document does not show.
 ///
-/// Everything here stays in the Advanced dump — this is about what a player is offered,
+/// Everything here stays in the Advanced table — this is about what a player is offered,
 /// not about what the file holds.
 pub fn engineering_only(path: &str) -> bool {
     // Nothing in this build maps these to a control on the panel, and the CLI's summary
