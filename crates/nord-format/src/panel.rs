@@ -52,7 +52,7 @@
 //! field's own legal values.
 
 use crate::fields::{Field, FieldSpec};
-use crate::formats::ne5;
+use crate::formats::{ne5, ns4};
 use crate::{Entity, Live, Program};
 
 /// One body's controls, grouped the way its instrument groups them.
@@ -222,6 +222,9 @@ pub fn of(entity: &Entity) -> Option<&'static Panel> {
         Entity::Program(Program::Electro5(_)) | Entity::Live(Live::Electro5(_)) => {
             Some(&ne5::program::PANEL)
         }
+        Entity::Program(Program::Stage4(_)) | Entity::Live(Live::Stage4(_)) => {
+            Some(&ns4::program::PANEL)
+        }
         _ => None,
     }
 }
@@ -237,11 +240,18 @@ pub struct Authored {
     pub specs: fn() -> Vec<FieldSpec>,
 }
 
-pub const AUTHORED: &[Authored] = &[Authored {
-    name: "ne5::Program",
-    panel: &ne5::program::PANEL,
-    specs: ne5::Program::field_specs,
-}];
+pub const AUTHORED: &[Authored] = &[
+    Authored {
+        name: "ne5::Program",
+        panel: &ne5::program::PANEL,
+        specs: ne5::Program::field_specs,
+    },
+    Authored {
+        name: "ns4::Program",
+        panel: &ns4::program::PANEL,
+        specs: ns4::Program::field_specs,
+    },
+];
 
 #[cfg(test)]
 mod tests {
