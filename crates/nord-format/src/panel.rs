@@ -22,18 +22,23 @@
 //! - [`of`] answers for a decoded file, and answers `None` where nobody has authored a
 //!   layout. **Absence is normal**: a caller falls back to whatever it does today, and no
 //!   format is required to have one.
+//! - [`Panel::resolve`] is the whole render path: one call over a body's `fields()`
+//!   returns the groups with their fields, their effective relevance, and whatever no
+//!   group named. It indexes the field list once, so it does not cost a scan per member.
+//!   [`Panel::named`] and [`Panel::leftovers`] are the same questions asked of a body's
+//!   *specs*, for a caller inspecting a layout without a file in hand.
 //! - A [`Group`] names its members in **reading order** — the order the panel puts them
 //!   in, not the order the bits do.
 //! - A path a group names is a real registry path of that body, and no path is named
 //!   twice. A test in this module holds both against every layout the crate ships, so a
 //!   layout cannot quietly rot as a body gains fields.
 //! - [`Panel::exhaustive`] says whether the groups account for every registered field. If
-//!   it is false, [`Panel::leftovers`] is the rest, and a caller still has somewhere to
-//!   put them.
+//!   it is false, the leftovers can be non-empty and a caller still has somewhere to put
+//!   them.
 //! - A morph slot is **not** named by any group: it belongs to the parameter it morphs,
-//!   which the group names, and [`FieldSpec::morph_parent`] resolves the relation. This
-//!   is why a Stage body with 354 morph slots needs a layout of a hundred-odd lines
-//!   rather than five hundred.
+//!   which the group names, and [`FieldSpec::morph_parent`] resolves the relation. It is
+//!   why a Stage body, most of whose fields are morph slots, takes a layout of a
+//!   hundred-odd lines rather than one line per field.
 //!
 //! # Relevance is not visibility
 //!
@@ -50,6 +55,8 @@
 //! conjunction is another level of nesting. That is deliberately less than a predicate
 //! language: every condition stays comparable, printable and checkable against the
 //! field's own legal values.
+
+use std::collections::{HashMap, HashSet};
 
 use crate::fields::{Field, FieldSpec};
 use crate::formats::{ne5, ns4};
@@ -106,16 +113,31 @@ pub struct Match {
     pub is: &'static [&'static str],
 }
 
+/// A body's fields by path, so resolving a layout is one pass rather than a scan per
+/// member.
+type Index<'a> = HashMap<&'a str, &'a Field>;
+
 impl Match {
     /// Whether the field holds one of the values.
     ///
     /// A path the body does not register holds nothing, so an unknown field never
-    /// satisfies a match.
+    /// satisfies a match. Scans `fields`; [`Panel::resolve`] answers the same question
+    /// off an index when a whole layout is being drawn.
     pub fn holds(&self, fields: &[Field]) -> bool {
         fields
             .iter()
             .find(|field| field.path == self.field)
-            .is_some_and(|field| self.is.iter().any(|value| *value == field.value))
+            .is_some_and(|field| self.matched(field))
+    }
+
+    fn holds_in(&self, index: &Index) -> bool {
+        index
+            .get(self.field)
+            .is_some_and(|field| self.matched(field))
+    }
+
+    fn matched(&self, field: &Field) -> bool {
+        self.is.iter().any(|value| *value == field.value)
     }
 }
 
@@ -123,6 +145,10 @@ impl Relevance {
     /// Whether any match holds. An empty condition is satisfied.
     pub fn holds(&self, fields: &[Field]) -> bool {
         self.any_of.is_empty() || self.any_of.iter().any(|m| m.holds(fields))
+    }
+
+    fn holds_in(&self, index: &Index) -> bool {
+        self.any_of.is_empty() || self.any_of.iter().any(|m| m.holds_in(index))
     }
 }
 
@@ -216,6 +242,98 @@ impl Panel {
             .filter(|spec| !spec.morph_parent().is_some_and(|parent| claimed(&parent)))
             .map(|spec| spec.name.as_str())
             .collect()
+    }
+}
+
+/// One group with the fields it names, resolved against a body — what a caller draws.
+pub struct Section<'a> {
+    pub group: &'a Group,
+    /// Whether the instrument is using these controls: this group's own condition **and**
+    /// every ancestor's. [`Group::is_relevant`] on `group` answers for this level alone,
+    /// where a caller wants to tell "the section is off" from "this cluster is not the
+    /// selected one".
+    pub relevant: bool,
+    /// This group's own fields, in reading order, `prefix.*` expanded.
+    pub fields: Vec<&'a Field>,
+    /// The nested groups, resolved the same way.
+    pub groups: Vec<Section<'a>>,
+}
+
+/// A whole layout resolved against one body: the render path, in one call.
+pub struct Resolved<'a> {
+    pub sections: Vec<Section<'a>>,
+    /// The fields no group named, in registry order — empty for an exhaustive layout.
+    /// A morph slot whose parameter was named is not among them; it is drawn on that
+    /// parameter's control.
+    pub leftovers: Vec<&'a Field>,
+}
+
+impl Panel {
+    /// The layout against one body's field values: every group with its own fields and
+    /// its effective relevance, plus whatever no group named.
+    ///
+    /// One pass builds an index of the body's paths, so drawing a layout costs about one
+    /// walk of the field list however many members the groups name — which matters at the
+    /// Stage bodies' scale.
+    pub fn resolve<'a>(&'a self, fields: &'a [Field]) -> Resolved<'a> {
+        let index: Index<'a> = fields.iter().map(|f| (f.path.as_str(), f)).collect();
+        let mut claimed: HashSet<&'a str> = HashSet::new();
+        let sections = self
+            .groups
+            .iter()
+            .map(|group| resolve_group(group, fields, &index, true, &mut claimed))
+            .collect();
+        let leftovers = fields
+            .iter()
+            .filter(|field| !claimed.contains(field.path.as_str()))
+            .filter(|field| {
+                !field
+                    .spec
+                    .morph_parent()
+                    .is_some_and(|parent| claimed.contains(parent.as_str()))
+            })
+            .collect();
+        Resolved {
+            sections,
+            leftovers,
+        }
+    }
+}
+
+fn resolve_group<'a>(
+    group: &'a Group,
+    fields: &'a [Field],
+    index: &Index<'a>,
+    parent_relevant: bool,
+    claimed: &mut HashSet<&'a str>,
+) -> Section<'a> {
+    let relevant = parent_relevant && group.when.as_ref().is_none_or(|when| when.holds_in(index));
+
+    let mut own: Vec<&'a Field> = Vec::new();
+    for member in group.members {
+        match member.strip_suffix(".*") {
+            Some(prefix) => own.extend(
+                fields
+                    .iter()
+                    .filter(|field| under(&field.path, prefix))
+                    .filter(|field| field.spec.morph_parent().is_none()),
+            ),
+            None => own.extend(index.get(member).copied()),
+        }
+    }
+    claimed.extend(own.iter().map(|field| field.path.as_str()));
+
+    let groups = group
+        .groups
+        .iter()
+        .map(|nested| resolve_group(nested, fields, index, relevant, claimed))
+        .collect();
+
+    Section {
+        group,
+        relevant,
+        fields: own,
+        groups,
     }
 }
 

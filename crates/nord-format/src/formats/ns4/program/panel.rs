@@ -7,7 +7,7 @@
 //!
 //! A layer's enable and volume are **not** in its nested body — the file packs those with
 //! the other layers' — so each layer's group names them beside the body's own fields.
-//! Morph slots are named by nothing: 354 of this body's 878 fields are morph targets, and
+//! Morph slots are named by nothing: most of this body's fields are morph targets, and
 //! each belongs to the parameter its name binds it to.
 
 use crate::panel::{Group, Match, Panel, Relevance};
@@ -256,6 +256,7 @@ mod tests {
     use super::*;
     use crate::fields::{ControlKind, Field};
     use crate::formats::ns4::program::{Program, BODY_LEN};
+    use crate::panel::Section;
 
     fn program(sets: &[(&str, &str)]) -> Vec<Field> {
         let mut body = Program::try_from([0u8; BODY_LEN]).expect("every field decodes totally");
@@ -265,14 +266,14 @@ mod tests {
         body.fields()
     }
 
+    /// ⚠️ The first group with this title, in layout order — three sections have a
+    /// "Layer A" and four have an "Effects", and the organ's come first.
     fn group(title: &str) -> &'static Group {
-        fn find<'a>(groups: &'a [Group], title: &str) -> Option<&'a Group> {
-            groups.iter().find_map(|group| match group.title == title {
-                true => Some(group),
-                false => find(group.groups, title),
-            })
-        }
-        find(PANEL.groups, title).unwrap_or_else(|| panic!("no group {title}"))
+        PANEL
+            .walk()
+            .into_iter()
+            .find(|group| group.title == title)
+            .unwrap_or_else(|| panic!("no group {title}"))
     }
 
     /// A section is relevant while it is switched on, and its layers while they are —
@@ -296,8 +297,9 @@ mod tests {
         assert!(group("Organ").members.contains(&"organ_a_layer_enabled"));
     }
 
-    /// The nine bars of a layer are consecutive and in footage order, which the registry
-    /// alone does not give: each bar is followed by its three morph slots there.
+    /// The nine bars of a layer are consecutive and in register order — leftmost first —
+    /// which the registry alone does not give: each bar is followed by its three morph
+    /// slots there.
     #[test]
     fn an_organ_layers_drawbars_read_in_order() {
         let specs = Program::field_specs();
@@ -337,5 +339,54 @@ mod tests {
         assert!(named.contains(&"organ_a.drawbar_1"));
         assert!(named.contains(&"synth_a_voice.filter_resonance_wheel"));
         assert!(PANEL.leftovers(&specs).is_empty());
+    }
+
+    /// The render path and the inspection path have to agree: one resolves against a
+    /// body's values and the other against its specs, and a layout means one thing.
+    #[test]
+    fn resolving_a_body_names_what_the_specs_say_it_will() {
+        let fields = program(&[]);
+        let specs = Program::field_specs();
+        let resolved = PANEL.resolve(&fields);
+
+        fn named<'a>(sections: &[Section<'a>]) -> Vec<&'a str> {
+            sections
+                .iter()
+                .flat_map(|section| {
+                    section
+                        .fields
+                        .iter()
+                        .map(|field| field.path.as_str())
+                        .chain(named(&section.groups))
+                })
+                .collect()
+        }
+
+        assert_eq!(named(&resolved.sections), PANEL.named(&specs));
+        assert!(resolved.leftovers.is_empty());
+    }
+
+    /// A nested group's resolved relevance carries its parent's, so a caller drawing the
+    /// tree does not have to walk back up.
+    #[test]
+    fn a_resolved_section_carries_its_parents_relevance() {
+        let layer_only = program(&[("organ_a_layer_enabled", "true")]);
+        let organ = PANEL
+            .resolve(&layer_only)
+            .sections
+            .into_iter()
+            .find(|section| section.group.title == "Organ")
+            .expect("the organ section");
+        assert!(!organ.relevant, "the section is switched off");
+
+        let layer = organ
+            .groups
+            .iter()
+            .find(|section| section.group.title == "Layer A")
+            .expect("layer A");
+        assert!(!layer.relevant, "and nothing inside it is being played");
+        // Its own condition still holds, which is what tells "the section is off" from
+        // "this layer is off".
+        assert!(layer.group.is_relevant(&layer_only));
     }
 }
