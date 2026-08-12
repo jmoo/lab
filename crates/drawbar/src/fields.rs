@@ -8,9 +8,9 @@ use std::io::Cursor;
 use std::ops::Range;
 
 use nord_format::cbin::Cbin;
-use nord_format::fields::{Field, FieldError};
-use nord_format::formats::{ne5, ns2, ns3};
-use nord_format::{Entity, Live, Program, Settings};
+use nord_format::fields::{ControlKind, Field, FieldError};
+use nord_format::formats::{ne5, ns2, ns3, ns4};
+use nord_format::{Entity, Live, OrganPreset, PianoPreset, Program, Settings, Song, Synth};
 
 use crate::drawbar_widget;
 
@@ -37,37 +37,49 @@ editable!(ne5::Program);
 editable!(ne5::Settings);
 editable!(ns2::Program);
 editable!(ns3::Program);
+editable!(ns3::SynthPreset);
+editable!(ns4::Program);
+editable!(ns4::organ_preset::OrganPreset);
+editable!(ns4::piano_preset::PianoPreset);
+editable!(ns4::synth::SynthPreset);
 
-/// The registry-backed body an entity holds, if it has one.
+/// Every entity whose body carries the generated registry, read in whichever direction
+/// the caller asked for.
 ///
-/// ⚠️ Kept in step with [`body_mut`] below — a variant in one and not the other is a
-/// body that lists its fields and refuses to set them, or the reverse.
+/// One list serving [`body`] and [`body_mut`] both: a body that lists its fields and
+/// refuses to set them, or the reverse, cannot be written here. The live buffer is the
+/// program body under another tag, so the two share an arm.
+macro_rules! registry {
+    ($entity:expr, $($reference:tt)*) => {
+        match $entity {
+            Entity::Live(Live::Electro5(f)) | Entity::Program(Program::Electro5(f)) => {
+                Some(f as $($reference)* dyn Editable)
+            }
+            Entity::Live(Live::Stage2(f)) | Entity::Program(Program::Stage2(f)) => {
+                Some(f as $($reference)* dyn Editable)
+            }
+            Entity::Live(Live::Stage3(f)) | Entity::Program(Program::Stage3(f)) => {
+                Some(f as $($reference)* dyn Editable)
+            }
+            Entity::Live(Live::Stage4(f)) | Entity::Program(Program::Stage4(f)) => {
+                Some(f as $($reference)* dyn Editable)
+            }
+            Entity::OrganPreset(OrganPreset::Stage4(f)) => Some(f as $($reference)* dyn Editable),
+            Entity::PianoPreset(PianoPreset::Stage4(f)) => Some(f as $($reference)* dyn Editable),
+            Entity::Settings(Settings::Electro5(f)) => Some(f as $($reference)* dyn Editable),
+            Entity::Synth(Synth::Stage3(f)) => Some(f as $($reference)* dyn Editable),
+            Entity::Synth(Synth::Stage4(f)) => Some(f as $($reference)* dyn Editable),
+            _ => None,
+        }
+    };
+}
+
 fn body(entity: &Entity) -> Option<&dyn Editable> {
-    match entity {
-        Entity::Program(Program::Electro5(f)) => Some(f),
-        Entity::Program(Program::Stage2(f)) => Some(f),
-        Entity::Program(Program::Stage3(f)) => Some(f),
-        // The live buffer is the program body under another tag, so the fields are
-        // identical.
-        Entity::Live(Live::Electro5(f)) => Some(f),
-        Entity::Live(Live::Stage2(f)) => Some(f),
-        Entity::Live(Live::Stage3(f)) => Some(f),
-        Entity::Settings(Settings::Electro5(f)) => Some(f),
-        _ => None,
-    }
+    registry!(entity, &)
 }
 
 fn body_mut(entity: &mut Entity) -> Option<&mut dyn Editable> {
-    match entity {
-        Entity::Program(Program::Electro5(f)) => Some(f),
-        Entity::Program(Program::Stage2(f)) => Some(f),
-        Entity::Program(Program::Stage3(f)) => Some(f),
-        Entity::Live(Live::Electro5(f)) => Some(f),
-        Entity::Live(Live::Stage2(f)) => Some(f),
-        Entity::Live(Live::Stage3(f)) => Some(f),
-        Entity::Settings(Settings::Electro5(f)) => Some(f),
-        _ => None,
-    }
+    registry!(entity, &mut)
 }
 
 /// Every registered field's current value, for a body that has a registry.
@@ -91,6 +103,17 @@ pub fn is_electro5_panel(entity: &Entity) -> bool {
 
 pub fn is_electro5_settings(entity: &Entity) -> bool {
     matches!(entity, Entity::Settings(Settings::Electro5(_)))
+}
+
+/// Whether the body is an Electro 5 set list: the four programs it points at, which is
+/// the whole of it.
+///
+/// ⚠️ Its own view rather than a field strip, because `ne5::Song` lists nothing — its four
+/// slots are private fields and no generated accessor reaches them. The Stage 3's song is
+/// an undecoded stub with no view at all, so it is not one of these: claiming it were
+/// would put an empty Basic page in front of the byte record, which is all it has.
+pub fn is_set_list(entity: &Entity) -> bool {
+    matches!(entity, Entity::Song(Song::Electro5(_)))
 }
 
 /// Apply every set to a fresh decode of `bytes` and re-encode.
@@ -118,7 +141,7 @@ pub fn apply(bytes: &[u8], sets: &[(String, String)]) -> Result<(Vec<Field>, Vec
 /// a slider instead.
 const CHOICE_MAX: usize = 24;
 
-/// Which control a field asks for, from its type alone.
+/// Which control a field asks for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Control {
     Toggle,
@@ -127,30 +150,64 @@ pub enum Control {
         min: i64,
         max: i64,
     },
-    /// A nine-nibble organ register.
+    /// One organ drawbar, where the file gives each bar its own nibble.
+    Bar,
+    /// A whole nine-bar organ register in one field.
     Register,
-    /// Too wide to enumerate, so the stored bits are its only spelling.
+    /// No control: the stored value is the only reading this app has of it.
     Stored,
 }
 
 impl Control {
+    /// The field's own [`ControlKind`] decides, and the legal values fill in only what a
+    /// kind leaves open — a knob's travel, or whether a two-state field spells its states
+    /// `true`/`false` or names them.
     pub fn of(field: &Field, legal: &[String]) -> Control {
-        if drawbar_widget::is_register(&field.path, field.spec.width) {
-            return Control::Register;
-        }
-        // A field past the enumerable ceiling lists no values at all.
-        if legal.is_empty() {
-            return Control::Stored;
-        }
-        if legal.len() == 2 && legal[0] == "false" && legal[1] == "true" {
-            return Control::Toggle;
-        }
-        if legal.len() > CHOICE_MAX {
-            if let Some((min, max)) = contiguous(legal) {
-                return Control::Number { min, max };
+        match field.spec.control {
+            // ⚠️ `Drawbar` is the *bar*, not the registration: the Electro 5 packs all
+            // nine into one field and the Stages give each bar its own nibble, and both
+            // carry this one kind. The width is what tells them apart.
+            ControlKind::Drawbar if field.spec.width == drawbar_widget::REGISTER_BITS => {
+                Control::Register
             }
+            ControlKind::Drawbar if field.spec.width == drawbar_widget::BAR_BITS => Control::Bar,
+            // A step grid and a library id both need a control this app does not have: a
+            // grid to draw, and the instrument's own catalogue to pick a name out of.
+            ControlKind::Pattern | ControlKind::Reference => Control::Stored,
+            ControlKind::Toggle if legal == ["false", "true"] => Control::Toggle,
+            // A knob says so, so its values are travel however few of them there are.
+            ControlKind::Bipolar(_)
+            | ControlKind::Knob(_)
+            | ControlKind::Morph
+            | ControlKind::Shift(_) => turned(legal),
+            // ⚠️ `Number` is the kind a field has when nothing has been claimed about it,
+            // so it is not a knob — it is an integer, and a short run of those is a
+            // four-position switch as often as it is travel. Only a run too long to read
+            // as a list turns.
+            _ => picked(legal),
         }
-        Control::Choice
+    }
+}
+
+/// A knob's control: the run its values cover, or a menu where they are named rather
+/// than counted. A field too wide to enumerate lists nothing and has neither.
+fn turned(legal: &[String]) -> Control {
+    match contiguous(legal) {
+        // A run of one value has no travel, so there is nothing to turn.
+        Some((min, max)) if min < max => Control::Number { min, max },
+        _ if legal.is_empty() => Control::Stored,
+        _ => Control::Choice,
+    }
+}
+
+/// A picker's control: its values, which are the positions.
+///
+/// ⚠️ Past [`CHOICE_MAX`] the list is longer than a menu can be read at — a `WideSelector`
+/// over a sample library offers a thousand bare indices — so a long one turns instead.
+fn picked(legal: &[String]) -> Control {
+    match (1..=CHOICE_MAX).contains(&legal.len()) {
+        true => Control::Choice,
+        false => turned(legal),
     }
 }
 
@@ -217,6 +274,103 @@ pub fn byte_diff(before: &[u8], after: &[u8]) -> Vec<DiffRow> {
             },
         })
         .collect()
+}
+
+/// Blank files of the formats the workspace has no fresh default for, so a test can open
+/// a document of one.
+///
+/// A zeroed body is a legal one: every field's type decodes the whole of its slot, and
+/// the version is the newest the decode is validated against.
+#[cfg(test)]
+pub mod blank {
+    use nord_format::cbin::{Cbin, Header, RawBody};
+    use nord_format::formats::{ne5, ns2, ns3, ns4};
+    use nord_format::{Entity, OrganPreset, PianoPreset, Program, Song, Synth};
+
+    /// A Stage 3 song, which decodes no further than its container.
+    pub fn stage3_song() -> Vec<u8> {
+        let file = Cbin {
+            header: Header::new(ns3::song::FORMAT, (0, 0), 0),
+            body: RawBody(vec![0u8; ns3::song::BODY_LEN as usize]),
+        };
+        nord_format::to_bytes(&Entity::Song(Song::Stage3(file))).expect("a stub encodes")
+    }
+
+    /// An Electro 5 set list pointing at the first four programs.
+    pub fn electro5_song() -> Vec<u8> {
+        let at =
+            |slot: u16| -> ne5::program::Location { (0, slot).try_into().expect("a program slot") };
+        let here: ne5::song::Location = (0, 0).try_into().expect("a song slot");
+        let song = ne5::song::new(
+            here,
+            ne5::song::DEFAULT_VERSION,
+            [at(0), at(1), at(2), at(3)],
+        );
+        nord_format::to_bytes(&Entity::Song(Song::Electro5(song))).expect("a song encodes")
+    }
+
+    macro_rules! blank {
+        ($name:ident, $body:ty, $len:expr, $format:expr, $versions:expr, $wrap:expr) => {
+            pub fn $name() -> Vec<u8> {
+                let body = <$body>::try_from([0u8; $len]).expect("a zeroed body decodes");
+                let version = *$versions.last().expect("a format knows a version");
+                let file = Cbin {
+                    header: Header::new($format, (0, 0), version),
+                    body,
+                };
+                nord_format::to_bytes(&$wrap(file)).expect("a blank file encodes")
+            }
+        };
+    }
+
+    blank!(
+        stage2_program,
+        ns2::Program,
+        ns2::program::BODY_LEN,
+        ns2::program::FORMAT,
+        ns2::program::KNOWN_VERSIONS,
+        |f| Entity::Program(Program::Stage2(f))
+    );
+    blank!(
+        stage3_synth,
+        ns3::SynthPreset,
+        ns3::synth::BODY_LEN,
+        ns3::synth::FORMAT,
+        ns3::synth::KNOWN_VERSIONS,
+        |f| Entity::Synth(Synth::Stage3(f))
+    );
+    blank!(
+        stage4_program,
+        ns4::Program,
+        ns4::program::BODY_LEN,
+        ns4::program::FORMAT,
+        ns4::program::KNOWN_VERSIONS,
+        |f| Entity::Program(Program::Stage4(f))
+    );
+    blank!(
+        stage4_organ_preset,
+        ns4::organ_preset::OrganPreset,
+        ns4::organ_preset::BODY_LEN,
+        ns4::organ_preset::FORMAT,
+        ns4::organ_preset::KNOWN_VERSIONS,
+        |f| Entity::OrganPreset(OrganPreset::Stage4(f))
+    );
+    blank!(
+        stage4_piano_preset,
+        ns4::piano_preset::PianoPreset,
+        ns4::piano_preset::BODY_LEN,
+        ns4::piano_preset::FORMAT,
+        ns4::piano_preset::KNOWN_VERSIONS,
+        |f| Entity::PianoPreset(PianoPreset::Stage4(f))
+    );
+    blank!(
+        stage4_synth,
+        ns4::synth::SynthPreset,
+        ns4::synth::BODY_LEN,
+        ns4::synth::FORMAT,
+        ns4::synth::KNOWN_VERSIONS,
+        |f| Entity::Synth(Synth::Stage4(f))
+    );
 }
 
 #[cfg(test)]
@@ -310,28 +464,82 @@ mod tests {
         assert_eq!(contiguous(&named), None);
     }
 
+    /// What a field is drawn as comes off its own declared kind, so a body this app has
+    /// never heard of arrives with its controls already chosen.
+    fn control_of(fields: &[Field], path: &str) -> Control {
+        let field = fields
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("{path} is declared"));
+        Control::of(field, &(field.spec.legal)())
+    }
+
     /// The nine-nibble register is the drawbar widget's, and nothing else is.
     #[test]
     fn a_register_field_picks_the_drawbar_control() {
         let bytes = program();
         let (fields, _) = apply(&bytes, &[]).unwrap();
-        let register = fields
-            .iter()
-            .find(|f| f.path == "organ_panel.b3_preset1_drawbars")
-            .expect("a program has a b3 preset 1 register");
         assert_eq!(
-            Control::of(register, &(register.spec.legal)()),
+            control_of(&fields, "organ_panel.b3_preset1_drawbars"),
             Control::Register
         );
-
-        let gain = fields
-            .iter()
-            .find(|f| f.path == "center_panel.gain")
-            .expect("a program has a gain");
         assert_eq!(
-            Control::of(gain, &(gain.spec.legal)()),
+            control_of(&fields, "center_panel.gain"),
             Control::Number { min: 0, max: 127 }
         );
+    }
+
+    /// ⚠️ Both spellings of a drawbar carry the one kind: the Electro 5 packs a whole
+    /// registration into one field and the Stage 4 gives each bar its own nibble. Reading
+    /// the width wrong puts nine bars where one belongs.
+    #[test]
+    fn a_drawbar_is_a_register_or_a_bar_by_its_width() {
+        let (stage4, _) = apply(&blank::stage4_program(), &[]).unwrap();
+        assert_eq!(control_of(&stage4, "organ_a.drawbar_1"), Control::Bar);
+
+        let (electro5, _) = apply(&program(), &[]).unwrap();
+        assert_eq!(
+            control_of(&electro5, "organ_panel.vox_preset1_drawbars"),
+            Control::Register
+        );
+    }
+
+    /// A selector is its positions, a two-state field is a lamp, and a knob is travel —
+    /// each because the field says so, not because this app knows the path.
+    #[test]
+    fn the_declared_kind_picks_the_control() {
+        let (fields, _) = apply(&blank::stage4_program(), &[]).unwrap();
+        assert_eq!(control_of(&fields, "split_enabled"), Control::Toggle);
+        assert_eq!(control_of(&fields, "piano_a.piano_type"), Control::Choice);
+        assert_eq!(
+            control_of(&fields, "organ_a_volume"),
+            Control::Number { min: 0, max: 127 }
+        );
+        // A library id names something only the instrument holds, so there is no control
+        // for it here.
+        assert_eq!(control_of(&fields, "piano_a.model_id"), Control::Stored);
+        // A picker over four thousand bare indices is past reading as a list.
+        assert_eq!(
+            control_of(&fields, "synth_a_performance.sample_slot"),
+            Control::Number { min: 0, max: 4095 }
+        );
+    }
+
+    /// Every body the library decodes into fields is editable here, in both directions.
+    #[test]
+    fn every_registry_backed_body_reads_and_writes() {
+        for bytes in [
+            blank::stage2_program(),
+            blank::stage3_synth(),
+            blank::stage4_organ_preset(),
+            blank::stage4_piano_preset(),
+            blank::stage4_program(),
+            blank::stage4_synth(),
+        ] {
+            let (fields, out) = apply(&bytes, &[]).expect("a blank body round-trips");
+            assert!(!fields.is_empty());
+            assert_eq!(out, bytes, "an empty set changes nothing");
+        }
     }
 
     /// A drawbar pulled in the widget writes back exactly what the field reads out, so

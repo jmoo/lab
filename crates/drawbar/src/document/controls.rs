@@ -11,7 +11,9 @@
 //! is turned or lit rather than typed — the panel has no text boxes, so neither does
 //! this, until you ask one for a number.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use eframe::egui;
 use nord_format::fields::Field;
@@ -20,27 +22,43 @@ use crate::fields::Control;
 use crate::{drawbar_widget, knob, led, strings, visibility};
 
 /// What every row needs and none of them should compute twice.
+///
+/// ⚠️ Asking a field for its legal values walks every bit pattern it can hold — four
+/// thousand at the enumerable ceiling — and a Stage body declares hundreds of fields, so
+/// a field is asked the first time something draws it and never again. A section nobody
+/// has opened costs nothing.
+///
+/// ⚠️ Keyed by path, so one belongs to one document: two formats declare paths that
+/// collide, and a shared cache would hand one body's control the other's values.
+#[derive(Default)]
 pub struct Ctx {
-    /// ⚠️ `FieldSpec::legal` walks every bit pattern a field can hold — thousands at the
-    /// enumerable ceiling — so it is read once per document and never per frame.
-    pub legal: HashMap<String, Vec<String>>,
-    pub control: HashMap<String, Control>,
+    read: RefCell<HashMap<String, Rc<Entry>>>,
+}
+
+/// A field's legal values and the control they picked.
+struct Entry {
+    control: Control,
+    legal: Vec<String>,
 }
 
 impl Ctx {
-    pub fn read(fields: &[Field]) -> Ctx {
-        let mut legal = HashMap::new();
-        let mut control = HashMap::new();
-        for field in fields {
-            let values = (field.spec.legal)();
-            control.insert(field.path.clone(), Control::of(field, &values));
-            legal.insert(field.path.clone(), values);
+    fn entry(&self, field: &Field) -> Rc<Entry> {
+        if let Some(entry) = self.read.borrow().get(&field.path) {
+            return Rc::clone(entry);
         }
-        Ctx { legal, control }
+        let legal = (field.spec.legal)();
+        let entry = Rc::new(Entry {
+            control: Control::of(field, &legal),
+            legal,
+        });
+        self.read
+            .borrow_mut()
+            .insert(field.path.clone(), Rc::clone(&entry));
+        entry
     }
 
-    fn legal_of(&self, path: &str) -> &[String] {
-        self.legal.get(path).map_or(&[], Vec::as_slice)
+    pub fn control(&self, field: &Field) -> Control {
+        self.entry(field).control
     }
 }
 
@@ -76,19 +94,19 @@ pub fn strip(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
 }
 
 /// How wide a cell is, which is as wide as what stands in it.
-fn width(control: Option<Control>) -> f32 {
+fn width(control: Control) -> f32 {
     match control {
-        Some(Control::Choice) => 156.0,
-        Some(Control::Stored) | None => 140.0,
-        Some(Control::Register) => 220.0,
+        Control::Choice => 156.0,
+        Control::Stored => 140.0,
+        Control::Register => 220.0,
+        Control::Bar => 44.0,
         _ => 78.0,
     }
 }
 
 /// One field as a cell: the control, and the panel's name for it underneath.
 pub fn cell(ui: &mut egui::Ui, ctx: &Ctx, field: &Field, sets: &mut Sets) {
-    let kind = ctx.control.get(&field.path).copied();
-    named_cell(ui, &field.path, width(kind), |ui| {
+    named_cell(ui, &field.path, width(ctx.control(field)), |ui| {
         if let Some(value) = control(ui, ctx, field) {
             sets.push((field.path.clone(), value));
         }
@@ -131,14 +149,15 @@ fn caption(ui: &mut egui::Ui, path: &str) {
 
 /// The control alone, without its name.
 pub fn control(ui: &mut egui::Ui, ctx: &Ctx, field: &Field) -> Option<String> {
-    match ctx.control.get(&field.path).copied() {
-        Some(Control::Toggle) => toggle(ui, field),
-        Some(Control::Choice) => choice(ui, ctx, field),
-        Some(Control::Number { min, max }) => number(ui, field, min, max),
-        Some(Control::Register) => register(ui, field, true),
-        // A field too wide to name its values has only its stored bits, and those are an
-        // engineer's business — the Advanced dump is where they are legible.
-        Some(Control::Stored) | None => {
+    match ctx.control(field) {
+        Control::Toggle => toggle(ui, field),
+        Control::Choice => choice(ui, ctx, field),
+        Control::Number { min, max } => number(ui, field, min, max),
+        Control::Bar => bar(ui, field),
+        Control::Register => register(ui, field, true),
+        // A field with no control here has only its stored value, and that is an
+        // engineer's business — the Advanced dump is where it is legible.
+        Control::Stored => {
             ui.label(
                 egui::RichText::new(&field.display)
                     .monospace()
@@ -159,17 +178,15 @@ fn toggle(ui: &mut egui::Ui, field: &Field) -> Option<String> {
 
 /// A named-value picker. Shows the panel's word for each value and sets the library's.
 fn choice(ui: &mut egui::Ui, ctx: &Ctx, field: &Field) -> Option<String> {
-    let offered = visibility::choices(&field.path, ctx.legal_of(&field.path), &field.value);
+    let entry = ctx.entry(field);
+    let offered = visibility::choices(&field.path, &entry.legal, &field.value);
     let mut picked = None;
     egui::ComboBox::from_id_salt(&field.path)
         .selected_text(
             egui::RichText::new(strings::value_label(&field.path, &field.value))
                 .text_style(egui::TextStyle::Small),
         )
-        .width(
-            ui.available_width()
-                .min(width(Some(Control::Choice)) - 12.0),
-        )
+        .width(ui.available_width().min(width(Control::Choice) - 12.0))
         .show_ui(ui, |ui| {
             for value in &offered {
                 let label = strings::value_label(&field.path, value);
@@ -185,6 +202,14 @@ fn choice(ui: &mut egui::Ui, ctx: &Ctx, field: &Field) -> Option<String> {
 fn number(ui: &mut egui::Ui, field: &Field, min: i64, max: i64) -> Option<String> {
     let value: i64 = field.value.trim_start_matches('+').parse().ok()?;
     knob::ui(ui, &field.path, value, min, max).map(|moved| moved.to_string())
+}
+
+/// One drawbar, for the bodies that give each bar its own field. Which rank it is comes
+/// off its name — see [`drawbar_widget::rank`].
+fn bar(ui: &mut egui::Ui, field: &Field) -> Option<String> {
+    let position = field.value.trim().parse().ok()?;
+    let moved = drawbar_widget::ui_one(ui, drawbar_widget::rank(&field.path), position, true);
+    moved.map(|moved| moved.to_string())
 }
 
 /// Nine drawbars and the positions under them. No hex: the digits are the readout.
@@ -223,5 +248,26 @@ pub fn switch(ui: &mut egui::Ui, field: Option<&Field>, word: &str, sets: &mut S
     let on = field.value == "true";
     if let Some(want) = led::ui(ui, on, word) {
         sets.push((field.path.clone(), want.to_string()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ⚠️ A field is asked for its values when something draws it and not before, and
+    /// then never again. A Stage body declares hundreds of fields, and walking every one
+    /// of them on open is a stall the operator spends watching an empty document.
+    #[test]
+    fn a_field_is_read_as_it_is_drawn_and_only_once() {
+        let bytes = crate::fields::blank::stage4_program();
+        let (fields, _) = crate::fields::apply(&bytes, &[]).unwrap();
+        let ctx = Ctx::default();
+        assert!(fields.len() > 800);
+        assert_eq!(ctx.read.borrow().len(), 0, "nothing drawn, nothing asked");
+
+        ctx.control(&fields[0]);
+        ctx.control(&fields[0]);
+        assert_eq!(ctx.read.borrow().len(), 1);
     }
 }

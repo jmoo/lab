@@ -422,8 +422,14 @@ pub fn known(path: &str) -> bool {
 /// The last segment of a path, underscores turned back into spaces and the first letter
 /// raised.
 fn prettify(path: &str) -> String {
-    let leaf = path.rsplit('.').next().unwrap_or(path);
-    let spaced = leaf.replace('_', " ");
+    title(path.rsplit('.').next().unwrap_or(path))
+}
+
+/// A stretch of a path as a heading: its separators turned back into spaces and the first
+/// letter raised. Takes more than one segment, so a nested body's prefix reads as words
+/// rather than as a path.
+pub fn title(segment: &str) -> String {
+    let spaced = segment.replace(['.', '_'], " ");
     let mut chars = spaced.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),

@@ -77,19 +77,107 @@ pub fn settings(ui: &mut egui::Ui, ctx: &Ctx, fields: &[Field], sets: &mut Sets)
     }
 }
 
-/// Any other registry-backed body: one flat list, because nothing here knows how that
-/// instrument's panel is divided.
+/// How many fields a body may hold before its sections start folded away.
+///
+/// ⚠️ The instrument's own panel does not fold, and neither does the Electro 5 document.
+/// A Stage program declares hundreds, and one strip of those is a page nobody reads to
+/// the end of — so above this the sections are what the reader opens, one at a time.
+const FOLD_ABOVE: usize = 200;
+
+/// How many fields a section may hold before it is divided again on each field's own
+/// leading word.
+const SPLIT_ABOVE: usize = 128;
+
+/// Any other registry-backed body: its own path prefixes as sections, because nothing
+/// here knows how that instrument's panel is divided but the registry does say which
+/// fields belong together.
 pub fn plain(ui: &mut egui::Ui, ctx: &Ctx, fields: &[Field], sets: &mut Sets) {
+    let folded = fields.len() > FOLD_ABOVE;
     ui.label(
-        egui::RichText::new("Every field this format declares.")
-            .small()
-            .weak(),
+        egui::RichText::new(match folded {
+            true => "Every field this format declares, under the section of its name. Open one to see it.",
+            false => "Every field this format declares.",
+        })
+        .small()
+        .weak(),
     );
+    for group in sections(fields) {
+        match folded {
+            true => {
+                egui::CollapsingHeader::new(&group.title)
+                    .id_salt(&group.key)
+                    .show(ui, |ui| cells(ui, ctx, &group.rows, sets));
+            }
+            false => controls::section(ui, &group.title, |ui| cells(ui, ctx, &group.rows, sets)),
+        }
+    }
+}
+
+fn cells(ui: &mut egui::Ui, ctx: &Ctx, rows: &[&Field], sets: &mut Sets) {
     controls::strip(ui, |ui| {
-        for field in fields {
+        for field in rows {
             controls::cell(ui, ctx, field, sets);
         }
     });
+}
+
+/// One titled run of a field list.
+struct Group<'a> {
+    /// What these fields share — the fold's id, which their titles are not unique enough
+    /// to be.
+    key: String,
+    title: String,
+    rows: Vec<&'a Field>,
+}
+
+/// The sections a field list falls into.
+///
+/// A nested body's fields are contiguous and share a dotted prefix, which is the division
+/// the registry itself makes. A prefix too long to read in one run is divided again on
+/// the leading word of each field's own name — the Stage bodies spell their sections
+/// there (`slot_a.organ_preset_1_drawbar_1`) — and a word that recurs later joins the
+/// division it opened rather than starting a second one.
+fn sections(fields: &[Field]) -> Vec<Group<'_>> {
+    let mut out: Vec<Group> = Vec::new();
+    for field in fields {
+        let prefix = field.path.rsplit_once('.').map_or("", |(head, _)| head);
+        match out.last_mut() {
+            Some(group) if group.key == prefix => group.rows.push(field),
+            _ => out.push(Group {
+                key: prefix.to_string(),
+                title: match prefix.is_empty() {
+                    true => "General".to_string(),
+                    false => strings::title(prefix),
+                },
+                rows: vec![field],
+            }),
+        }
+    }
+    out.into_iter().flat_map(divide).collect()
+}
+
+fn divide(group: Group<'_>) -> Vec<Group<'_>> {
+    if group.rows.len() <= SPLIT_ABOVE {
+        return vec![group];
+    }
+    let mut out: Vec<Group> = Vec::new();
+    for field in group.rows {
+        let leaf = field.path.rsplit('.').next().unwrap_or(&field.path);
+        let word = leaf.split('_').next().unwrap_or(leaf);
+        let key = format!("{}.{word}", group.key);
+        match out.iter().position(|part| part.key == key) {
+            Some(at) => out[at].rows.push(field),
+            None => out.push(Group {
+                title: match group.key.is_empty() {
+                    true => strings::title(word),
+                    false => format!("{} — {word}", group.title),
+                },
+                key,
+                rows: vec![field],
+            }),
+        }
+    }
+    out
 }
 
 /// What is known about the piano a program plays, and the way to ask for the rest.
@@ -235,10 +323,7 @@ fn reading_order(ctx: &Ctx, rows: &mut [&Field]) {
             .iter()
             .position(|key| *key == group(&field.path))
             .unwrap_or(usize::MAX);
-        let knob = !matches!(
-            ctx.control.get(&field.path),
-            Some(Control::Toggle) | Some(Control::Choice)
-        );
+        let knob = !matches!(ctx.control(field), Control::Toggle | Control::Choice);
         (at, knob)
     });
 }
@@ -421,5 +506,52 @@ pub fn transpose(ui: &mut egui::Ui, fields: &[Field], sets: &mut Sets) {
         }
         (Some(want_on), None) => sets.extend(visibility::set_transpose(want_on, semitones)),
         (None, None) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fields::{apply, blank};
+
+    fn titles(bytes: Vec<u8>) -> Vec<String> {
+        let (fields, _) = apply(&bytes, &[]).unwrap();
+        let groups = sections(&fields);
+        assert_eq!(
+            fields.len(),
+            groups.iter().map(|group| group.rows.len()).sum::<usize>(),
+            "every field lands in exactly one section",
+        );
+        let mut keys: Vec<&str> = groups.iter().map(|group| group.key.as_str()).collect();
+        keys.sort_unstable();
+        let count = keys.len();
+        keys.dedup();
+        assert_eq!(keys.len(), count, "every fold answers to an id of its own");
+        groups.into_iter().map(|group| group.title).collect()
+    }
+
+    /// The generic view's sections are the registry's own divisions: the prefix a nested
+    /// body's fields share, and the body's own fields under one heading before them.
+    #[test]
+    fn a_body_falls_into_the_sections_its_paths_name() {
+        let titles = titles(blank::stage4_program());
+        assert_eq!(titles.first().map(String::as_str), Some("General"));
+        assert!(titles.contains(&"Organ a".to_string()), "{titles:?}");
+        assert!(titles.contains(&"Synth a fx".to_string()), "{titles:?}");
+    }
+
+    /// A prefix longer than a page divides again on the leading word of each field's own
+    /// name, which is where the Stage 2 spells what part of the slot a field belongs to.
+    #[test]
+    fn a_section_too_long_to_read_divides_on_its_fields_own_words() {
+        let titles = titles(blank::stage2_program());
+        assert!(titles.contains(&"Slot a — organ".to_string()), "{titles:?}");
+        assert!(titles.contains(&"Slot b — piano".to_string()), "{titles:?}");
+    }
+
+    /// A body small enough to read whole keeps one section per prefix.
+    #[test]
+    fn a_short_body_is_not_divided() {
+        assert_eq!(titles(blank::stage3_synth()), ["General"]);
     }
 }

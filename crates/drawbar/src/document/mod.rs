@@ -52,12 +52,13 @@ pub enum View {
     Advanced,
 }
 
+#[derive(Default)]
 pub struct Document {
     target: Option<u64>,
     /// Which face each document was left on.
     views: std::collections::HashMap<u64, View>,
-    /// ⚠️ Per-field legal values, read once per document: asking a field for them walks
-    /// every bit pattern it can hold.
+    /// Per-field legal values and controls, cached as they are drawn. One per document —
+    /// see [`Ctx`].
     ctx: Ctx,
     /// The name box for a sample instrument, so a half-typed name survives a frame.
     name: String,
@@ -67,20 +68,6 @@ pub struct Document {
     /// One read per document: the button is what asks for another.
     fetched_deps: bool,
     advanced: Advanced,
-}
-
-impl Default for Document {
-    fn default() -> Document {
-        Document {
-            target: None,
-            views: std::collections::HashMap::new(),
-            ctx: Ctx::read(&[]),
-            name: String::new(),
-            error: None,
-            fetched_deps: false,
-            advanced: Advanced::default(),
-        }
-    }
 }
 
 impl Document {
@@ -104,7 +91,7 @@ impl Document {
             self.error = None;
             self.fetched_deps = false;
             self.advanced.leave();
-            self.ctx = Ctx::read(registry.as_deref().unwrap_or(&[]));
+            self.ctx = Ctx::default();
             self.name = decoded
                 .and_then(sample::snapshot)
                 .and_then(Result::ok)
@@ -112,10 +99,9 @@ impl Document {
         }
 
         // Something with no friendly view has only the record to show.
-        let basic_exists = entity
-            .entity
-            .as_ref()
-            .is_some_and(|e| fields::has_registry(e) || sample::is_sample(e));
+        let basic_exists = entity.entity.as_ref().is_some_and(|e| {
+            fields::has_registry(e) || fields::is_set_list(e) || sample::is_sample(e)
+        });
         let view = match basic_exists {
             true => self.views.get(&id).copied().unwrap_or_default(),
             false => View::Advanced,
@@ -855,6 +841,67 @@ mod tests {
     fn the_other_fresh_defaults_paint() {
         render(&[], Fresh::Live);
         render(&[], Fresh::Settings);
+    }
+
+    /// Paint a document over bytes the workspace has no fresh default for.
+    fn render_file(name: &str, bytes: Vec<u8>, view: View) {
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut device = Device::new(ctx.clone());
+        let mut log = Log::default();
+        let mut document = Document::default();
+
+        let id = workspace.ingest(name.into(), Origin::File(name.into()), bytes, &mut log);
+        let opened = workspace.get(id).unwrap().bytes.clone();
+        document.views.insert(id, view);
+        for _ in 0..2 {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    document.ui(ui, id, &opened, &mut workspace, &mut device, &mut log);
+                });
+            });
+        }
+    }
+
+    /// The Stage bodies have no panel of their own here, so they get the generic one: the
+    /// big ones as folds, the small ones open with every control drawn.
+    #[test]
+    fn a_stage_document_paints_from_the_registry_alone() {
+        use crate::fields::blank;
+        for (name, bytes) in [
+            ("blank.ns2p", blank::stage2_program()),
+            ("blank.ns3y", blank::stage3_synth()),
+            ("blank.ns4p", blank::stage4_program()),
+            ("blank.ns4o", blank::stage4_organ_preset()),
+            ("blank.ns4n", blank::stage4_piano_preset()),
+            ("blank.ns4y", blank::stage4_synth()),
+        ] {
+            render_file(name, bytes.clone(), View::Basic);
+            render_file(name, bytes, View::Advanced);
+        }
+    }
+
+    /// An Electro 5 set list has a Basic view of its own — the four slots — and it does
+    /// not come from the registry, which lists nothing for that body.
+    #[test]
+    fn a_set_list_has_its_own_view() {
+        let bytes = crate::fields::blank::electro5_song();
+        let song = nord_format::from_stream(&mut std::io::Cursor::new(&bytes)).unwrap();
+        assert!(fields::is_set_list(&song));
+        assert!(!fields::has_registry(&song));
+        render_file("blank.ne5t", bytes, View::Basic);
+    }
+
+    /// ⚠️ A song that decodes no further than its container has no Basic view to offer,
+    /// and must not be given one: an empty page saying nothing is editable stands in
+    /// front of the byte record, which is everything that file has.
+    #[test]
+    fn an_undecoded_song_keeps_the_record_it_has() {
+        let bytes = crate::fields::blank::stage3_song();
+        let song = nord_format::from_stream(&mut std::io::Cursor::new(&bytes)).unwrap();
+        assert!(!fields::is_set_list(&song));
+        assert!(!fields::has_registry(&song));
+        render_file("blank.ns3s", bytes, View::Advanced);
     }
 
     /// Bytes that do not decode still have a document — it says so and shows the record.

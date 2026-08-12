@@ -28,6 +28,10 @@ fn stop_colour(bar: usize) -> egui::Color32 {
     }
 }
 
+/// A stop standing for no rank in particular: neither one of the three stop colours nor
+/// a footage, because nothing has said which rank it is.
+const NO_RANK: egui::Color32 = egui::Color32::from_rgb(0x8a, 0x8a, 0x90);
+
 /// The nine positions a stored register holds, bar 0 first.
 pub fn bars(bits: u64) -> [u8; BARS] {
     std::array::from_fn(|n| {
@@ -58,8 +62,24 @@ pub fn parse(text: &str) -> Option<u64> {
     }
 }
 
-pub fn is_register(path: &str, width: u32) -> bool {
-    width == 4 * BARS as u32 && path.ends_with("_drawbars")
+/// One bar's nibble, and the whole registration's nine of them.
+///
+/// ⚠️ A field declares itself a drawbar without saying which of the two it is, so its
+/// width is what separates the Electro 5's packed registration from a Stage's single bar.
+pub const BAR_BITS: u32 = 4;
+pub const REGISTER_BITS: u32 = BAR_BITS * BARS as u32;
+
+/// Which rank of the registration a bar-per-field body's field is, read off the number
+/// its name ends with.
+///
+/// ⚠️ Decoration inferred from the name, not something the file states: the Stage bodies
+/// spell their bars `…drawbar_1` through `…drawbar_9`, and only the footage printed under
+/// the bar and the colour of its stop rest on it. A name ending in no such number has no
+/// rank, and the bar is drawn claiming none rather than claiming bar one's 16′.
+pub fn rank(path: &str) -> Option<usize> {
+    let trailing = path.rsplit(|c: char| !c.is_ascii_digit()).next()?;
+    let at: usize = trailing.parse().ok()?;
+    (1..=BARS).contains(&at).then(|| at - 1)
 }
 
 const STOP_H: f32 = 15.0;
@@ -104,7 +124,7 @@ pub fn ui_count(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
         for (n, value) in moved.iter_mut().enumerate().take(count.min(BARS)) {
-            if bar(ui, n, value, live) {
+            if bar(ui, Some(n), value, live) {
                 changed = true;
             }
         }
@@ -112,8 +132,15 @@ pub fn ui_count(
     changed.then_some(moved)
 }
 
+/// One drawbar on its own, as the `rank`-th of a registration — the shape the Stage
+/// bodies store, a field per bar. Returns the new position when it is pulled.
+pub fn ui_one(ui: &mut egui::Ui, rank: Option<usize>, position: u8, live: bool) -> Option<u8> {
+    let mut moved = position;
+    bar(ui, rank, &mut moved, live).then_some(moved)
+}
+
 /// One drawbar. Pull down to increase, the way the real thing works.
-fn bar(ui: &mut egui::Ui, n: usize, value: &mut u8, live: bool) -> bool {
+fn bar(ui: &mut egui::Ui, rank: Option<usize>, value: &mut u8, live: bool) -> bool {
     let size = egui::vec2(BAR_W, TRACK_H + 16.0);
     let sense = match live {
         true => egui::Sense::click_and_drag(),
@@ -149,7 +176,7 @@ fn bar(ui: &mut egui::Ui, n: usize, value: &mut u8, live: bool) -> bool {
         egui::pos2(track.center().x, centre),
         egui::vec2(BAR_W - 2.0, STOP_H),
     );
-    let colour = dim(stop_colour(n));
+    let colour = dim(rank.map_or(NO_RANK, stop_colour));
     painter.rect_filled(stop, 2.0, colour);
     painter.text(
         stop.center(),
@@ -161,13 +188,15 @@ fn bar(ui: &mut egui::Ui, n: usize, value: &mut u8, live: bool) -> bool {
             false => egui::Color32::WHITE,
         },
     );
-    painter.text(
-        egui::pos2(track.center().x, track.bottom() + 8.0),
-        egui::Align2::CENTER_CENTER,
-        FOOTAGE[n],
-        egui::FontId::proportional(9.0),
-        ui.visuals().weak_text_color(),
-    );
+    if let Some(rank) = rank {
+        painter.text(
+            egui::pos2(track.center().x, track.bottom() + 8.0),
+            egui::Align2::CENTER_CENTER,
+            FOOTAGE[rank],
+            egui::FontId::proportional(9.0),
+            ui.visuals().weak_text_color(),
+        );
+    }
     changed
 }
 
@@ -222,10 +251,30 @@ mod tests {
         assert_eq!(digits(&[4, 0]), "40");
     }
 
+    /// A packed registration is exactly the nine bars wide, which is what tells it from
+    /// the single nibble a Stage gives each bar.
     #[test]
-    fn only_the_nine_nibble_blocks_are_registers() {
-        assert!(is_register("organ_panel.b3_preset1_drawbars", 36));
-        assert!(!is_register("organ_panel.b3_bass_bar1", 4));
-        assert!(!is_register("effects_panel.fx1_rate", 36));
+    fn a_register_is_nine_bars_of_nibble() {
+        assert_eq!(REGISTER_BITS, 36);
+        assert_eq!(bars(u64::MAX >> (64 - REGISTER_BITS)), [0xf; BARS]);
+    }
+
+    /// A bar-per-field body names the rank in the field, and the footage under the bar
+    /// has to follow it — nine bars all printed `16` is nine wrong claims.
+    #[test]
+    fn a_bars_rank_comes_off_the_number_its_name_ends_with() {
+        assert_eq!(rank("organ_a.drawbar_5"), Some(4));
+        assert_eq!(FOOTAGE[rank("organ_a.drawbar_5").unwrap()], "2⅔");
+        assert_eq!(rank("slot_b.organ_vox_preset_2_drawbar_1"), Some(0));
+        assert_eq!(rank("organ_b_drawbar_9"), Some(8));
+    }
+
+    /// A name that does not end in a rank claims none, rather than claiming bar one's.
+    #[test]
+    fn a_bar_with_no_rank_in_its_name_claims_no_footage() {
+        assert_eq!(rank("organ_panel.b3_preset1_drawbars"), None);
+        assert_eq!(rank("organ_a.drawbar_1_wheel"), None);
+        assert_eq!(rank("organ_a.drawbar_0"), None);
+        assert_eq!(rank("organ_a.drawbar_12"), None);
     }
 }
