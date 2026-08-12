@@ -255,7 +255,7 @@ fn morphed_parent<'a>(field: &str, registered: &[&'a str]) -> Option<&'a str> {
     registered.iter().copied().find(|&name| name == stem)
 }
 
-/// The drawbar rank a name ending in `_N` declares — 1 is the 16' bar.
+/// The drawbar position a name ending in `_N` declares — 1 is the leftmost bar.
 ///
 /// Applied to every leaf and honoured only by a drawbar, so a field that ends in a digit
 /// for some other reason keeps whatever its type said.
@@ -322,13 +322,15 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         ));
     };
 
-    // Every registered field's name, for the one relation a field's own declaration
-    // cannot state: which parameter a morph slot belongs to. A private parent would not
-    // be in the registry for a caller to resolve, so it is not one.
+    // Every registered leaf's name, for the one relation a field's own declaration cannot
+    // state: which parameter a morph slot belongs to. A private field is not in the
+    // registry for a caller to resolve, and a nested body registers a path prefix rather
+    // than a value, so neither is a parameter anything can morph.
     let registered: Vec<String> = named
         .named
         .iter()
         .filter(|f| matches!(f.vis, syn::Visibility::Public(_)))
+        .filter(|f| f.attrs.iter().any(|a| a.path().is_ident("bits")))
         .filter_map(|f| f.ident.as_ref().map(Ident::to_string))
         .collect();
     let registered: Vec<&str> = registered.iter().map(String::as_str).collect();
