@@ -11,6 +11,8 @@
 
 use super::raw::raw_format;
 
+pub mod slot;
+pub use slot::Slot;
 pub mod program;
 pub use program::Program;
 

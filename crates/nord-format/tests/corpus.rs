@@ -463,19 +463,26 @@ fn stage4_bodies_decode_to_panel_values() {
 }
 
 /// Every Stage 2/3 selector the byte maps enumerate decodes to a value that table
-/// names, across every factory program of both models.
+/// names, across every factory program of both models — **on both panels**.
 ///
 /// The same check the Stage 4 gets, and it earns more here: these placements come
 /// from a source with known errors in it, and a run read one bit off lands on values
 /// the panel has no name for. `sparse_enum` keeps an unknown rather than coercing it,
-/// so this is the tripwire.
+/// so this is the tripwire. Running it over Panel B is also what proves the second
+/// block is the same layout as the first.
 #[test]
 fn stage_selectors_decode_to_named_values() {
     use nord_format::{Live, Program};
 
     let root = corpus_root();
-    let mut unknown: BTreeMap<&'static str, usize> = BTreeMap::new();
-    let (mut ns2, mut ns3) = (0usize, 0usize);
+    let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut ns2n, mut ns3n) = (0usize, 0usize);
+
+    let note = |field: &str, side: &str, bad: bool, seen: &mut BTreeMap<String, usize>| {
+        if bad {
+            *seen.entry(format!("{side}.{field}")).or_default() += 1;
+        }
+    };
 
     for path in specimens(&root) {
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
@@ -484,152 +491,226 @@ fn stage_selectors_decode_to_named_values() {
         if !matches!(ext, "ns2p" | "ns2l" | "ns3f" | "ns3l") {
             continue;
         }
-        let entity = nord_format::from_path(&path).unwrap();
-        let mut check = |field: &'static str, is_unknown: bool| {
-            if is_unknown {
-                *unknown.entry(field).or_default() += 1;
-            }
-        };
-        match &entity {
+        match &nord_format::from_path(&path).unwrap() {
             Entity::Program(Program::Stage3(p)) | Entity::Live(Live::Stage3(p)) => {
-                ns3 += 1;
-                check("panel_enable", p.panel_enable.is_unknown());
-                check("piano_layer_detune", p.piano_layer_detune.is_unknown());
-                check("organ_vibrato_mode", p.organ_vibrato_mode.is_unknown());
-                check("piano_type", p.piano_type.is_unknown());
-                check("clavinet_model", p.clavinet_model.is_unknown());
-                check("piano_kb_touch", p.piano_kb_touch.is_unknown());
-                check("piano_timbre", p.piano_timbre.is_unknown());
-                check("synth_arp_range", p.synth_arp_range.is_unknown());
-                check("synth_arp_pattern", p.synth_arp_pattern.is_unknown());
-                check("synth_voice", p.synth_voice.is_unknown());
-                check("synth_unison", p.synth_unison.is_unknown());
-                check("synth_vibrato", p.synth_vibrato.is_unknown());
-                check("synth_lfo_wave", p.synth_lfo_wave.is_unknown());
-                check(
-                    "synth_oscillator_type",
-                    p.synth_oscillator_type.is_unknown(),
+                ns3n += 1;
+                note(
+                    "panel_enable",
+                    "globals",
+                    p.panel_enable.is_unknown(),
+                    &mut unknown,
                 );
-                check(
-                    "synth_oscillator_config",
-                    p.synth_oscillator_config.is_unknown(),
+                note(
+                    "split_low_note",
+                    "globals",
+                    p.split_low_note.is_unknown(),
+                    &mut unknown,
                 );
-                check("synth_filter_type", p.synth_filter_type.is_unknown());
-                check(
-                    "synth_filter_kb_track",
-                    p.synth_filter_kb_track.is_unknown(),
+                note(
+                    "split_mid_note",
+                    "globals",
+                    p.split_mid_note.is_unknown(),
+                    &mut unknown,
                 );
-                check("synth_filter_drive", p.synth_filter_drive.is_unknown());
-                check(
-                    "synth_amp_env_velocity",
-                    p.synth_amp_env_velocity.is_unknown(),
+                note(
+                    "split_high_note",
+                    "globals",
+                    p.split_high_note.is_unknown(),
+                    &mut unknown,
                 );
-                check("organ_kb_zone", p.organ_kb_zone.is_unknown());
-                check("organ_type", p.organ_type.is_unknown());
-                check("effect_1_type", p.effect_1_type.is_unknown());
-                check("effect_2_type", p.effect_2_type.is_unknown());
-                check("amp_sim_eq_amp_type", p.amp_sim_eq_amp_type.is_unknown());
-                check("reverb_type", p.reverb_type.is_unknown());
-                check("panel_b_piano_type", p.panel_b_piano_type.is_unknown());
-                check(
-                    "panel_b_clavinet_model",
-                    p.panel_b_clavinet_model.is_unknown(),
-                );
-                check(
-                    "panel_b_piano_kb_touch",
-                    p.panel_b_piano_kb_touch.is_unknown(),
-                );
-                check("panel_b_piano_timbre", p.panel_b_piano_timbre.is_unknown());
-                check(
-                    "panel_b_synth_arp_range",
-                    p.panel_b_synth_arp_range.is_unknown(),
-                );
-                check(
-                    "panel_b_synth_arp_pattern",
-                    p.panel_b_synth_arp_pattern.is_unknown(),
-                );
-                check("panel_b_synth_voice", p.panel_b_synth_voice.is_unknown());
-                check("panel_b_synth_unison", p.panel_b_synth_unison.is_unknown());
-                check(
-                    "panel_b_synth_vibrato",
-                    p.panel_b_synth_vibrato.is_unknown(),
-                );
-                check(
-                    "panel_b_synth_lfo_wave",
-                    p.panel_b_synth_lfo_wave.is_unknown(),
-                );
-                check(
-                    "panel_b_synth_oscillator_type",
-                    p.panel_b_synth_oscillator_type.is_unknown(),
-                );
-                check(
-                    "panel_b_synth_oscillator_config",
-                    p.panel_b_synth_oscillator_config.is_unknown(),
-                );
-                check(
-                    "panel_b_synth_filter_type",
-                    p.panel_b_synth_filter_type.is_unknown(),
-                );
-                check(
-                    "panel_b_synth_filter_kb_track",
-                    p.panel_b_synth_filter_kb_track.is_unknown(),
-                );
-                check(
-                    "panel_b_synth_filter_drive",
-                    p.panel_b_synth_filter_drive.is_unknown(),
-                );
-                check(
-                    "panel_b_synth_amp_env_velocity",
-                    p.panel_b_synth_amp_env_velocity.is_unknown(),
-                );
-                check(
-                    "panel_b_organ_kb_zone",
-                    p.panel_b_organ_kb_zone.is_unknown(),
-                );
-                check("panel_b_organ_type", p.panel_b_organ_type.is_unknown());
-                check(
-                    "panel_b_effect_1_type",
-                    p.panel_b_effect_1_type.is_unknown(),
-                );
-                check(
-                    "panel_b_effect_2_type",
-                    p.panel_b_effect_2_type.is_unknown(),
-                );
-                check(
-                    "panel_b_amp_sim_eq_amp_type",
-                    p.panel_b_amp_sim_eq_amp_type.is_unknown(),
-                );
-                check("panel_b_reverb_type", p.panel_b_reverb_type.is_unknown());
+                for (side, panel) in [("panel_a", &p.panel_a), ("panel_b", &p.panel_b)] {
+                    note(
+                        "piano_type",
+                        side,
+                        panel.piano_type.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "clavinet_model",
+                        side,
+                        panel.clavinet_model.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "piano_kb_touch",
+                        side,
+                        panel.piano_kb_touch.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "piano_timbre",
+                        side,
+                        panel.piano_timbre.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_arp_range",
+                        side,
+                        panel.synth_arp_range.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_arp_pattern",
+                        side,
+                        panel.synth_arp_pattern.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_voice",
+                        side,
+                        panel.synth_voice.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_unison",
+                        side,
+                        panel.synth_unison.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_vibrato",
+                        side,
+                        panel.synth_vibrato.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_lfo_wave",
+                        side,
+                        panel.synth_lfo_wave.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_oscillator_type",
+                        side,
+                        panel.synth_oscillator_type.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_oscillator_config",
+                        side,
+                        panel.synth_oscillator_config.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_filter_type",
+                        side,
+                        panel.synth_filter_type.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_filter_kb_track",
+                        side,
+                        panel.synth_filter_kb_track.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_filter_drive",
+                        side,
+                        panel.synth_filter_drive.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_amp_env_velocity",
+                        side,
+                        panel.synth_amp_env_velocity.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "organ_kb_zone",
+                        side,
+                        panel.organ_kb_zone.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "organ_type",
+                        side,
+                        panel.organ_type.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "effect_1_type",
+                        side,
+                        panel.effect_1_type.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "effect_2_type",
+                        side,
+                        panel.effect_2_type.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "amp_sim_eq_amp_type",
+                        side,
+                        panel.amp_sim_eq_amp_type.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "reverb_type",
+                        side,
+                        panel.reverb_type.is_unknown(),
+                        &mut unknown,
+                    );
+                }
             }
             Entity::Program(Program::Stage2(p)) | Entity::Live(Live::Stage2(p)) => {
-                ns2 += 1;
+                ns2n += 1;
                 // The Stage 2 EX factory live buffers are all-ones — a slot the
                 // instrument never wrote — so every field is legitimately unknown there.
-                let raw = <[u8; 521]>::from(&p.body);
-                if raw.iter().all(|&b| b == 0xff) {
+                if <[u8; 521]>::from(&p.body).iter().all(|&b| b == 0xff) {
                     continue;
                 }
-                check("ns2 reverb_type", p.reverb_type.is_unknown());
-                check("ns2 effect_1_type", p.effect_1_type.is_unknown());
-                check("ns2 effect_2_type", p.effect_2_type.is_unknown());
-                check("ns2 organ_kb_zone", p.organ_kb_zone.is_unknown());
-                check("ns2 piano_split_zones", p.piano_split_zones.is_unknown());
-                check("ns2 synth_kb_zone", p.synth_kb_zone.is_unknown());
-                check("slot_b_organ_kb_zone", p.slot_b_organ_kb_zone.is_unknown());
-                check(
-                    "slot_b_piano_split_zones",
-                    p.slot_b_piano_split_zones.is_unknown(),
+                note(
+                    "split_low_note",
+                    "globals",
+                    p.split_low_note.is_unknown(),
+                    &mut unknown,
                 );
-                check("slot_b_synth_kb_zone", p.slot_b_synth_kb_zone.is_unknown());
-                check("slot_b_effect_1_type", p.slot_b_effect_1_type.is_unknown());
-                check("slot_b_effect_2_type", p.slot_b_effect_2_type.is_unknown());
+                note(
+                    "reverb_type",
+                    "globals",
+                    p.reverb_type.is_unknown(),
+                    &mut unknown,
+                );
+                for (side, slot) in [("slot_a", &p.slot_a), ("slot_b", &p.slot_b)] {
+                    note(
+                        "organ_kb_zone",
+                        side,
+                        slot.organ_kb_zone.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "piano_split_zones",
+                        side,
+                        slot.piano_split_zones.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "synth_kb_zone",
+                        side,
+                        slot.synth_kb_zone.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "effect_1_type",
+                        side,
+                        slot.effect_1_type.is_unknown(),
+                        &mut unknown,
+                    );
+                    note(
+                        "effect_2_type",
+                        side,
+                        slot.effect_2_type.is_unknown(),
+                        &mut unknown,
+                    );
+                }
             }
             _ => {}
         }
     }
 
-    assert!(ns3 > 290, "only {ns3} Stage 3 programs read");
-    assert!(ns2 > 700, "only {ns2} Stage 2 programs read");
+    assert!(ns3n > 290, "only {ns3n} Stage 3 programs read");
+    assert!(ns2n > 700, "only {ns2n} Stage 2 programs read");
     assert!(
         unknown.is_empty(),
         "selectors decoded to values their table does not name: {unknown:?}"

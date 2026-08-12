@@ -22,6 +22,8 @@
 
 use super::raw::raw_format;
 
+pub mod panel;
+pub use panel::Panel;
 pub mod program;
 pub use program::Program;
 
