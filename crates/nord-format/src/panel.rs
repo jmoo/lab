@@ -185,13 +185,15 @@ fn under(path: &str, prefix: &str) -> bool {
 
 impl Panel {
     /// Every group in the layout, sections and their nested clusters alike, depth first.
-    pub fn groups(&self) -> Vec<&Group> {
+    ///
+    /// ⚠️ Not [`groups`](Self::groups), which is the top level alone.
+    pub fn walk(&self) -> Vec<&Group> {
         self.groups.iter().flat_map(Group::walk).collect()
     }
 
     /// Every path the layout names, in layout order, globs expanded.
     pub fn named<'a>(&self, specs: &'a [FieldSpec]) -> Vec<&'a str> {
-        self.groups()
+        self.walk()
             .into_iter()
             .flat_map(|group| group.members_of(specs))
             .collect()
@@ -265,7 +267,7 @@ mod tests {
         for authored in AUTHORED {
             let specs = (authored.specs)();
             let known: HashSet<&str> = specs.iter().map(|spec| spec.name.as_str()).collect();
-            for group in authored.panel.groups() {
+            for group in authored.panel.walk() {
                 for member in group.members {
                     match member.strip_suffix(".*") {
                         Some(prefix) => assert!(
@@ -327,7 +329,7 @@ mod tests {
     fn every_condition_names_a_field_and_values_it_accepts() {
         for authored in AUTHORED {
             let specs = (authored.specs)();
-            for group in authored.panel.groups() {
+            for group in authored.panel.walk() {
                 let Some(when) = &group.when else { continue };
                 for m in when.any_of {
                     let spec = specs

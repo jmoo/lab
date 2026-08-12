@@ -353,7 +353,7 @@ mod tests {
 
     fn group(title: &str) -> &'static Group {
         PANEL
-            .groups()
+            .walk()
             .into_iter()
             .find(|group| group.title == title)
             .unwrap_or_else(|| panic!("no group {title}"))
