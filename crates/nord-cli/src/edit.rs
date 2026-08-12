@@ -306,10 +306,16 @@ fn control(kind: ControlKind) -> String {
         ControlKind::Knob(u) => format!("knob {}", unit(u)),
         ControlKind::Bipolar(u) => format!("bipolar {}", unit(u)),
         ControlKind::Shift(u) => format!("shift {}", unit(u)),
-        ControlKind::Drawbar => "drawbar".to_string(),
-        ControlKind::Morph => "morph".to_string(),
-        ControlKind::Pattern => "pattern".to_string(),
-        ControlKind::Reference => "library ref".to_string(),
+        // A whole register in one field reads as its bar count; a single bar reads as its
+        // footage rank, where the declaration places it.
+        ControlKind::Drawbar { bars, rank } => match (bars, rank) {
+            (1, Some(rank)) => format!("drawbar {rank}"),
+            (1, None) => "drawbar".to_string(),
+            (bars, _) => format!("{bars} drawbars"),
+        },
+        ControlKind::Morph { .. } => "morph".to_string(),
+        ControlKind::Pattern { steps, .. } => format!("pattern {steps}"),
+        ControlKind::Reference(library) => format!("{} ref", library.label()),
         ControlKind::Number => "number".to_string(),
     }
 }
