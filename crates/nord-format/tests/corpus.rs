@@ -445,9 +445,9 @@ fn stage4_bodies_decode_to_panel_values() {
                 pianos += 1;
             }
             (Entity::Synth(Synth::Stage4(y)), _) => {
-                assert!(y.synth_a_filter_type.as_u8() <= 5, "{where_}");
-                assert!(y.synth_b_filter_type.as_u8() <= 5, "{where_}");
-                assert!(y.synth_a_lfo_shape.as_u8() <= 4, "{where_}");
+                assert!(y.synth_a_voice.filter_type.as_u8() <= 5, "{where_}");
+                assert!(y.synth_b_voice.filter_type.as_u8() <= 5, "{where_}");
+                assert!(y.synth_a_voice.lfo_shape.as_u8() <= 4, "{where_}");
                 assert!(y.synth_a_voice_priority.as_u8() <= 2, "{where_}");
                 assert!(y.synth_a_fx.reverb_type.as_u8() <= 11, "{where_}");
                 assert!(octave_shift(y.synth_a_octave_shift.as_u8()), "{where_}");
