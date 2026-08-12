@@ -611,3 +611,58 @@ fn a_stale_session_that_will_not_clear_is_reported() {
         "a session that would not clear did not say GOODBYE"
     );
 }
+
+/// A walk the device refuses mid-way must surface the refusal, not a partial list.
+///
+/// `0x11` is the instrument disabling enumeration, which it does after any write since
+/// power-up ([`op::ENUMERATION_DISABLED`]). The dangerous failure mode would be
+/// `occupied_slots` treating the refusal like the end-of-walk status and returning
+/// whatever it had — an inventory that looks complete. No golden capture exists for this
+/// exchange (NSM never sends `NEXT_SLOT`), so the requests are built with our own
+/// encoder rather than replayed. The close still runs on the error path; the script
+/// ending with those exchanges makes `is_exhausted` the assertion that it was sent.
+#[test]
+fn a_disabled_cursor_is_an_error_not_a_partial_list() {
+    use nord_usb::{Message, Service};
+    use Direction::{In, Out};
+
+    let msg = |cmd: u32, args: Vec<u8>| Message::new(Service::Program, 10, cmd, args).encode();
+    let middle = vec![
+        // INFO 0:0 answered "empty" — a refusal the walk tolerates by design.
+        Step {
+            direction: Out,
+            bytes: msg(0x1e, vec![0; 8]),
+        },
+        Step {
+            direction: In,
+            bytes: msg(0x1f, 1u32.to_be_bytes().to_vec()),
+        },
+        // NEXT_SLOT 0:0 answered with enumeration disabled.
+        Step {
+            direction: Out,
+            bytes: msg(0x20, vec![0; 8]),
+        },
+        Step {
+            direction: In,
+            bytes: msg(0x21, 0x11u32.to_be_bytes().to_vec()),
+        },
+    ];
+    let mut t = ReplayTransport::new(wrap(middle));
+
+    let err = block_on(async {
+        let mut s = Session::open(&mut t, ObjectClass::Program).await.unwrap();
+        let r = op::occupied_slots(&mut s, 500).await;
+        s.commit()
+            .await
+            .expect("the close itself is not refused here");
+        r.expect_err("the refused walk was reported as success")
+    });
+    assert!(
+        matches!(err, nord_usb::Error::DeviceStatus(op::ENUMERATION_DISABLED)),
+        "wrong error: {err}"
+    );
+    assert!(
+        t.is_exhausted(),
+        "the refused walk did not run the closing exchanges"
+    );
+}

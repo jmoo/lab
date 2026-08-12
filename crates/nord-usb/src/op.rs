@@ -389,11 +389,21 @@ pub async fn focus<T: Transport, C>(session: &mut Session<'_, T, C>) -> Result<L
     })
 }
 
+/// Device status meaning "enumeration is disabled".
+///
+/// The instrument turns [`cmd::NEXT_SLOT`] off after any write since power-up and only a
+/// power cycle turns it back on; point commands are unaffected. Surfaced as
+/// [`Error::DeviceStatus`] rather than swallowed, because a caller that retries or
+/// falls back silently would hide that its inventory can no longer be enumerated.
+pub const ENUMERATION_DISABLED: u32 = 0x11;
+
 /// The next occupied slot after `at`, or `None` once the walk runs off the end.
 ///
 /// **Read-only.** Positions inside a gap are safe to pass: the device answers with the
 /// next real object rather than an error, which is what makes this an iterator over
 /// content instead of over addresses.
+///
+/// Refuses with [`ENUMERATION_DISABLED`] once any write has happened this power cycle.
 pub async fn next_occupied<T: Transport, C>(
     session: &mut Session<'_, T, C>,
     at: Location,
@@ -440,6 +450,10 @@ pub async fn next_occupied<T: Transport, C>(
 /// Two bounds keep a walk finite when the device does not behave as expected: `cap` on
 /// total slots, and a stop after [`EMPTY_BANKS_BEFORE_STOP`] consecutive empty banks for
 /// classes that never report out-of-range at all.
+///
+/// A refusal mid-walk — [`ENUMERATION_DISABLED`] above all — propagates as its error
+/// rather than truncating the list: a partial inventory that looks complete is the one
+/// result worse than none.
 pub async fn occupied_slots<T: Transport, C>(
     session: &mut Session<'_, T, C>,
     cap: usize,

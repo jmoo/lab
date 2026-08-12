@@ -128,6 +128,9 @@ pub mod cmd {
 
     /// The object the panel currently has loaded, for the session's class. No arguments;
     /// the reply is a bank/slot pair. The read half of [`SELECT`].
+    ///
+    /// Class-dependent: status `0x1` when nothing of the session's class is loaded, and
+    /// status `0x15` from the library classes, which have no focus at all.
     pub const FOCUS: u32 = 0x31;
 
     /// Next occupied slot at or after a position. Args: bank, slot; the reply carries
@@ -138,6 +141,11 @@ pub mod cmd {
     /// and their indices run past the class's item count, so this is the only way to
     /// enumerate a library: `INFO` answers one slot at a time and nothing else reports
     /// which ones hold anything.
+    ///
+    /// ⚠️ Status `0x11` means the instrument has disabled enumeration, which it does
+    /// after any write since power-up — sometimes for one class at a time, eventually
+    /// for all, and nothing but a power cycle re-enables it. Every point command keeps
+    /// working, so a walk is only trustworthy on a boot with no writes behind it.
     pub const NEXT_SLOT: u32 = 0x20;
 
     /// ⚠️ **Never send this.** It puts `"Deleting..."` and a full progress bar on the
@@ -387,7 +395,9 @@ impl Partition {
                     need: fields_end,
                 });
             }
-            let name = String::from_utf8_lossy(&p[at + 4..end]).trim_end().to_string();
+            let name = String::from_utf8_lossy(&p[at + 4..end])
+                .trim_end()
+                .to_string();
             out.push(Partition {
                 index: index as u32,
                 native: name.contains("(Native)"),
@@ -405,16 +415,24 @@ impl Bank {
     /// `[u32 name_len][name][u32 slots]` records.
     pub fn decode_all(msg: &Message) -> Result<Vec<Self>> {
         let p = msg.payload();
-        let count = *p.get(4).ok_or(Error::Truncated { got: p.len(), need: 5 })? as usize;
+        let count = *p.get(4).ok_or(Error::Truncated {
+            got: p.len(),
+            need: 5,
+        })? as usize;
         let mut out = Vec::with_capacity(count);
         let mut at = 5;
         for index in 0..count {
             let len = read_u32(p, at)? as usize;
             let end = at + 4 + len;
             let name = if end <= p.len() {
-                String::from_utf8_lossy(&p[at + 4..end]).trim_end().to_string()
+                String::from_utf8_lossy(&p[at + 4..end])
+                    .trim_end()
+                    .to_string()
             } else {
-                return Err(Error::Truncated { got: p.len(), need: end });
+                return Err(Error::Truncated {
+                    got: p.len(),
+                    need: end,
+                });
             };
             out.push(Bank {
                 index: index as u32,

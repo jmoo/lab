@@ -240,7 +240,9 @@ impl<T: Transport, C> Session<'_, T, C> {
             .ok_or_else(|| Error::Transport("session has no transport".into()))?;
 
         let raw = match limit {
-            Some(limit) => match transport.read_timeout(crate::transport::READ_BUFFER, limit).await?
+            Some(limit) => match transport
+                .read_timeout(crate::transport::READ_BUFFER, limit)
+                .await?
             {
                 Some(raw) => raw,
                 None => return Ok(None),

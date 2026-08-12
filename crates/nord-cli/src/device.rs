@@ -226,6 +226,21 @@ fn explain(e: nord_usb::Error, at: Location) -> String {
     }
 }
 
+/// Turn a refusal from the enumeration walk into something actionable.
+///
+/// No slot to name here — the failing command is the walk itself.
+fn explain_walk(e: nord_usb::Error) -> String {
+    match e {
+        nord_usb::Error::DeviceStatus(usb_op::ENUMERATION_DISABLED) => {
+            "the instrument has disabled slot enumeration, which it does after any \
+             write since it was switched on; only a power cycle restores it, and \
+             per-slot `info` still works in the meantime"
+                .into()
+        }
+        other => other.to_string(),
+    }
+}
+
 fn open_usb() -> Result<nord_usb::transport::UsbTransport, String> {
     nord_usb::transport::UsbTransport::open_first().map_err(|e| e.to_string())
 }
@@ -902,10 +917,7 @@ pub fn deps(ui: &Ui, at: Location, class: ObjectClass) -> Result<(), String> {
             .map(|d| d.class.label().to_string())
             .collect();
         ui.note("");
-        ui.note(format!(
-            "routed but nothing assigned: {}",
-            which.join(", ")
-        ));
+        ui.note(format!("routed but nothing assigned: {}", which.join(", ")));
     }
 
     if !idle.is_empty() {
@@ -963,8 +975,7 @@ pub fn geometry(ui: &Ui) -> Result<(), String> {
     )));
     for (p, banks) in &rows {
         // The sentinel is not a capacity and must not be summed into one.
-        let bounded: Vec<&nord_usb::wire::Bank> =
-            banks.iter().filter(|b| b.is_bounded()).collect();
+        let bounded: Vec<&nord_usb::wire::Bank> = banks.iter().filter(|b| b.is_bounded()).collect();
         let slots = if bounded.len() == banks.len() {
             bounded.iter().map(|b| b.slots).sum::<u32>().to_string()
         } else {
@@ -1000,11 +1011,9 @@ pub fn geometry(ui: &Ui) -> Result<(), String> {
 #[cfg(feature = "wedge")]
 pub fn wedge(ui: &Ui, class: ObjectClass, yes: bool) -> Result<(), String> {
     if !yes {
-        return Err(
-            "refusing to wedge the instrument without --yes; \
+        return Err("refusing to wedge the instrument without --yes; \
              clear it afterwards with `nord device recover`"
-                .into(),
-        );
+            .into());
     }
     let mut t = open_usb()?;
     nord_usb::block_on(async {
@@ -1042,10 +1051,7 @@ pub fn controls(
         nord_usb::transport::usb::Recipient::Device
     };
 
-    ui.out(ui.dim(format!(
-        "{:<9} {:>5}  {}",
-        "bRequest", "bytes", "response"
-    )));
+    ui.out(ui.dim(format!("{:<9} {:>5}  {}", "bRequest", "bytes", "response")));
     let mut answered = 0;
     for request in from..=to {
         let got = t.vendor_control_in(
@@ -1059,14 +1065,23 @@ pub fn controls(
         match got {
             Ok(data) if data.is_empty() => {
                 answered += 1;
-                ui.out(format!("{request:#04x} ({request:>3}) {:>5}  (accepted, no data)", 0));
+                ui.out(format!(
+                    "{request:#04x} ({request:>3}) {:>5}  (accepted, no data)",
+                    0
+                ));
             }
             Ok(data) => {
                 answered += 1;
                 let hex: Vec<String> = data.iter().take(24).map(|b| format!("{b:02x}")).collect();
                 let text: String = data
                     .iter()
-                    .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+                    .map(|&b| {
+                        if (0x20..0x7f).contains(&b) {
+                            b as char
+                        } else {
+                            '.'
+                        }
+                    })
                     .collect();
                 ui.out(format!(
                     "{request:#04x} ({request:>3}) {:>5}  {}",
@@ -1141,14 +1156,17 @@ pub fn list(ui: &Ui, class: ObjectClass, cap: usize) -> Result<(), String> {
         let closed = s.commit().await;
         finish(r, closed)
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(explain_walk)?;
 
     if rows.is_empty() {
         ui.note(format!("no {} on the instrument", class.label()));
         return Ok(());
     }
 
-    ui.out(ui.dim(format!("{:<8} {:<6} {:>9}  name", "slot", "format", "bytes")));
+    ui.out(ui.dim(format!(
+        "{:<8} {:<6} {:>9}  name",
+        "slot", "format", "bytes"
+    )));
     for (at, info) in &rows {
         ui.out(format!(
             "{:<8} {:<6} {:>9}  {}",
@@ -1302,7 +1320,13 @@ fn report_reply(ui: &Ui, reply: &nord_usb::Message, op: u32) {
         let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
         let ascii: String = chunk
             .iter()
-            .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+            .map(|&b| {
+                if (0x20..0x7f).contains(&b) {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
             .collect();
         ui.out(format!("  {:04x}  {:<47}  {ascii}", i * 16, hex.join(" ")));
     }
