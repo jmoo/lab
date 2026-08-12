@@ -10,9 +10,9 @@
 use std::sync::mpsc::{Receiver, Sender};
 
 use eframe::egui;
-use nord_format::cbin::{Generation, Header};
-use nord_format::formats::ne5;
-use nord_format::{Entity, Live, Program, Settings};
+use nord_format::cbin::{Cbin, Generation, Header};
+use nord_format::formats::{ne5, ns2, ns3, ns4};
+use nord_format::{Entity, Live, OrganPreset, PianoPreset, Program, Settings, Song, Synth};
 use nord_usb::{Location, ObjectClass};
 
 use crate::log::Log;
@@ -154,6 +154,12 @@ pub struct LocalEntity {
     pub dirty: bool,
     /// Owed back to the slot it came from, waiting on a Send.
     pub pending: bool,
+    /// Whether this is on this computer, as opposed to a view of a slot.
+    ///
+    /// A view is a working copy like any other — it is edited and sent back the same
+    /// way — but it is not in the local list and goes when its tab does. Only
+    /// [`Workspace::keep`] promotes one.
+    pub kept: bool,
 }
 
 impl LocalEntity {
@@ -179,6 +185,7 @@ impl LocalEntity {
             verify,
             dirty: false,
             pending: false,
+            kept: true,
         }
     }
 
@@ -200,6 +207,16 @@ impl LocalEntity {
             .ok()
             .map(|read| read.body.0)
     }
+}
+
+/// Whether an asset holds something no other copy of it does.
+///
+/// The one rule that decides what happens to a view when the last thing looking at it
+/// goes: **an edited or owed view is precious, an untouched one is disposable.** An
+/// untouched view is the slot's own bytes, which the instrument still has; an edited one
+/// is the only copy there is.
+pub fn precious(entity: &LocalEntity) -> bool {
+    entity.dirty || entity.pending
 }
 
 /// The filename an export suggests for a verbatim name: made path-safe, and given the
@@ -289,23 +306,105 @@ fn verify(entity: &Entity, bytes: &[u8]) -> VerifyState {
     }
 }
 
-/// The fresh defaults the New menu offers — the objects `nord … edit` starts from
-/// when it is given no target.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// One product family and the objects it can be started from nothing, which is how the
+/// New menu is arranged: a family, then a kind inside it.
+pub struct Family {
+    pub label: &'static str,
+    pub kinds: &'static [Fresh],
+}
+
+/// A body of every zero is a legal body: each field's type decodes the whole of its
+/// slot, so nothing in it is out of range. Build one under the newest version the
+/// decode is validated against.
+///
+/// ⚠️ Legal is not the same as **default**. What comes out is every control at zero,
+/// which is not a state any panel ships in — see [`Fresh::zeroed`], which is what puts
+/// that in front of the operator before they make one.
+macro_rules! zeroed {
+    ($body:ty, $len:expr, $format:expr, $versions:expr, $wrap:expr) => {{
+        let body = <$body>::try_from([0u8; $len]).map_err(|e| format!("{e}"))?;
+        let version = *$versions.last().ok_or("the format knows no version")?;
+        $wrap(Cbin {
+            header: Header::new($format, (0, 0), version),
+            body,
+        })
+    }};
+}
+
+/// The objects the New menu offers, across every format this app can build from
+/// nothing.
+///
+/// ⚠️ Only bodies that **decode** are here. A stub format — the Stage 3's song, the
+/// settings of any Stage — round-trips its container and nothing more, so a zeroed one
+/// is 45 bytes of nothing under a tag rather than an object, and offering it would put a
+/// file in front of the operator that this app cannot say a single true thing about.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Fresh {
+    /// The Electro 5's four, each from the library's own constructor.
     Program,
     Live,
+    SetList,
     Settings,
+    Stage2Program,
+    Stage3Program,
+    Stage3Synth,
+    Stage4Program,
+    Stage4Organ,
+    Stage4Piano,
+    Stage4Synth,
 }
 
 impl Fresh {
-    pub const ALL: [Fresh; 3] = [Fresh::Program, Fresh::Live, Fresh::Settings];
+    pub const ALL: [Fresh; 11] = [
+        Fresh::Program,
+        Fresh::Live,
+        Fresh::SetList,
+        Fresh::Settings,
+        Fresh::Stage2Program,
+        Fresh::Stage3Program,
+        Fresh::Stage3Synth,
+        Fresh::Stage4Program,
+        Fresh::Stage4Organ,
+        Fresh::Stage4Piano,
+        Fresh::Stage4Synth,
+    ];
 
+    pub const FAMILIES: [Family; 4] = [
+        Family {
+            label: "Electro 5",
+            kinds: &[Fresh::Program, Fresh::Live, Fresh::SetList, Fresh::Settings],
+        },
+        Family {
+            label: "Stage 2",
+            kinds: &[Fresh::Stage2Program],
+        },
+        Family {
+            label: "Stage 3",
+            kinds: &[Fresh::Stage3Program, Fresh::Stage3Synth],
+        },
+        Family {
+            label: "Stage 4",
+            kinds: &[
+                Fresh::Stage4Program,
+                Fresh::Stage4Organ,
+                Fresh::Stage4Piano,
+                Fresh::Stage4Synth,
+            ],
+        },
+    ];
+
+    /// What the kind is called inside its family's menu.
     pub fn label(self) -> &'static str {
         match self {
-            Fresh::Program => "program",
-            Fresh::Live => "live",
-            Fresh::Settings => "settings",
+            Fresh::Program | Fresh::Stage2Program | Fresh::Stage3Program | Fresh::Stage4Program => {
+                "Program"
+            }
+            Fresh::Live => "Live slot",
+            Fresh::SetList => "Set list",
+            Fresh::Settings => "Settings",
+            Fresh::Stage3Synth | Fresh::Stage4Synth => "Synth preset",
+            Fresh::Stage4Organ => "Organ preset",
+            Fresh::Stage4Piano => "Piano preset",
         }
     }
 
@@ -313,19 +412,104 @@ impl Fresh {
         match self {
             Fresh::Program => ne5::program::FORMAT,
             Fresh::Live => ne5::live::FORMAT,
+            Fresh::SetList => ne5::song::FORMAT,
             Fresh::Settings => ne5::settings::FORMAT,
+            Fresh::Stage2Program => ns2::program::FORMAT,
+            Fresh::Stage3Program => ns3::program::FORMAT,
+            Fresh::Stage3Synth => ns3::synth::FORMAT,
+            Fresh::Stage4Program => ns4::program::FORMAT,
+            Fresh::Stage4Organ => ns4::organ_preset::FORMAT,
+            Fresh::Stage4Piano => ns4::piano_preset::FORMAT,
+            Fresh::Stage4Synth => ns4::synth::FORMAT,
         }
     }
 
+    /// Whether what this makes is a zeroed body rather than a constructed object.
+    ///
+    /// The distinction the menu has to carry: an Electro 5 program comes from the
+    /// library's own constructor, and a Stage anything is every control at zero.
+    pub fn zeroed(self) -> bool {
+        !matches!(
+            self,
+            Fresh::Program | Fresh::Live | Fresh::SetList | Fresh::Settings
+        )
+    }
+
+    /// The sentence a hover puts on the menu entry, where there is something the
+    /// operator would otherwise have to find out by opening the file.
+    pub fn note(self) -> Option<&'static str> {
+        self.zeroed().then_some(
+            "Every control at zero. The file decodes and re-saves byte for byte, but it \
+             is not a factory program — nothing here knows what one would hold.",
+        )
+    }
+
     fn bytes(self) -> Result<Vec<u8>, String> {
+        let at = |slot: u16| -> Result<ne5::program::Location, String> {
+            (0, slot).try_into().map_err(|e| format!("{e}"))
+        };
         let entity = match self {
-            Fresh::Program => Entity::Program(Program::Electro5(ne5::program::new(
-                (0, 0).try_into().map_err(|e| format!("{e}"))?,
-            ))),
+            Fresh::Program => Entity::Program(Program::Electro5(ne5::program::new(at(0)?))),
             Fresh::Live => Entity::Live(Live::Electro5(ne5::live::new(
                 (0, 0).try_into().map_err(|e| format!("{e}"))?,
             ))),
+            // A set list is four pointers and nothing else, so the only starting point
+            // there is one is the first four programs.
+            Fresh::SetList => Entity::Song(Song::Electro5(ne5::song::new(
+                (0, 0).try_into().map_err(|e| format!("{e}"))?,
+                ne5::song::DEFAULT_VERSION,
+                [at(0)?, at(1)?, at(2)?, at(3)?],
+            ))),
             Fresh::Settings => Entity::Settings(Settings::Electro5(ne5::settings::new())),
+            Fresh::Stage2Program => zeroed!(
+                ns2::Program,
+                ns2::program::BODY_LEN,
+                ns2::program::FORMAT,
+                ns2::program::KNOWN_VERSIONS,
+                |f| Entity::Program(Program::Stage2(f))
+            ),
+            Fresh::Stage3Program => zeroed!(
+                ns3::Program,
+                ns3::program::BODY_LEN,
+                ns3::program::FORMAT,
+                ns3::program::KNOWN_VERSIONS,
+                |f| Entity::Program(Program::Stage3(f))
+            ),
+            Fresh::Stage3Synth => zeroed!(
+                ns3::SynthPreset,
+                ns3::synth::BODY_LEN,
+                ns3::synth::FORMAT,
+                ns3::synth::KNOWN_VERSIONS,
+                |f| Entity::Synth(Synth::Stage3(f))
+            ),
+            Fresh::Stage4Program => zeroed!(
+                ns4::Program,
+                ns4::program::BODY_LEN,
+                ns4::program::FORMAT,
+                ns4::program::KNOWN_VERSIONS,
+                |f| Entity::Program(Program::Stage4(f))
+            ),
+            Fresh::Stage4Organ => zeroed!(
+                ns4::organ_preset::OrganPreset,
+                ns4::organ_preset::BODY_LEN,
+                ns4::organ_preset::FORMAT,
+                ns4::organ_preset::KNOWN_VERSIONS,
+                |f| Entity::OrganPreset(OrganPreset::Stage4(f))
+            ),
+            Fresh::Stage4Piano => zeroed!(
+                ns4::piano_preset::PianoPreset,
+                ns4::piano_preset::BODY_LEN,
+                ns4::piano_preset::FORMAT,
+                ns4::piano_preset::KNOWN_VERSIONS,
+                |f| Entity::PianoPreset(PianoPreset::Stage4(f))
+            ),
+            Fresh::Stage4Synth => zeroed!(
+                ns4::synth::SynthPreset,
+                ns4::synth::BODY_LEN,
+                ns4::synth::FORMAT,
+                ns4::synth::KNOWN_VERSIONS,
+                |f| Entity::Synth(Synth::Stage4(f))
+            ),
         };
         nord_format::to_bytes(&entity).map_err(|e| e.to_string())
     }
@@ -395,12 +579,109 @@ impl Workspace {
         self.revision
     }
 
+    /// Everything held in memory, views included. The local **list** is
+    /// [`Workspace::listed`].
     pub fn entities(&self) -> &[LocalEntity] {
         &self.entities
     }
 
+    /// What "This computer" shows: everything except the views of a slot.
+    pub fn listed(&self) -> impl Iterator<Item = &LocalEntity> {
+        self.entities.iter().filter(|e| e.kept)
+    }
+
     pub fn get(&self, id: u64) -> Option<&LocalEntity> {
         self.entities.iter().find(|e| e.id == id)
+    }
+
+    /// Whether this is a view of a slot rather than something on this computer.
+    pub fn is_view(&self, id: u64) -> bool {
+        self.get(id).is_some_and(|entity| !entity.kept)
+    }
+
+    /// Take a copy of a slot without putting it in the local list.
+    ///
+    /// What a double-click on a slot opens: a tab and a document over a working copy,
+    /// which is edited and sent back like any other, and which goes when its tab does.
+    pub fn view(&mut self, name: String, origin: Origin, bytes: Vec<u8>, log: &mut Log) -> u64 {
+        let id = self.ingest(name, origin, bytes, log);
+        let Some(entity) = self.entities.iter_mut().find(|e| e.id == id) else {
+            return id;
+        };
+        entity.kept = false;
+        // ⚠️ Said again, differently. `ingest` has already announced this as being on
+        // this computer, which is the one thing a view is not — and the banner over the
+        // document says so. The last line the operator reads has to be the true one.
+        let where_ = match entity.origin.slot() {
+            Some((class, at)) => crate::strings::place(class, at),
+            None => "the instrument".to_string(),
+        };
+        log.say(format!(
+            "Viewing {where_} — “{}” is not kept on this computer.",
+            entity.name
+        ));
+        id
+    }
+
+    /// The view of a slot, if one is open. A slot has at most one: a second would be two
+    /// working copies of one place, editable apart and both sendable back to it.
+    pub fn view_of(&self, class: ObjectClass, at: Location) -> Option<u64> {
+        self.entities
+            .iter()
+            .find(|e| !e.kept && e.origin.slot() == Some((class, at)))
+            .map(|e| e.id)
+    }
+
+    /// Promote a view into the local list. Its edits and its debt come with it.
+    pub fn keep(&mut self, id: u64, log: &mut Log) {
+        let Some(entity) = self.entities.iter_mut().find(|e| e.id == id) else {
+            return;
+        };
+        if std::mem::replace(&mut entity.kept, true) {
+            return;
+        }
+        let name = entity.name.clone();
+        self.revision += 1;
+        log.say(format!("“{name}” is on this computer."));
+    }
+
+    /// Drop the views nothing is looking at any more — except the ones holding changes.
+    ///
+    /// A view lives for as long as its tab: nothing lists it, so a view left behind is
+    /// one nothing can reach and nothing can remove.
+    ///
+    /// ⚠️ **A view is the only copy of what it holds.** Nothing lists it and the store
+    /// skips it, so closing its tab is the one gesture in this app that can destroy an
+    /// edit — and the × sits beside the badge saying the edit is owed back to a slot.
+    /// So an edited or owed view is promoted into the list instead, and only an
+    /// untouched one is dropped.
+    pub fn close_views(&mut self, open: impl Fn(u64) -> bool, log: &mut Log) {
+        let mut rescued = Vec::new();
+        let before = self.entities.len();
+        self.entities.retain_mut(|entity| {
+            if entity.kept || open(entity.id) {
+                return true;
+            }
+            if !precious(entity) {
+                return false;
+            }
+            entity.kept = true;
+            rescued.push(entity.name.clone());
+            true
+        });
+        for name in &rescued {
+            log.say(format!(
+                "“{name}” is kept on this computer — it has changes the instrument does \
+                 not."
+            ));
+        }
+        if self.entities.len() == before && rescued.is_empty() {
+            return;
+        }
+        if self.selected.is_some_and(|id| self.get(id).is_none()) {
+            self.selected = self.entities.last().map(|e| e.id);
+        }
+        self.revision += 1;
     }
 
     /// Mark an asset as owed back to the slot it came from, or paid.
@@ -549,7 +830,10 @@ impl Workspace {
         if entity.bytes == bytes {
             return;
         }
-        *entity = LocalEntity::new(id, entity.name.clone(), entity.origin.clone(), bytes);
+        *entity = LocalEntity {
+            kept: entity.kept,
+            ..LocalEntity::new(id, entity.name.clone(), entity.origin.clone(), bytes)
+        };
         self.revision += 1;
         log.say(format!("“{}” is back as it was opened.", entity.name));
     }
@@ -567,6 +851,7 @@ impl Workspace {
         *entity = LocalEntity {
             dirty: true,
             pending: entity.pending,
+            kept: entity.kept,
             ..replaced
         };
         self.revision += 1;
@@ -744,13 +1029,208 @@ mod tests {
     }
 
     /// Each fresh default carries its own tag, and each one round-trips.
+    ///
+    /// The whole claim the New menu makes about a zeroed body: it decodes, and it
+    /// re-saves byte for byte.
     #[test]
     fn every_fresh_default_round_trips_under_its_own_tag() {
         for kind in Fresh::ALL {
             let entity = ingest("untitled", kind.bytes().unwrap());
-            assert_eq!(entity.tag(), kind.tag());
-            assert!(matches!(entity.verify, VerifyState::Ok), "{}", kind.label());
+            assert!(entity.parse_error.is_none(), "{:?}", kind);
+            assert_eq!(entity.tag(), kind.tag(), "{kind:?}");
+            assert!(matches!(entity.verify, VerifyState::Ok), "{kind:?}");
+            assert!(
+                entity.container.expect("a CBIN file").checksum_ok,
+                "{kind:?}"
+            );
         }
+    }
+
+    /// The menu is the families, and the families are the menu: a kind reachable from
+    /// neither or from two places is one nobody can find or one offered twice.
+    #[test]
+    fn every_kind_sits_in_exactly_one_family() {
+        let mut seen: Vec<Fresh> = Fresh::FAMILIES
+            .iter()
+            .flat_map(|family| family.kinds.iter().copied())
+            .collect();
+        assert_eq!(seen.len(), Fresh::ALL.len());
+        for kind in Fresh::ALL {
+            let at = seen.iter().position(|held| *held == kind);
+            seen.remove(at.unwrap_or_else(|| panic!("{kind:?} is in no family")));
+        }
+        assert!(seen.is_empty());
+    }
+
+    /// A zeroed body is not a factory program, and the menu has to say so rather than
+    /// let the operator find out.
+    #[test]
+    fn a_zeroed_body_says_that_it_is_one() {
+        assert!(!Fresh::Program.zeroed() && Fresh::Program.note().is_none());
+        for kind in Fresh::ALL.iter().filter(|kind| kind.zeroed()) {
+            let note = kind.note().unwrap_or_else(|| panic!("{kind:?}"));
+            assert!(note.contains("zero"), "{kind:?}: {note}");
+        }
+    }
+
+    /// Two tags the same would be two menu entries making the same file.
+    #[test]
+    fn no_two_kinds_share_a_tag() {
+        let mut tags: Vec<&str> = Fresh::ALL.iter().map(|kind| kind.tag()).collect();
+        tags.sort_unstable();
+        let held = tags.len();
+        tags.dedup();
+        assert_eq!(tags.len(), held);
+    }
+
+    /// A slot opened for a look is a working copy that nothing lists, and it goes when
+    /// the tab looking at it does.
+    #[test]
+    fn a_view_is_not_on_this_computer_until_it_is_kept() {
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx);
+        let mut log = Log::default();
+        let at = Location { bank: 6, slot: 3 };
+        let device = || Origin::Device {
+            class: ObjectClass::Program,
+            at,
+        };
+
+        let viewed = workspace.view(
+            "Africa-Split.ne5p".into(),
+            device(),
+            Fresh::Program.bytes().unwrap(),
+            &mut log,
+        );
+        let copied = workspace.ingest(
+            "Squabble-B.ne5p".into(),
+            device(),
+            Fresh::Program.bytes().unwrap(),
+            &mut log,
+        );
+
+        assert!(workspace.is_view(viewed) && !workspace.is_view(copied));
+        let listed: Vec<u64> = workspace.listed().map(|e| e.id).collect();
+        assert_eq!(listed, vec![copied], "a view is not in the local list");
+        // It is still an entity in every other way — a tab and a send both find it.
+        assert!(workspace.get(viewed).is_some());
+        assert_eq!(workspace.entities().len(), 2);
+
+        // Edited, it stays a view; kept, it stops being one and keeps its edit.
+        let edited = workspace.get(viewed).unwrap().bytes.clone();
+        workspace.replace_bytes(viewed, [edited, vec![]].concat(), &mut log);
+        assert!(workspace.is_view(viewed));
+        workspace.keep(viewed, &mut log);
+        assert!(!workspace.is_view(viewed));
+        assert_eq!(workspace.listed().count(), 2);
+    }
+
+    /// A view outlives nothing: once no tab holds it, it is gone. What was kept stays
+    /// whether anything is looking at it or not.
+    #[test]
+    fn a_view_goes_when_the_last_tab_on_it_closes() {
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx);
+        let mut log = Log::default();
+        let at = Location { bank: 6, slot: 3 };
+        let viewed = workspace.view(
+            "Africa-Split.ne5p".into(),
+            Origin::Device {
+                class: ObjectClass::Program,
+                at,
+            },
+            Fresh::Program.bytes().unwrap(),
+            &mut log,
+        );
+        let local = workspace.create(Fresh::Program, &mut log).unwrap();
+
+        workspace.close_views(|id| id == viewed, &mut log);
+        assert!(workspace.get(viewed).is_some(), "its tab is still open");
+
+        workspace.close_views(|_| false, &mut log);
+        assert!(workspace.get(viewed).is_none());
+        assert!(workspace.get(local).is_some(), "kept is kept");
+        assert_eq!(workspace.selected().map(|e| e.id), Some(local));
+    }
+
+    /// ⚠️ The loss this rule exists to stop. A view is the only copy of what it holds —
+    /// nothing lists it and the store skips it — so the × on its tab sits next to a
+    /// badge saying the edit is owed to a slot, with no undo behind it. An edited view
+    /// is kept; only an untouched one is dropped.
+    #[test]
+    fn a_view_with_changes_in_it_is_kept_rather_than_dropped() {
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx);
+        let mut log = Log::default();
+        let at = |slot| Location { bank: 6, slot };
+        let view = |workspace: &mut Workspace, slot, log: &mut Log| {
+            workspace.view(
+                format!("view-{slot}.ne5p"),
+                Origin::Device {
+                    class: ObjectClass::Program,
+                    at: at(slot),
+                },
+                Fresh::Program.bytes().unwrap(),
+                log,
+            )
+        };
+
+        let edited = view(&mut workspace, 0, &mut log);
+        let owed = view(&mut workspace, 1, &mut log);
+        let untouched = view(&mut workspace, 2, &mut log);
+
+        let bytes = workspace.get(edited).unwrap().bytes.clone();
+        workspace.replace_bytes(edited, [bytes, vec![0]].concat(), &mut log);
+        workspace.mark_pending(owed, true);
+        assert!(precious(workspace.get(edited).unwrap()));
+        assert!(precious(workspace.get(owed).unwrap()));
+        assert!(!precious(workspace.get(untouched).unwrap()));
+
+        // Every tab closes at once.
+        workspace.close_views(|_| false, &mut log);
+
+        assert!(workspace.get(untouched).is_none(), "the slot still has it");
+        let listed: Vec<u64> = workspace.listed().map(|e| e.id).collect();
+        assert_eq!(listed, vec![edited, owed], "and the changes survive");
+        assert!(!workspace.is_view(edited) && !workspace.is_view(owed));
+        // What was owed is still owed: promoting it must not pay a debt.
+        assert!(workspace.get(owed).unwrap().pending);
+        assert!(log.status().1.contains("kept on this computer"));
+    }
+
+    /// One view per slot, so a second double-click has something to be pointed at rather
+    /// than a second working copy to make.
+    #[test]
+    fn a_slot_has_at_most_one_view() {
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx);
+        let mut log = Log::default();
+        let at = Location { bank: 6, slot: 3 };
+        let elsewhere = Location { bank: 6, slot: 4 };
+        let class = ObjectClass::Program;
+
+        assert_eq!(workspace.view_of(class, at), None);
+        let id = workspace.view(
+            "Africa-Split.ne5p".into(),
+            Origin::Device { class, at },
+            Fresh::Program.bytes().unwrap(),
+            &mut log,
+        );
+        assert_eq!(workspace.view_of(class, at), Some(id));
+        assert_eq!(workspace.view_of(class, elsewhere), None);
+        assert_eq!(workspace.view_of(ObjectClass::SetList, at), None);
+
+        // A copy on this computer is not a view of the slot, however it got here.
+        workspace.ingest(
+            "Africa-Split.ne5p".into(),
+            Origin::Device { class, at },
+            Fresh::Program.bytes().unwrap(),
+            &mut log,
+        );
+        assert_eq!(workspace.view_of(class, at), Some(id));
+        // And once the view is kept, the slot has none.
+        workspace.keep(id, &mut log);
+        assert_eq!(workspace.view_of(class, at), None);
     }
 
     /// The raw-body export is the file with its container stripped — for a type-1

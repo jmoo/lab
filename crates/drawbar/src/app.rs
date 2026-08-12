@@ -180,6 +180,8 @@ impl DrawbarApp {
         if let Some(storage) = cc.storage {
             crate::store::load(storage, &mut app.workspace, &mut app.log);
             app.browser.restore(storage);
+            // Both stores are read; only now does the grouping know what survived.
+            app.browser.settle(&app.workspace);
         }
         app.saved = app.workspace.revision();
         app
@@ -320,6 +322,11 @@ impl eframe::App for DrawbarApp {
         self.device
             .poll(&mut self.log, &mut self.workspace, &mut self.tabs);
         self.tabs.prune(&self.workspace);
+        // A view lives for as long as the tab looking at it: nothing lists one, so a
+        // view whose tab is gone is bytes nothing can reach and nothing can remove. One
+        // that has been edited is kept instead — it is the only copy of the edit.
+        self.workspace
+            .close_views(|id| self.tabs.holds(id), &mut self.log);
         self.take_dropped_files(ctx);
         drop_hint(ctx);
 
@@ -366,6 +373,15 @@ impl eframe::App for DrawbarApp {
                 );
                 return;
             };
+            // ⚠️ The one place the difference is visible. A tab is labelled with the
+            // document's name, and a view's name is the slot's own — so nothing in the
+            // strip says this is not on this computer, and an operator would find that
+            // out by going to the list and not finding it.
+            if self.workspace.is_view(id) {
+                if let Some(act) = viewing_banner(ui, id, &self.workspace) {
+                    acts.push(act);
+                }
+            }
             // ⚠️ Never a file export. Cmd+S means "keep what I did", which for something
             // read off the instrument is a promise to send it back.
             if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
@@ -402,6 +418,38 @@ impl eframe::App for DrawbarApp {
 
         self.keep_up(ctx, frame);
     }
+}
+
+/// The strip over a document that is a view of a slot rather than an asset on this
+/// computer, and the one way to make it one.
+fn viewing_banner(ui: &mut egui::Ui, id: u64, workspace: &Workspace) -> Option<browser::Act> {
+    let where_ = workspace
+        .get(id)?
+        .origin
+        .slot()
+        .map(|(class, at)| crate::strings::place(class, at))?;
+    let mut keep = false;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(format!("Viewing {where_} on the instrument."))
+                    .strong()
+                    .small(),
+            );
+            ui.label(
+                egui::RichText::new(
+                    "Edits and Send back work from here; it is not on this computer.",
+                )
+                .small()
+                .weak(),
+            );
+            keep = ui
+                .small_button("Keep on this computer")
+                .on_hover_text("put it in the list, where it stays after this tab closes")
+                .clicked();
+        });
+    });
+    keep.then_some(browser::Act::Keep(id))
 }
 
 /// Dim the window while files hover, so a drop has somewhere it visibly lands.

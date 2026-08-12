@@ -50,6 +50,11 @@ impl Tabs {
         self.active
     }
 
+    /// Whether a tab is open on this document, in front or behind.
+    pub fn holds(&self, id: u64) -> bool {
+        self.open.iter().any(|tab| tab.id == id)
+    }
+
     /// What the tab looked like when it opened.
     pub fn opened(&self, id: u64) -> &[u8] {
         self.open
@@ -83,10 +88,17 @@ impl Tabs {
                         let Some(entity) = workspace.get(tab.id) else {
                             continue;
                         };
-                        if ui
-                            .selectable_label(self.active == Some(tab.id), &entity.name)
-                            .clicked()
-                        {
+                        // A view of the instrument's copy reads differently from a tab
+                        // that holds something of this computer's.
+                        let name = match workspace.is_view(tab.id) {
+                            true => egui::RichText::new(&entity.name).italics(),
+                            false => egui::RichText::new(&entity.name),
+                        };
+                        let mut label = ui.selectable_label(self.active == Some(tab.id), name);
+                        if workspace.is_view(tab.id) {
+                            label = label.on_hover_text("the instrument's copy, viewed in place");
+                        }
+                        if label.clicked() {
                             activate = Some(tab.id);
                         }
                         if entity.pending {
@@ -158,6 +170,26 @@ mod tests {
         tabs.open(2, &ws);
         tabs.close(1);
         assert_eq!(tabs.active(), Some(2));
+    }
+
+    /// Whether a tab is open is its own question, not one inferred from the bytes it
+    /// opened with — a document that opened empty is still open.
+    #[test]
+    fn a_tab_says_whether_it_is_open_whatever_it_holds() {
+        let (mut tabs, ws) = (Tabs::default(), workspace());
+        assert!(!tabs.holds(1));
+        // Nothing in the workspace under this id, so the tab opens with no bytes at all.
+        tabs.open(1, &ws);
+        tabs.open(2, &ws);
+        assert!(tabs.opened(1).is_empty());
+        assert!(tabs.holds(1) && tabs.holds(2), "both are open");
+        assert!(!tabs.holds(3));
+
+        // Behind the front one still counts.
+        tabs.close(2);
+        assert!(tabs.holds(1) && !tabs.holds(2));
+        tabs.close(1);
+        assert!(!tabs.holds(1));
     }
 
     /// Each tab keeps the bytes it opened with, so Revert in one is not Revert in

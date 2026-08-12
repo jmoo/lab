@@ -81,7 +81,9 @@ pub enum DeviceCmd {
         at: Location,
         /// The wire body verbatim, rather than a whole CBIN file.
         body: bool,
-        /// The copy opens in a tab once it lands, which is what a double-click asks for.
+        /// The copy opens in a tab as a **view** of the slot rather than joining the
+        /// local list, which is what a double-click asks for. Copying to this computer
+        /// is the same read with this off.
         open: bool,
     },
     Put {
@@ -306,6 +308,7 @@ pub enum DeviceEvent {
         name: String,
         origin: Origin,
         bytes: Vec<u8>,
+        /// The copy is a view of the slot rather than a new row on this computer.
         open: bool,
     },
     /// One object landed on the instrument, so it is no longer owed. Every write path
@@ -330,6 +333,10 @@ pub enum DeviceEvent {
 
 /// The attached instrument, from its USB descriptors — answerable before any
 /// transaction is opened.
+///
+/// Everything from [`Identity`](nord_usb::transport::usb::Identity) down is read over
+/// vendor control transfers on endpoint 0, which only the desktop transport issues, so
+/// the browser build answers `None` for all of them rather than guessing.
 #[derive(Clone)]
 pub struct DeviceCard {
     pub product: String,
@@ -337,11 +344,17 @@ pub struct DeviceCard {
     pub vendor_id: u16,
     pub product_id: u16,
     pub serial: Option<String>,
+    /// The vendor-specific interface this app claimed, by its descriptor number.
+    pub interface: Option<u8>,
     /// Firmware version in hundredths: `204` is 2.04.
-    ///
-    /// Read over a vendor control transfer, which only the desktop transport offers, so
-    /// the browser build always answers `None`.
     pub firmware: Option<u16>,
+    /// Reported at vendor request `0x05`. Plausibly a build number, unconfirmed.
+    pub build: Option<u16>,
+    /// Reported at vendor request `0x00`. Reads as a small constant; its meaning is not
+    /// pinned down, so it is shown verbatim rather than under a name it might not have.
+    pub kind: Option<u16>,
+    /// Largest transfer the device will accept or produce, in bytes, framing included.
+    pub max_transfer: Option<u32>,
 }
 
 #[derive(Default)]
@@ -392,8 +405,13 @@ impl DeviceState {
     }
 
     pub fn product(&self) -> Option<&str> {
+        self.card().map(|card| card.product.as_str())
+    }
+
+    /// What the descriptors and endpoint 0 said about the attached instrument.
+    pub fn card(&self) -> Option<&DeviceCard> {
         match &self.connection {
-            Connection::Connected(card) => Some(card.product.as_str()),
+            Connection::Connected(card) => Some(card),
             _ => None,
         }
     }
@@ -401,12 +419,9 @@ impl DeviceState {
     /// The firmware version as the panel writes it — `2.04` — where the transport could
     /// ask for it.
     pub fn firmware(&self) -> Option<String> {
-        let card = match &self.connection {
-            Connection::Connected(card) => card,
-            _ => return None,
-        };
         // 204/100 = 2 and 204%100 = 04, and the panel reads 2.04.
-        card.firmware
+        self.card()?
+            .firmware
             .map(|held| format!("{}.{:02}", held / 100, held % 100))
     }
 
@@ -491,6 +506,24 @@ impl DeviceState {
         bank.get(at.slot as usize).map(Option::as_ref)
     }
 
+    /// The format tags the scanned slots of a class report, in the order first seen.
+    ///
+    /// Every slot a walk reads names its own format, so this is what the folder is
+    /// actually holding rather than what a model's folder is supposed to hold. An
+    /// unscanned class answers with nothing, which is *not known*, never *empty*.
+    pub fn formats_in(&self, class: ObjectClass) -> Vec<String> {
+        let mut seen: Vec<String> = Vec::new();
+        for bank in self.banks_of(class) {
+            for info in self.bank(class, bank).into_iter().flatten().flatten() {
+                let format = info.format.trim();
+                if !format.is_empty() && !seen.iter().any(|held| held == format) {
+                    seen.push(format.to_string());
+                }
+            }
+        }
+        seen
+    }
+
     /// The first slot of `class` known to be vacant — where a duplicate lands when the
     /// user did not drag it anywhere.
     pub fn first_free(&self, class: ObjectClass) -> Option<Location> {
@@ -537,15 +570,15 @@ pub fn slots_per_bank(class: ObjectClass) -> u32 {
     }
 }
 
-/// How full a folder is, in the terms the panel labels it with.
+/// How full a folder is, in the width its own heading has for it: `312/400`, or a bare
+/// count for a class whose items differ in size and divide into no slots.
 ///
 /// Slot counts only: the inventory also reports opaque block totals, and a class whose
-/// items differ in size (pianos, samples) cannot be divided into slots at all — those
-/// report their item count and nothing more.
-pub fn holdings(class: ObjectClass, inventory: &[Status]) -> Option<String> {
+/// items differ in size (pianos, samples) cannot be divided into slots at all.
+pub fn occupancy(class: ObjectClass, inventory: &[Status]) -> Option<String> {
     let status = inventory.iter().find(|status| status.class == class)?;
     Some(match status.slots() {
-        Some(slots) => format!("{} of {slots} slots used", status.count),
+        Some(slots) => format!("{}/{slots}", status.count),
         None => format!("{} items", status.count),
     })
 }
@@ -658,6 +691,18 @@ impl Device {
         self.state.scan.start(class);
     }
 
+    /// Read the whole instrument again: every class, and with each one its counters, its
+    /// geometry and the slot the panel has loaded.
+    ///
+    /// One walk per class, which is the same thing attaching does — a class's counters,
+    /// banks and focus are all read at the head of its own session, so there is nothing
+    /// else to ask for.
+    pub fn resync(&mut self) {
+        for class in BROWSED {
+            self.read_class(class);
+        }
+    }
+
     /// Start the next command if the instrument is free. Call once a frame, after the
     /// UI has had its say.
     pub fn pump(&mut self) {
@@ -749,12 +794,16 @@ impl Device {
         use nord_usb::wire::ProgramInfo;
 
         self.state.connection = Connection::Connected(DeviceCard {
+            build: Some(7),
+            firmware: Some(204),
+            interface: Some(3),
+            kind: Some(1),
+            manufacturer: Some("Clavia DMI AB".into()),
+            max_transfer: Some(4096),
             product: "Electro 5".into(),
-            manufacturer: None,
-            vendor_id: 0x0ffc,
             product_id: 0,
             serial: None,
-            firmware: Some(204),
+            vendor_id: 0x0ffc,
         });
         let slots = names
             .iter()
@@ -811,9 +860,7 @@ impl Device {
                     self.pending.clear();
                     // One walk per class, each its own session. Nothing is asked ahead
                     // of them: a class's counters are read at the head of its own walk.
-                    for class in BROWSED {
-                        self.read_class(class);
-                    }
+                    self.resync();
                 }
                 DeviceEvent::ConnectFailed(why) => {
                     log.error(why);
@@ -900,7 +947,13 @@ impl Device {
                     bytes,
                     open,
                 } => {
-                    let id = workspace.ingest(name, origin, bytes, log);
+                    // A double-click opens a view: a working copy with a tab and a
+                    // document, which nothing lists and which goes when the tab does.
+                    // Copying is the same read, kept.
+                    let id = match open {
+                        true => workspace.view(name, origin, bytes, log),
+                        false => workspace.ingest(name, origin, bytes, log),
+                    };
                     if open {
                         tabs.open(id, workspace);
                     }
@@ -942,9 +995,7 @@ impl Device {
                 DeviceEvent::InstrumentChanged => {
                     log.warn("the instrument changed under us — every cached name is dropped");
                     log.say("Something changed on the instrument. Reading it again…");
-                    for class in BROWSED {
-                        self.read_class(class);
-                    }
+                    self.resync();
                 }
             }
         }

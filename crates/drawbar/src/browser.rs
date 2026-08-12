@@ -4,6 +4,7 @@
 //! list of [`Act`]s, which [`apply`] then runs against the workspace, the device and the
 //! tabs — so a row can be drawn while the thing it stands for is about to change.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use eframe::egui;
@@ -12,12 +13,12 @@ use nord_usb::{Location, ObjectClass};
 
 use crate::app::dot;
 use crate::device::{
-    holdings, put_refusal, read_only, Connection, Device, DeviceCmd, Outgoing, BROWSED,
+    occupancy, put_refusal, read_only, Connection, Device, DeviceCmd, Outgoing, BROWSED,
 };
 use crate::log::Log;
 use crate::strings::{folder, place, shown};
 use crate::tabs::Tabs;
-use crate::workspace::{ExportWhat, Fresh, Workspace};
+use crate::workspace::{ExportWhat, Fresh, LocalEntity, Workspace};
 
 /// What an asset is, which is what decides the folder it belongs in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,8 +29,8 @@ pub enum Kind {
     Piano,
     Live,
     Settings,
-    /// Something the instrument has no folder for — a bundle, a Stage file, a file that
-    /// did not decode at all.
+    /// Something the instrument has no folder for — a bundle, a preset of a kind no
+    /// class holds, a file that did not decode at all.
     Other,
 }
 
@@ -89,7 +90,13 @@ impl Kind {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Item {
     Local(u64),
-    Slot { class: ObjectClass, at: Location },
+    /// A grouping of local assets. Only a rename and a selection reach it; a folder is
+    /// never dragged and never sent anywhere as a thing of its own.
+    Folder(u64),
+    Slot {
+        class: ObjectClass,
+        at: Location,
+    },
 }
 
 /// What is under the pointer while a drag is in progress.
@@ -98,13 +105,21 @@ pub struct Carried {
     pub from: Item,
     pub kind: Kind,
     pub name: String,
+    /// The folder it is in, for a local asset. What makes dragging one out of a folder
+    /// mean something.
+    pub filed: Option<u64>,
 }
 
 /// Where a drop would land.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Onto {
     Computer,
-    Slot { class: ObjectClass, at: Location },
+    /// One of this computer's own folders.
+    Group(u64),
+    Slot {
+        class: ObjectClass,
+        at: Location,
+    },
 }
 
 /// What a drop would do, or the plain reason it would do nothing.
@@ -116,6 +131,10 @@ pub enum Landing {
     Send,
     /// Slot to slot inside one folder. The instrument swaps them.
     Rearrange,
+    /// Into one of this computer's folders. Nothing leaves this computer.
+    File,
+    /// Out of the folder it is in, back to the loose part of the list.
+    Unfile,
     No(&'static str),
 }
 
@@ -128,7 +147,23 @@ impl Landing {
 /// Whether a drag can end where the pointer is, and what it would mean if it did.
 pub fn landing(carried: &Carried, onto: Onto) -> Landing {
     match (carried.from, onto) {
-        (Item::Local(_), Onto::Computer) => Landing::No("it is already on this computer"),
+        // A folder is a way of seeing the list, not a row that moves.
+        (Item::Folder(_), _) => Landing::No("a folder is not dragged"),
+        // The loose part of the list is a target only for something that is in a folder,
+        // which is how one comes back out of one.
+        (Item::Local(_), Onto::Computer) => match carried.filed {
+            Some(_) => Landing::Unfile,
+            None => Landing::No("it is already on this computer"),
+        },
+        (Item::Local(_), Onto::Group(id)) => match carried.filed == Some(id) {
+            true => Landing::No("it is already in that folder"),
+            false => Landing::File,
+        },
+        // The copy would have to land somewhere before it could be filed, and it lands
+        // when the instrument answers rather than when the pointer is let go.
+        (Item::Slot { .. }, Onto::Group(_)) => {
+            Landing::No("copy it to this computer first, then drag it into the folder")
+        }
         (Item::Local(_), Onto::Slot { class, .. }) => {
             if read_only(class) {
                 Landing::No("pianos are installed on the instrument, not moved into it")
@@ -167,8 +202,21 @@ pub enum Act {
     Disconnect,
     OpenFiles,
     New(Fresh),
+    /// Read the whole instrument again — every class, its geometry and its focus.
+    Resync,
     ReadAgain(ObjectClass),
     Open(Item),
+    /// A view of a slot becomes an asset on this computer.
+    Keep(u64),
+    NewFolder,
+    RemoveFolder(u64),
+    /// Put an asset in a folder, or out of the one it is in.
+    File {
+        id: u64,
+        folder: Option<u64>,
+    },
+    /// Write every sendable asset in a folder back where it came from. Already agreed to.
+    SendFolder(u64),
     Copy {
         class: ObjectClass,
         at: Location,
@@ -197,6 +245,10 @@ pub enum Act {
         to: Location,
     },
     RenameLocal {
+        id: u64,
+        name: String,
+    },
+    RenameFolder {
         id: u64,
         name: String,
     },
@@ -257,12 +309,190 @@ pub fn renamed(original: &str, typed: &str) -> Option<String> {
     }
 }
 
+/// One folder on this computer.
+pub struct Folder {
+    pub id: u64,
+    pub name: String,
+}
+
+/// How the local list is grouped.
+///
+/// ⚠️ A folder is a **view of the list**, not a place bytes live: an asset in one is an
+/// asset like any other, and nothing here is a directory, an archive or anything the
+/// instrument has ever heard of. Membership is kept beside the divider rather than in
+/// the workspace for that reason.
+#[derive(Default)]
+pub struct Folders {
+    list: Vec<Folder>,
+    /// Which folder an asset is in, by its workspace id. Absent is loose.
+    of: HashMap<u64, u64>,
+}
+
+impl Folders {
+    pub fn all(&self) -> &[Folder] {
+        &self.list
+    }
+
+    fn name_of(&self, id: u64) -> Option<&str> {
+        self.list
+            .iter()
+            .find(|folder| folder.id == id)
+            .map(|folder| folder.name.as_str())
+    }
+
+    /// A new folder, under a name nothing else in the list is using.
+    fn make(&mut self) -> u64 {
+        let id = self.list.iter().map(|folder| folder.id).max().unwrap_or(0) + 1;
+        let taken = |name: &str| self.list.iter().any(|folder| folder.name == name);
+        let mut name = "New folder".to_string();
+        for nth in 2.. {
+            if !taken(&name) {
+                break;
+            }
+            name = format!("New folder {nth}");
+        }
+        self.list.push(Folder { id, name });
+        id
+    }
+
+    fn rename(&mut self, id: u64, name: String) {
+        if let Some(folder) = self.list.iter_mut().find(|folder| folder.id == id) {
+            folder.name = name;
+        }
+    }
+
+    /// Drop a folder. What was in it goes back to the loose part of the list — a folder
+    /// holds nothing, so removing one cannot take anything with it.
+    fn remove(&mut self, id: u64) {
+        self.list.retain(|folder| folder.id != id);
+        self.of.retain(|_, held| *held != id);
+    }
+
+    fn file(&mut self, entity: u64, folder: Option<u64>) {
+        match folder.filter(|id| self.name_of(*id).is_some()) {
+            Some(id) => self.of.insert(entity, id),
+            None => self.of.remove(&entity),
+        };
+    }
+
+    fn forget(&mut self, entity: u64) {
+        self.of.remove(&entity);
+    }
+
+    /// Drop the memberships of assets the list does not hold.
+    ///
+    /// The store keeps the folders and the assets in two files that are read back
+    /// separately, and only the asset file decides what survived — anything too big to
+    /// keep, or dropped for want of room, leaves its membership behind. Left alone they
+    /// accumulate for as long as the app is installed.
+    fn forget_missing(&mut self, workspace: &Workspace) {
+        self.of.retain(|entity, _| workspace.get(*entity).is_some());
+    }
+
+    /// Which folder an asset is in.
+    pub fn holding(&self, entity: u64) -> Option<u64> {
+        self.of.get(&entity).copied()
+    }
+
+    /// What this folder holds, in the order the list holds it.
+    fn members<'a>(&self, id: u64, workspace: &'a Workspace) -> Vec<&'a LocalEntity> {
+        workspace
+            .listed()
+            .filter(|entity| self.holding(entity.id) == Some(id))
+            .collect()
+    }
+}
+
+/// The folders and their membership as one string, for the store.
+///
+/// `f` lines are the folders and `m` lines are what is in them, so a folder with nothing
+/// in it survives a session like any other.
+fn written(folders: &Folders) -> String {
+    let mut out = format!("{FOLDERS_VERSION}\n");
+    for folder in &folders.list {
+        out.push_str(&format!("f\t{}\t{}\n", folder.id, escaped(&folder.name)));
+    }
+    for (entity, folder) in &folders.of {
+        out.push_str(&format!("m\t{entity}\t{folder}\n"));
+    }
+    out
+}
+
+/// Read back what [`written`] wrote. Anything unaccounted for is no folders at all —
+/// half a grouping is worse than none, because a folder nobody made is one nobody can
+/// explain.
+fn read(text: &str) -> Folders {
+    let mut lines = text.lines();
+    if lines.next() != Some(FOLDERS_VERSION) {
+        return Folders::default();
+    }
+    let mut folders = Folders::default();
+    for line in lines {
+        let mut parts = line.split('\t');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some("f"), Some(id), Some(name)) => {
+                if let Ok(id) = id.parse() {
+                    folders.list.push(Folder {
+                        id,
+                        name: unescaped(name),
+                    });
+                }
+            }
+            (Some("m"), Some(entity), Some(folder)) => {
+                if let (Ok(entity), Ok(folder)) = (entity.parse(), folder.parse()) {
+                    folders.of.insert(entity, folder);
+                }
+            }
+            _ => {}
+        }
+    }
+    // A membership naming a folder that is not in the file would be an asset nothing
+    // shows and nothing can get back.
+    let known: Vec<u64> = folders.list.iter().map(|folder| folder.id).collect();
+    folders.of.retain(|_, folder| known.contains(folder));
+    folders
+}
+
+/// Tabs separate the fields and newlines separate the lines, so a name holding either
+/// would be a name that ate the rest of the store.
+fn escaped(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+}
+
+fn unescaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match (c, chars.clone().next()) {
+            ('\\', Some('t')) => {
+                chars.next();
+                out.push('\t');
+            }
+            ('\\', Some('n')) => {
+                chars.next();
+                out.push('\n');
+            }
+            ('\\', Some('\\')) => {
+                chars.next();
+                out.push('\\');
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 pub struct Browser {
     selection: Option<Item>,
     rename: Option<Rename>,
     ask: Option<Ask>,
     /// Where the divider sits between the two columns, as a share of the dock.
     split: f32,
+    folders: Folders,
+    /// A slot to scroll to and select, once the list holding it has been drawn.
+    jump: Option<(ObjectClass, Location)>,
 }
 
 impl Default for Browser {
@@ -272,6 +502,8 @@ impl Default for Browser {
             rename: None,
             ask: None,
             split: EVEN,
+            folders: Folders::default(),
+            jump: None,
         }
     }
 }
@@ -285,11 +517,20 @@ const LEAST: f32 = 0.15;
 /// The strip the divider answers on.
 const HANDLE: f32 = 7.0;
 
+const FOLDERS_VERSION: &str = "drawbar folders 1";
+
 impl Browser {
     /// Where the divider is kept between sessions.
     pub const SPLIT: &'static str = "drawbar.dock_split";
 
-    /// Put the divider back where it was left.
+    /// Where the folders and their membership are kept between sessions.
+    ///
+    /// ⚠️ Membership is by workspace id, which is the same id the local list is stored
+    /// under — the two files are read back into one list, so they have to agree about
+    /// what an id means.
+    pub const FOLDERS: &'static str = "drawbar.folders";
+
+    /// Put the divider and the folders back where they were left.
     ///
     /// Anything the store cannot account for is the even split: a fraction outside the
     /// stops would be one column showing and the other a sliver.
@@ -299,10 +540,21 @@ impl Browser {
             .and_then(|text| text.parse::<f32>().ok())
             .filter(|share| (LEAST..=1.0 - LEAST).contains(share))
             .unwrap_or(EVEN);
+        self.folders = storage
+            .get_string(Browser::FOLDERS)
+            .map(|text| read(&text))
+            .unwrap_or_default();
+    }
+
+    /// Reconcile the folders with the list that came back beside them. Call once, after
+    /// both stores have been read.
+    pub fn settle(&mut self, workspace: &Workspace) {
+        self.folders.forget_missing(workspace);
     }
 
     pub fn keep(&self, storage: &mut dyn eframe::Storage) {
         storage.set_string(Browser::SPLIT, self.split.to_string());
+        storage.set_string(Browser::FOLDERS, written(&self.folders));
     }
 
     /// Draw the places a sound can live and collect what the user asked for.
@@ -383,7 +635,10 @@ impl Browser {
         ui.advance_cursor_after_rect(whole);
     }
 
-    /// A column heading, and the strip of buttons under it.
+    /// A column heading, and the strip of buttons beside it.
+    ///
+    /// Wrapped, because the strip is in a column the operator can drag to any width and
+    /// a button pushed off the right edge is a button that is gone.
     fn heading(
         &mut self,
         ui: &mut egui::Ui,
@@ -391,7 +646,7 @@ impl Browser {
         buttons: impl FnOnce(&mut egui::Ui),
     ) -> egui::Response {
         let head = ui
-            .horizontal(|ui| {
+            .horizontal_wrapped(|ui| {
                 ui.label(egui::RichText::new(title).strong());
                 buttons(ui);
             })
@@ -406,6 +661,17 @@ impl Browser {
             self.rename = None;
         }
         self.selection = Some(item);
+    }
+
+    /// Take back an armed rename, because the row it belongs to is about to stop
+    /// existing and no row will be drawn to close it.
+    fn forget_rename(&mut self, what: Item) {
+        if self.rename.as_ref().is_some_and(|r| r.what == what) {
+            self.rename = None;
+        }
+        if self.selection == Some(what) {
+            self.selection = None;
+        }
     }
 
     fn start_rename(&mut self, what: Item, from: &str) {
@@ -428,19 +694,36 @@ impl Browser {
     ) {
         let mut open_files = false;
         let mut fresh = None;
+        let mut new_folder = false;
         let mut connect = false;
         let attached = device.state.connected();
         let connecting = matches!(device.state.connection, Connection::Connecting);
         let head = self.heading(ui, "This computer", |ui| {
             open_files = ui.small_button("Open…").clicked();
+            // A family, then a kind inside it: one flat list of every format's every
+            // object is a wall of words in which "Program" appears four times.
             ui.menu_button("New", |ui| {
-                for kind in Fresh::ALL {
-                    if ui.button(kind.label()).clicked() {
-                        fresh = Some(kind);
-                        ui.close();
-                    }
+                for family in &Fresh::FAMILIES {
+                    ui.menu_button(family.label, |ui| {
+                        for kind in family.kinds {
+                            let mut entry = ui.button(kind.label());
+                            if let Some(note) = kind.note() {
+                                entry = entry.on_hover_text(note);
+                            }
+                            if entry.clicked() {
+                                fresh = Some(*kind);
+                                ui.close();
+                            }
+                        }
+                    });
                 }
             });
+            new_folder = ui
+                .small_button("New folder")
+                .on_hover_text(
+                    "a way of grouping the list on this computer; the instrument never sees one",
+                )
+                .clicked();
             if attached {
                 return;
             }
@@ -468,6 +751,9 @@ impl Browser {
         if let Some(kind) = fresh {
             acts.push(Act::New(kind));
         }
+        if new_folder {
+            acts.push(Act::NewFolder);
+        }
         if connect {
             acts.push(Act::Connect);
         }
@@ -479,22 +765,32 @@ impl Browser {
             .id_salt("computer_scroll")
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                if workspace.entities().is_empty() {
+                if workspace.listed().next().is_none() && self.folders.all().is_empty() {
                     ui.label(
                         egui::RichText::new("Drop Nord files here, or use Open…")
                             .weak()
                             .italics(),
                     );
                 }
-                for entity in workspace.entities() {
-                    self.local_row(ui, entity, acts);
+                // Folders first, then whatever is in no folder: a group has to be
+                // findable without scrolling past the loose list to reach it.
+                for id in self.folder_ids() {
+                    self.folder_rows(ui, id, workspace, device, acts);
                 }
-                if egui::DragAndDrop::has_payload_of_type::<Carried>(ui.ctx()) {
+                for entity in workspace.listed() {
+                    if self.folders.holding(entity.id).is_none() {
+                        self.local_row(ui, entity, acts);
+                    }
+                }
+                if let Some(carried) = egui::DragAndDrop::payload::<Carried>(ui.ctx()) {
                     let landing = row(
                         ui,
                         false,
                         &Cells {
-                            name: "Drop here to copy it to this computer",
+                            name: match carried.filed.is_some() {
+                                true => "Drop here to take it out of its folder",
+                                false => "Drop here to copy it to this computer",
+                            },
                             faint: true,
                             ..Cells::default()
                         },
@@ -502,6 +798,113 @@ impl Browser {
                     self.drop_zone(ui, &landing.response, Onto::Computer, acts);
                 }
             });
+    }
+
+    /// The folders in the order they were made. Taken as ids so a row can change the
+    /// list it is drawn from.
+    fn folder_ids(&self) -> Vec<u64> {
+        self.folders.all().iter().map(|folder| folder.id).collect()
+    }
+
+    /// One folder: its heading, and the assets in it.
+    fn folder_rows(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: u64,
+        workspace: &Workspace,
+        device: &Device,
+        acts: &mut Vec<Act>,
+    ) {
+        let item = Item::Folder(id);
+        let Some(name) = self.folders.name_of(id).map(str::to_string) else {
+            return;
+        };
+        let members: Vec<u64> = self
+            .folders
+            .members(id, workspace)
+            .iter()
+            .map(|entity| entity.id)
+            .collect();
+
+        // While the name is being typed the heading is the editor, and what is in the
+        // folder is drawn under it rather than hidden for the length of the gesture.
+        if self.rename.as_ref().is_some_and(|r| r.what == item) {
+            if let Some(name) = self.rename_row(ui, &name) {
+                acts.push(Act::RenameFolder { id, name });
+            }
+            ui.indent(("folder_body", id), |ui| {
+                for entity in members.iter().filter_map(|id| workspace.get(*id)) {
+                    self.local_row(ui, entity, acts);
+                }
+            });
+            return;
+        }
+
+        let title = format!("{name}  ·  {}", members.len());
+        let drawn = egui::CollapsingHeader::new(egui::RichText::new(title).strong())
+            .id_salt(("folder", id))
+            .default_open(true)
+            .show(ui, |ui| {
+                if members.is_empty() {
+                    ui.label(egui::RichText::new("empty — drag sounds in").small().weak());
+                }
+                for entity in members.iter().filter_map(|id| workspace.get(*id)) {
+                    self.local_row(ui, entity, acts);
+                }
+            });
+
+        let head = drawn.header_response;
+        self.drop_zone(ui, &head, Onto::Group(id), acts);
+        if head.clicked() {
+            self.select(item);
+        }
+        let sendable = members
+            .iter()
+            .filter_map(|id| workspace.get(*id))
+            .filter(|entity| owed(entity).is_some())
+            .count();
+        head.context_menu(|ui| {
+            self.select(item);
+            // ⚠️ The count is the whole point of putting it there. "Send all" up in the
+            // heading writes what is **waiting**; this writes everything in the folder
+            // that came off a slot, waiting or not — two scopes behind one verb, and the
+            // number is what tells them apart before the modal does.
+            if ui
+                .add_enabled(
+                    sendable > 0,
+                    egui::Button::new(format!("Send folder to keyboard ({sendable})")),
+                )
+                .on_hover_text("everything in here that came off a slot, changed or not")
+                .on_disabled_hover_text(
+                    "nothing in here came off a slot, so there is nowhere to send it back to",
+                )
+                .clicked()
+            {
+                self.ask_send(
+                    workspace,
+                    device,
+                    &members,
+                    format!("Send everything in “{name}” to the instrument?"),
+                    Act::SendFolder(id),
+                );
+                ui.close();
+            }
+            ui.add_enabled(false, egui::Button::new("Export as a bundle…"))
+                .on_disabled_hover_text("bundles are not written yet");
+            ui.separator();
+            if ui.button("Rename").clicked() {
+                self.start_rename(item, &name);
+                ui.close();
+            }
+            if ui
+                .button("Remove folder")
+                .on_hover_text("what is in it goes back to the list; nothing is deleted")
+                .clicked()
+            {
+                acts.push(Act::RemoveFolder(id));
+                ui.close();
+            }
+        });
     }
 
     fn local_row(
@@ -527,6 +930,7 @@ impl Browser {
         }
 
         let owed = entity.pending.then(|| destination(entity)).flatten();
+        let filed = self.folders.holding(entity.id);
         let drawn = row(
             ui,
             selected,
@@ -547,6 +951,7 @@ impl Browser {
                     from: item,
                     kind,
                     name: entity.name.clone(),
+                    filed,
                 },
             );
         }
@@ -581,9 +986,42 @@ impl Browser {
                 acts.push(Act::DuplicateLocal(entity.id));
                 ui.close();
             }
+            self.filing_menu(ui, entity.id, filed, acts);
             ui.separator();
             if ui.button("Remove from list").clicked() {
                 acts.push(Act::Remove(entity.id));
+                ui.close();
+            }
+        });
+    }
+
+    /// Where an asset can be put, for the operators who would rather pick than drag.
+    ///
+    /// A submenu rather than a modal: the folders are a short list and the answer is one
+    /// of them, so there is nothing to type and nothing to confirm.
+    fn filing_menu(&self, ui: &mut egui::Ui, id: u64, filed: Option<u64>, acts: &mut Vec<Act>) {
+        if self.folders.all().is_empty() {
+            return;
+        }
+        ui.menu_button("Move to folder", |ui| {
+            for folder in self.folders.all() {
+                if ui
+                    .selectable_label(filed == Some(folder.id), &folder.name)
+                    .clicked()
+                {
+                    acts.push(Act::File {
+                        id,
+                        folder: Some(folder.id),
+                    });
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui
+                .add_enabled(filed.is_some(), egui::Button::new("Out of any folder"))
+                .clicked()
+            {
+                acts.push(Act::File { id, folder: None });
                 ui.close();
             }
         });
@@ -620,14 +1058,35 @@ impl Browser {
         };
         let mut disconnect = false;
         let mut send_all = false;
+        let mut sync = false;
+        // The slots something is looking at right now, which the list on this computer
+        // deliberately does not show.
+        let viewed: Vec<(ObjectClass, Location)> = workspace
+            .entities()
+            .iter()
+            .filter(|entity| !entity.kept)
+            .filter_map(|entity| entity.origin.slot())
+            .collect();
         let owed = workspace.pending().len();
         let firmware = device.state.firmware();
+        let reading = BROWSED
+            .iter()
+            .filter_map(|class| device.state.scan.progress(*class))
+            .any(|progress| progress.running);
         self.heading(ui, &product, |ui| {
             dot(ui, crate::app::good(ui.visuals())).on_hover_text("attached");
             if let Some(firmware) = &firmware {
                 ui.label(egui::RichText::new(firmware).small().weak())
                     .on_hover_text("the firmware version the instrument reports");
             }
+            // One button for the whole column. A walk reads a class's counters, its
+            // banks and the slot the panel is on all at the head of its own session, so
+            // there is nothing a per-folder button could ask for that this does not.
+            sync = ui
+                .add_enabled(!reading, egui::Button::new("Sync").small())
+                .on_hover_text("read the whole instrument again")
+                .on_disabled_hover_text("already reading")
+                .clicked();
             disconnect = ui.small_button("Disconnect").clicked();
             if owed > 0 {
                 send_all = ui
@@ -639,16 +1098,87 @@ impl Browser {
         if disconnect {
             acts.push(Act::Disconnect);
         }
+        if sync {
+            acts.push(Act::Resync);
+        }
         if send_all {
-            self.ask_send_all(workspace, device);
+            let waiting: Vec<u64> = workspace.pending().iter().map(|e| e.id).collect();
+            let title = match waiting.len() {
+                1 => "Send 1 sound to the instrument?".to_string(),
+                n => format!("Send {n} sounds to the instrument?"),
+            };
+            self.ask_send(workspace, device, &waiting, title, Act::SendAll);
         }
         egui::ScrollArea::vertical()
             .id_salt("instrument_scroll")
             .auto_shrink([false; 2])
             .show(ui, |ui| {
+                self.about(ui, device);
                 for class in BROWSED {
-                    self.class(ui, device, class, acts);
+                    self.class(ui, device, class, &viewed, acts);
                 }
+            });
+    }
+
+    /// What the instrument said about itself, for the times that is the question.
+    ///
+    /// Read-only and asked for once, at connect: the descriptors, and the endpoint-0
+    /// identity the desktop transport can reach. Nothing here opens a session.
+    fn about(&self, ui: &mut egui::Ui, device: &Device) {
+        let Some(card) = device.state.card() else {
+            return;
+        };
+        egui::CollapsingHeader::new(egui::RichText::new("About this instrument").small())
+            .id_salt("instrument_about")
+            .default_open(false)
+            .show(ui, |ui| {
+                let mut fact = |what: &str, value: Option<String>| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(what).small().weak());
+                        match value {
+                            Some(value) => {
+                                ui.label(egui::RichText::new(value).small().monospace());
+                            }
+                            // Named rather than dropped: an absent line reads as a fact
+                            // nobody thought to show.
+                            None => {
+                                ui.label(
+                                    egui::RichText::new("not asked for on this build")
+                                        .small()
+                                        .weak()
+                                        .italics(),
+                                );
+                            }
+                        }
+                    });
+                };
+                fact("product", Some(card.product.clone()));
+                fact("maker", card.manufacturer.clone());
+                fact(
+                    "usb",
+                    Some(format!("{:04x}:{:04x}", card.vendor_id, card.product_id)),
+                );
+                fact("serial", card.serial.clone());
+                fact(
+                    "interface",
+                    card.interface.map(|held| format!("{held} (vendor)")),
+                );
+                fact("firmware", device.state.firmware());
+                fact("build", card.build.map(|held| held.to_string()));
+                fact("kind", card.kind.map(|held| format!("{held:#06x}")));
+                fact(
+                    "max transfer",
+                    card.max_transfer.map(|held| format!("{held} bytes")),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "The build and kind words are what the device answers at their \
+                         requests; what they mean is not pinned down.",
+                    )
+                    .small()
+                    .weak()
+                    .italics(),
+                );
             });
     }
 
@@ -657,61 +1187,141 @@ impl Browser {
         ui: &mut egui::Ui,
         device: &Device,
         class: ObjectClass,
+        viewed: &[(ObjectClass, Location)],
         acts: &mut Vec<Act>,
     ) {
         let progress = device.state.scan.progress(class);
+        // The heading carries how full the folder is, so the column reads as an index of
+        // the instrument rather than as six words that all have to be opened to mean
+        // anything.
         let title = match progress {
             Some(p) if p.running => match p.total {
                 Some(total) => format!("{}  ·  reading {} of {total}", folder(class), p.done + 1),
                 None => format!("{}  ·  reading…", folder(class)),
             },
-            _ => folder(class).to_string(),
+            _ => match occupancy(class, &device.state.inventory) {
+                Some(held) => format!("{}  ·  {held}", folder(class)),
+                None => folder(class).to_string(),
+            },
         };
-        egui::CollapsingHeader::new(title)
-            .id_salt(class.to_raw())
-            .default_open(matches!(class, ObjectClass::Program))
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if ui.small_button("Read again").clicked() {
-                        acts.push(Act::ReadAgain(class));
-                    }
-                    if read_only(class) {
-                        ui.label(egui::RichText::new("read only").small().weak());
-                    }
-                    if let Some(holdings) = holdings(class, &device.state.inventory) {
-                        ui.label(egui::RichText::new(holdings).small().weak());
-                    }
-                });
-                // One flat list, labelled the way the panel and the CLI label a slot.
-                // Banks are a numbering, not a container. A bank the device gave a name
-                // of its own gets a caption over its rows — for pianos those names are
-                // the panel's categories, and this is the only place they appear.
-                let banks = device.state.banks_of(class);
-                if banks.is_empty() {
-                    ui.label(egui::RichText::new("nothing read yet").small().weak());
+        let focus = device.state.focused(class);
+        // A jump wins over whatever the heading was left in: the point of it is to reach
+        // a slot that is inside something closed.
+        let heading = egui::CollapsingHeader::new(title);
+        let heading = match self.jump.is_some_and(|(held, _)| held == class) {
+            true => heading.open(Some(true)),
+            false => heading.default_open(matches!(class, ObjectClass::Program)),
+        };
+        let drawn = heading.id_salt(class.to_raw()).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if read_only(class) {
+                    ui.label(egui::RichText::new("read only").small().weak());
                 }
-                for bank in banks {
-                    let Some(slots) = device.state.bank(class, bank) else {
-                        continue;
-                    };
-                    if let Some(name) = device
-                        .state
-                        .bank_name(class, bank)
-                        .filter(|name| worth_captioning(bank, name))
+                if let Some(at) = focus {
+                    if ui
+                        .small_button("Go to loaded")
+                        .on_hover_text(format!("the panel is on {}", shown(at)))
+                        .clicked()
                     {
-                        ui.add_space(2.0);
-                        ui.label(
-                            egui::RichText::new(format!("{bank} · {name}"))
-                                .small()
-                                .weak(),
-                        );
-                    }
-                    for index in 0..slots.len() {
-                        let at = Location::from_user(bank, index as u32 + 1);
-                        self.slot_row(ui, device, class, at, acts);
+                        self.jump = Some((class, at));
                     }
                 }
             });
+            let banks = device.state.banks_of(class);
+            if banks.is_empty() {
+                ui.label(egui::RichText::new("nothing read yet").small().weak());
+            }
+            // A class that divides into one bank is a numbering with nothing to number,
+            // and a heading over the whole of it is a line to click through for nothing.
+            // The live buffer and the settings singleton are both this.
+            let cut = banks.len() > 1;
+            for bank in banks {
+                self.bank(ui, device, class, bank, cut, viewed, acts);
+            }
+        });
+        // ⚠️ A jump at a slot the walk has never reached would hold the heading open for
+        // as long as the instrument stays attached: nothing draws the row that clears it.
+        if self
+            .jump
+            .is_some_and(|(held, at)| held == class && device.state.slot(class, at).is_none())
+        {
+            self.jump = None;
+        }
+        drawn.header_response.context_menu(|ui| {
+            if ui
+                .button("Read this folder again")
+                .on_hover_text("Sync reads the whole instrument; this reads one folder")
+                .clicked()
+            {
+                acts.push(Act::ReadAgain(class));
+                ui.close();
+            }
+        });
+    }
+
+    /// One bank, as a heading over its own slots.
+    ///
+    /// ⚠️ A container in the browser and a numbering everywhere else. The instrument has
+    /// no folders inside a class — a location is a bank and a slot and that is all — but
+    /// four hundred rows in one run is a column nobody can navigate, so the numbering is
+    /// what the list is cut on. A bank the device named says so in its heading; for
+    /// pianos those names are the panel's categories.
+    #[allow(clippy::too_many_arguments)]
+    fn bank(
+        &mut self,
+        ui: &mut egui::Ui,
+        device: &Device,
+        class: ObjectClass,
+        bank: u32,
+        cut: bool,
+        viewed: &[(ObjectClass, Location)],
+        acts: &mut Vec<Act>,
+    ) {
+        let Some(slots) = device.state.bank(class, bank) else {
+            return;
+        };
+        let count = slots.len();
+        let held = slots.iter().filter(|slot| slot.is_some()).count();
+        let name = device
+            .state
+            .bank_name(class, bank)
+            .filter(|name| worth_captioning(bank, name))
+            .map(str::to_string);
+        let mut rows = |browser: &mut Browser, ui: &mut egui::Ui| {
+            for index in 0..count {
+                let at = Location::from_user(bank, index as u32 + 1);
+                browser.slot_row(ui, device, class, at, viewed, acts);
+            }
+        };
+        if !cut {
+            if let Some(name) = &name {
+                ui.label(egui::RichText::new(name).small().weak());
+            }
+            return rows(self, ui);
+        }
+
+        let title = match &name {
+            Some(name) => format!("{bank} · {name}  ·  {held}/{count}"),
+            None => format!("Bank {bank}  ·  {held}/{count}"),
+        };
+        let focused = device
+            .state
+            .focused(class)
+            .is_some_and(|at| at.bank + 1 == bank);
+        let jumping = self
+            .jump
+            .is_some_and(|(held, at)| held == class && at.bank + 1 == bank);
+        // Open where the panel is, closed everywhere else: an operator arrives at this
+        // column knowing what the instrument is playing and nothing else, and eight
+        // banks of fifty in one run is a list nobody can navigate.
+        let heading = egui::CollapsingHeader::new(title);
+        let heading = match jumping {
+            true => heading.open(Some(true)),
+            false => heading.default_open(focused),
+        };
+        heading
+            .id_salt(("bank", class.to_raw(), bank))
+            .show(ui, |ui| rows(self, ui));
     }
 
     fn slot_row(
@@ -720,6 +1330,7 @@ impl Browser {
         device: &Device,
         class: ObjectClass,
         at: Location,
+        viewed: &[(ObjectClass, Location)],
         acts: &mut Vec<Act>,
     ) {
         let held = device
@@ -741,12 +1352,16 @@ impl Browser {
         }
 
         let loaded = device.state.focused(class) == Some(at);
+        // A slot open as a view says so here, because the tab strip cannot: what a tab
+        // shows is the document's name, and a view's name is the slot's own.
+        let viewing = viewed.contains(&(class, at));
         let drawn = row(
             ui,
             selected,
             &Cells {
                 at: Some(shown(at)),
                 name: held.as_deref().unwrap_or("empty"),
+                note: viewing.then_some("open"),
                 faint: held.is_none(),
                 loaded,
                 ..Cells::default()
@@ -755,6 +1370,17 @@ impl Browser {
         let mut response = drawn.response;
         if loaded {
             response = response.on_hover_text("on the instrument's panel now");
+        }
+        if viewing {
+            response = response
+                .on_hover_text("open in a tab as a view of this slot — it is not on this computer");
+        }
+        // The one place a jump lands: the row itself, once the headings above it have
+        // been forced open and it has a rectangle to be scrolled to.
+        if self.jump == Some((class, at)) {
+            self.jump = None;
+            self.selection = Some(item);
+            response.scroll_to_me(Some(egui::Align::Center));
         }
 
         // ⚠️ A piano is a library of hundreds of megabytes, read whole into memory by
@@ -770,6 +1396,7 @@ impl Browser {
                         from: item,
                         kind: Kind::from_class(class),
                         name: name.clone(),
+                        filed: None,
                     },
                 );
             }
@@ -804,7 +1431,11 @@ impl Browser {
                 );
                 return;
             }
-            if ui.button("Open").clicked() {
+            if ui
+                .button("Open")
+                .on_hover_text("a view of this slot; nothing joins the list on this computer")
+                .clicked()
+            {
                 acts.push(Act::Open(item));
                 ui.close();
             }
@@ -931,6 +1562,13 @@ impl Browser {
             (Landing::Send, Item::Local(id), Onto::Slot { class, at }) => {
                 acts.push(Act::Send { id, class, at })
             }
+            (Landing::File, Item::Local(id), Onto::Group(folder)) => acts.push(Act::File {
+                id,
+                folder: Some(folder),
+            }),
+            (Landing::Unfile, Item::Local(id), Onto::Computer) => {
+                acts.push(Act::File { id, folder: None })
+            }
             (Landing::No(why), ..) => acts.push(Act::Refused(format!(
                 "“{}” cannot go there — {why}.",
                 carried.name
@@ -981,17 +1619,29 @@ impl Browser {
 
     /// The one question a batch asks: everything it is about to write, and what it
     /// would replace.
-    fn ask_send_all(&mut self, workspace: &Workspace, device: &Device) {
-        let waiting = workspace.pending();
-        if waiting.is_empty() {
-            return;
-        }
+    ///
+    /// One question for every batch there is — the whole queue, or one folder's worth —
+    /// so a folder cannot become a way of writing to the instrument without being asked.
+    fn ask_send(
+        &mut self,
+        workspace: &Workspace,
+        device: &Device,
+        ids: &[u64],
+        title: String,
+        act: Act,
+    ) {
         let mut lines = Vec::new();
-        for entity in &waiting {
-            let Some((class, at)) = entity.origin.slot() else {
+        let mut warnings: Vec<String> = Vec::new();
+        for entity in ids.iter().filter_map(|id| workspace.get(*id)) {
+            let Some((class, at)) = owed(entity) else {
                 continue;
             };
             let where_ = place(class, at);
+            if let Some(warning) = foreign_format(&entity.tag(), &device.state.formats_in(class)) {
+                if !warnings.contains(&warning) {
+                    warnings.push(warning);
+                }
+            }
             // Naming the occupant is the whole point of asking: a batch is where an
             // operator stops reading each destination for themselves.
             lines.push(match device.state.slot(class, at).flatten() {
@@ -1003,25 +1653,41 @@ impl Browser {
                 None => format!("“{}” goes into {where_}, which is empty", entity.name),
             });
         }
+        if lines.is_empty() {
+            return;
+        }
+        // The warnings first: they are the reason to say no, and a list of destinations
+        // is what the eye slides down.
+        let mut note = warnings;
+        if !note.is_empty() {
+            note.push(String::new());
+        }
+        note.extend(lines);
         self.ask = Some(Ask {
-            title: match lines.len() {
-                1 => "Send 1 sound to the instrument?".to_string(),
-                n => format!("Send {n} sounds to the instrument?"),
-            },
-            note: Some(lines.join("\n")),
+            title,
+            note: Some(note.join("\n")),
             verb: "Send",
-            act: Act::SendAll,
+            act,
         });
     }
 
     /// Raise the one Finder-style question a drop can need: the destination is taken.
-    fn ask_replace(&mut self, occupant: &str, incoming: &str, at: String, act: Act) {
+    fn ask_replace(
+        &mut self,
+        occupant: &str,
+        incoming: &str,
+        at: String,
+        warning: Option<String>,
+        act: Act,
+    ) {
+        let note =
+            format!("“{occupant}” is read back first and put where it was if anything goes wrong.");
         self.ask = Some(Ask {
             title: format!("Replace “{occupant}” in {at} with “{incoming}”?"),
-            note: Some(format!(
-                "“{occupant}” is read back first and put where it was if anything goes \
-                 wrong."
-            )),
+            note: Some(match warning {
+                Some(warning) => format!("{warning}\n\n{note}"),
+                None => note,
+            }),
             verb: "Replace",
             act,
         });
@@ -1203,17 +1869,56 @@ pub fn apply(
                     tabs.open(id, workspace);
                 }
             }
+            Act::Resync => {
+                device.resync();
+                log.say("Reading the instrument again…");
+            }
             Act::ReadAgain(class) => device.read_class(class),
+            Act::Keep(id) => workspace.keep(id, log),
+            Act::NewFolder => {
+                let id = browser.folders.make();
+                // ⚠️ The name `make` settled on, not the one it starts from. Prefilling
+                // the editor with "New folder" beside an existing "New folder" is an
+                // Enter away from two folders of one name — which is exactly what
+                // `make` picked a different one to avoid.
+                let name = browser.folders.name_of(id).unwrap_or_default().to_string();
+                browser.start_rename(Item::Folder(id), &name);
+            }
+            Act::RemoveFolder(id) => {
+                // ⚠️ The editor goes with it. A folder being renamed draws the editor in
+                // place of its heading, and a removed folder draws nothing at all — so a
+                // rename left armed here is one no row will ever close, and the next
+                // folder to take this id inherits it.
+                browser.forget_rename(Item::Folder(id));
+                browser.folders.remove(id);
+            }
+            Act::File { id, folder } => browser.folders.file(id, folder),
+            Act::SendFolder(id) => {
+                let members: Vec<u64> = browser
+                    .folders
+                    .members(id, workspace)
+                    .iter()
+                    .map(|entity| entity.id)
+                    .collect();
+                send_batch(&members, workspace, device, log);
+            }
+            Act::Open(Item::Folder(_)) => {}
             Act::Open(Item::Local(id)) => tabs.open(id, workspace),
-            Act::Open(Item::Slot { class, at }) => device.send(
-                DeviceCmd::Get {
-                    class,
-                    at,
-                    body: false,
-                    open: true,
-                },
-                log,
-            ),
+            // ⚠️ One view per slot. A second read of a slot already being viewed would
+            // be two working copies of one place — edited apart, both owed back to it,
+            // and both queued into a single batch, where the last one written wins.
+            Act::Open(Item::Slot { class, at }) => match workspace.view_of(class, at) {
+                Some(id) => tabs.open(id, workspace),
+                None => device.send(
+                    DeviceCmd::Get {
+                        class,
+                        at,
+                        body: false,
+                        open: true,
+                    },
+                    log,
+                ),
+            },
             Act::Copy { class, at } => device.send(
                 DeviceCmd::Get {
                     class,
@@ -1232,7 +1937,10 @@ pub fn apply(
             Act::Replace { id, class, at } => {
                 send(browser, workspace, device, log, id, class, at, false)
             }
-            Act::SendAll => send_all(workspace, device, log),
+            Act::SendAll => {
+                let waiting: Vec<u64> = workspace.pending().iter().map(|e| e.id).collect();
+                send_batch(&waiting, workspace, device, log);
+            }
             Act::Rearrange { class, from, to } => {
                 device.send(DeviceCmd::Move { class, from, to }, log)
             }
@@ -1240,6 +1948,7 @@ pub fn apply(
                 workspace.rename(id, name.clone());
                 log.say(format!("Renamed it “{name}”."));
             }
+            Act::RenameFolder { id, name } => browser.folders.rename(id, name),
             Act::RenameSlot { class, at, name } => {
                 device.send(DeviceCmd::Rename { class, at, name }, log)
             }
@@ -1252,6 +1961,7 @@ pub fn apply(
             Act::DeleteSlot { class, at } => device.send(DeviceCmd::Delete { class, at }, log),
             Act::Remove(id) => {
                 tabs.close(id);
+                browser.folders.forget(id);
                 workspace.remove(id, log);
             }
             Act::Save(id) => workspace.export(id, ExportWhat::File),
@@ -1260,15 +1970,18 @@ pub fn apply(
     }
 }
 
-/// Everything waiting, one command per folder.
+/// Write a set of assets back, one command per folder.
 ///
-/// Grouped by class because a session belongs to a class: one folder is one session, and
-/// the worker keeps it open across every item in it.
-fn send_all(workspace: &Workspace, device: &mut Device, log: &mut Log) {
+/// The one write path a batch takes, whether the batch is everything waiting or one of
+/// this computer's own folders: same refusal, same grouping, same per-item flow.
+fn send_batch(ids: &[u64], workspace: &Workspace, device: &mut Device, log: &mut Log) {
     // Refused before the transport is touched: bytes that are not what they claim to be
     // must not reach a delete-then-write, and one bad item stops the whole batch rather
     // than being skipped past.
-    for entity in workspace.pending() {
+    for entity in ids.iter().filter_map(|id| workspace.get(*id)) {
+        if owed(entity).is_none() {
+            continue;
+        }
         if let Err(e) = nord_usb::envelope::unwrap(&entity.bytes) {
             log.error(format!("{}: {e}", entity.name));
             log.trouble(format!(
@@ -1278,23 +1991,20 @@ fn send_all(workspace: &Workspace, device: &mut Device, log: &mut Log) {
             return;
         }
     }
-    for (class, items) in grouped(workspace) {
+    for (class, items) in grouped(ids, workspace) {
         device.send(DeviceCmd::SendAll { class, items }, log);
     }
 }
 
-/// Everything waiting, gathered per folder in the order it was opened.
+/// The assets named, gathered per folder in the order the list holds them.
 ///
 /// A session belongs to a folder, so a folder is the unit a batch is cut into.
-fn grouped(workspace: &Workspace) -> Vec<(ObjectClass, Vec<Outgoing>)> {
+fn grouped(ids: &[u64], workspace: &Workspace) -> Vec<(ObjectClass, Vec<Outgoing>)> {
     let mut by_class: Vec<(ObjectClass, Vec<Outgoing>)> = Vec::new();
-    for entity in workspace.pending() {
-        let Some((class, at)) = entity.origin.slot() else {
+    for entity in ids.iter().filter_map(|id| workspace.get(*id)) {
+        let Some((class, at)) = owed(entity) else {
             continue;
         };
-        if !crate::device::sendable(class) {
-            continue;
-        }
         let item = Outgoing {
             id: entity.id,
             at,
@@ -1307,6 +2017,48 @@ fn grouped(workspace: &Workspace) -> Vec<(ObjectClass, Vec<Outgoing>)> {
         }
     }
     by_class
+}
+
+/// Whether an outgoing file is of a format the destination folder has never been seen
+/// holding, and the sentence saying so.
+///
+/// ⚠️ **A warning, never a refusal.** A write is a delete followed by a write, so a file
+/// the instrument turns out not to want costs the occupant of the slot — and the New
+/// menu now makes another model's program one click away. But nothing here has watched
+/// an instrument refuse one, so this reports what the scan can see and leaves the
+/// decision where it belongs.
+///
+/// `resident` is what the walk actually read, so an unscanned folder says nothing rather
+/// than guessing: not known is not the same as does not match.
+pub fn foreign_format(outgoing: &str, resident: &[String]) -> Option<String> {
+    let outgoing = outgoing.trim();
+    // ⚠️ `?` is what this app calls bytes that told it nothing — not a format that
+    // differs from every other. A file whose own tag could not be read is one there is
+    // nothing true to say about, and saying it anyway is a false alarm on exactly the
+    // files an operator is least sure of.
+    let readable = !outgoing.is_empty() && outgoing.chars().all(|c| c.is_ascii_alphanumeric());
+    if !readable || resident.is_empty() {
+        return None;
+    }
+    if resident
+        .iter()
+        .any(|held| held.trim().eq_ignore_ascii_case(outgoing))
+    {
+        return None;
+    }
+    let held: Vec<&str> = resident.iter().map(|held| held.trim()).collect();
+    Some(format!(
+        "⚠️ This file is {outgoing}; everything read in that folder is {}. Sending it \
+         deletes what is there first.",
+        held.join(" or "),
+    ))
+}
+
+/// Where an asset would be written back to, if anywhere: the slot it came off, and only
+/// where this app will write into that class at all.
+fn owed(entity: &LocalEntity) -> Option<(ObjectClass, Location)> {
+    let (class, at) = entity.origin.slot()?;
+    crate::device::sendable(class).then_some((class, at))
 }
 
 /// Put a local asset into a slot.
@@ -1347,6 +2099,7 @@ fn send(
             &occupant,
             &entity.name,
             place(class, at),
+            foreign_format(&entity.tag(), &device.state.formats_in(class)),
             Act::Replace { id, class, at },
         ),
         _ => device.send(
@@ -1371,6 +2124,7 @@ mod tests {
             from: Item::Local(1),
             kind,
             name: "Africa Split".into(),
+            filed: None,
         }
     }
 
@@ -1382,6 +2136,7 @@ mod tests {
             },
             kind: Kind::from_class(class),
             name: "Squabble B".into(),
+            filed: None,
         }
     }
 
@@ -1390,6 +2145,18 @@ mod tests {
             class,
             at: Location { bank, slot: at },
         }
+    }
+
+    /// Everything an act needs run against it.
+    fn bench() -> (Browser, Workspace, Device, Tabs, crate::log::Log) {
+        let ctx = egui::Context::default();
+        (
+            Browser::default(),
+            Workspace::new(ctx.clone()),
+            Device::new(ctx),
+            Tabs::default(),
+            crate::log::Log::default(),
+        )
     }
 
     /// The two crossings the browser exists for.
@@ -1487,7 +2254,7 @@ mod tests {
     /// Paint the two columns headlessly. What this catches is a layout that panics or
     /// an id that collides, neither of which a unit test on the rules would see.
     fn paint(with_device: bool) {
-        use crate::workspace::Fresh;
+        use crate::workspace::{Fresh, Origin};
 
         let ctx = egui::Context::default();
         let mut workspace = Workspace::new(ctx.clone());
@@ -1499,6 +2266,22 @@ mod tests {
         for kind in [Fresh::Program, Fresh::Live, Fresh::Settings] {
             workspace.create(kind, &mut log).unwrap();
         }
+        // A folder with something in it, one with nothing, and a view of a slot: three
+        // row shapes the list has no other way of reaching.
+        let full = browser.folders.make();
+        browser.folders.make();
+        let filed = workspace.create(Fresh::Program, &mut log).unwrap();
+        browser.folders.file(filed, Some(full));
+        let bytes = workspace.get(filed).unwrap().bytes.clone();
+        workspace.view(
+            "Africa-Split.ne5p".into(),
+            Origin::Device {
+                class: ObjectClass::Program,
+                at: Location { bank: 6, slot: 0 },
+            },
+            bytes,
+            &mut log,
+        );
         if with_device {
             // Every row shape a list can hold: a named slot, a vacant one, the slot the
             // panel is on, and a class that was never read.
@@ -1564,7 +2347,8 @@ mod tests {
             workspace.mark_pending(id, true);
         }
 
-        let queued = grouped(&workspace);
+        let waiting: Vec<u64> = workspace.pending().iter().map(|e| e.id).collect();
+        let queued = grouped(&waiting, &workspace);
         assert_eq!(queued.len(), 2, "one command per folder");
         let programs = queued
             .iter()
@@ -1695,20 +2479,13 @@ mod tests {
     /// sliver of the other.
     #[test]
     fn a_divider_comes_back_where_it_was_left_or_not_at_all() {
-        struct Fake(Option<String>);
-        impl eframe::Storage for Fake {
-            fn get_string(&self, _key: &str) -> Option<String> {
-                self.0.clone()
-            }
-            fn set_string(&mut self, _key: &str, value: String) {
-                self.0 = Some(value);
-            }
-            fn flush(&mut self) {}
-        }
-
         let restored = |held: Option<&str>| {
+            let mut store = Fake::default();
+            if let Some(held) = held {
+                eframe::Storage::set_string(&mut store, Browser::SPLIT, held.to_string());
+            }
             let mut browser = Browser::default();
-            browser.restore(&Fake(held.map(str::to_string)));
+            browser.restore(&store);
             browser.split
         };
         assert_eq!(restored(Some("0.3")), 0.3);
@@ -1718,7 +2495,7 @@ mod tests {
         }
 
         // And what is written comes back as itself.
-        let mut store = Fake(None);
+        let mut store = Fake::default();
         let browser = Browser {
             split: 0.42,
             ..Browser::default()
@@ -1727,6 +2504,21 @@ mod tests {
         let mut after = Browser::default();
         after.restore(&store);
         assert_eq!(after.split, 0.42);
+    }
+
+    /// A store that answers for one key at a time, which is what the two things the
+    /// browser keeps need it to be.
+    #[derive(Default)]
+    struct Fake(std::collections::HashMap<String, String>);
+
+    impl eframe::Storage for Fake {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_string(), value);
+        }
+        fn flush(&mut self) {}
     }
 
     #[test]
@@ -1846,6 +2638,489 @@ mod tests {
         // The number has to match to be redundant — "Bank 2" over bank 1 is worth saying,
         // because one of the two is wrong and hiding it would hide that.
         assert!(worth_captioning(1, "Bank 2"));
+    }
+
+    /// A folder is a way of seeing the local list. Something on this computer goes into
+    /// one and comes back out of one; nothing off the instrument does either, because
+    /// the copy lands when the instrument answers rather than when the pointer is let go.
+    #[test]
+    fn a_folder_takes_what_is_already_on_this_computer_and_nothing_else() {
+        let filed = |folder| Carried {
+            filed: folder,
+            ..local(Kind::Program)
+        };
+        assert_eq!(landing(&filed(None), Onto::Group(1)), Landing::File);
+        assert_eq!(landing(&filed(Some(2)), Onto::Group(1)), Landing::File);
+        assert_eq!(landing(&filed(Some(1)), Onto::Computer), Landing::Unfile);
+
+        for refused in [
+            landing(&filed(Some(1)), Onto::Group(1)),
+            landing(&filed(None), Onto::Computer),
+            landing(&slot(ObjectClass::Program, 6, 3), Onto::Group(1)),
+        ] {
+            match refused {
+                Landing::No(why) => assert!(!why.is_empty()),
+                other => panic!("{other:?} should have been refused"),
+            }
+        }
+    }
+
+    /// A folder is never the thing being dragged: it is where the list is cut, not a row
+    /// that moves.
+    #[test]
+    fn a_folder_is_not_something_that_is_dragged() {
+        let carried = Carried {
+            from: Item::Folder(1),
+            kind: Kind::Program,
+            name: "Sunday".into(),
+            filed: None,
+        };
+        for onto in [
+            Onto::Computer,
+            Onto::Group(2),
+            onto(ObjectClass::Program, 6, 3),
+        ] {
+            assert!(!landing(&carried, onto).allowed());
+        }
+    }
+
+    /// A new folder is one nothing else is called, so two of them are two rows rather
+    /// than one row twice.
+    #[test]
+    fn a_new_folder_gets_a_name_no_other_folder_is_using() {
+        let mut folders = Folders::default();
+        let names: Vec<String> = (0..3)
+            .map(|_| {
+                let id = folders.make();
+                folders.name_of(id).expect("it was made").to_string()
+            })
+            .collect();
+        assert_eq!(names, ["New folder", "New folder 2", "New folder 3"]);
+        // And the ids are as distinct as the names.
+        let ids: Vec<u64> = folders.all().iter().map(|folder| folder.id).collect();
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    /// A folder holds nothing, so losing one loses nothing: what was in it is back in
+    /// the loose part of the list.
+    #[test]
+    fn removing_a_folder_leaves_what_was_in_it_on_this_computer() {
+        let mut folders = Folders::default();
+        let (kept, gone) = (folders.make(), folders.make());
+        folders.file(7, Some(kept));
+        folders.file(8, Some(gone));
+        folders.remove(gone);
+
+        assert_eq!(folders.holding(7), Some(kept));
+        assert_eq!(folders.holding(8), None, "loose, not lost");
+        // And a folder that never existed is not a place anything can be put.
+        folders.file(9, Some(gone));
+        assert_eq!(folders.holding(9), None);
+    }
+
+    /// The grouping comes back as it was left, empty folders included — and a membership
+    /// naming a folder the file does not hold is dropped rather than hiding an asset in
+    /// a folder nobody can open.
+    #[test]
+    fn the_folders_and_what_is_in_them_survive_a_session() {
+        let mut folders = Folders::default();
+        let (sunday, empty) = (folders.make(), folders.make());
+        folders.rename(sunday, "Sunday\tmorning".into());
+        folders.file(7, Some(sunday));
+        folders.file(8, Some(sunday));
+
+        let after = read(&written(&folders));
+        assert_eq!(after.all().len(), 2, "an empty folder is still a folder");
+        assert_eq!(after.name_of(sunday), Some("Sunday\tmorning"));
+        assert_eq!(after.name_of(empty), Some("New folder 2"));
+        assert_eq!(after.holding(7), Some(sunday));
+        assert_eq!(after.holding(8), Some(sunday));
+
+        // Nothing readable is no folders at all, never half a grouping.
+        assert!(read("").all().is_empty());
+        assert!(read("drawbar folders 99\nf\t1\tSunday\n").all().is_empty());
+        let orphaned = read(&format!("{FOLDERS_VERSION}\nm\t7\t3\n"));
+        assert_eq!(orphaned.holding(7), None);
+    }
+
+    /// The two stores are read separately and only the asset one decides what survived —
+    /// anything too big to keep, or dropped for want of room, would otherwise leave its
+    /// membership behind to accumulate for as long as the app is installed.
+    #[test]
+    fn a_grouping_forgets_the_assets_the_list_came_back_without() {
+        let (mut browser, mut workspace, _device, _tabs, mut log) = bench();
+        let here = workspace.create(Fresh::Program, &mut log).unwrap();
+        let folder = browser.folders.make();
+        browser.folders.file(here, Some(folder));
+        // As a store that could not keep everything reads back: a membership for an
+        // asset the list does not hold.
+        browser.folders.file(here + 99, Some(folder));
+
+        browser.settle(&workspace);
+        assert_eq!(browser.folders.holding(here), Some(folder));
+        assert_eq!(browser.folders.holding(here + 99), None);
+        assert_eq!(browser.folders.all().len(), 1, "the folder itself stays");
+    }
+
+    /// Sending a folder is the batch the queue already runs: the same grouping into one
+    /// command per instrument folder, and the same refusal of anything that cannot be
+    /// written.
+    #[test]
+    fn a_folder_sends_only_what_can_go_back_to_a_slot() {
+        use crate::workspace::{Fresh, Origin};
+
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx);
+        let mut log = crate::log::Log::default();
+        let bytes = {
+            let id = workspace.create(Fresh::Program, &mut log).unwrap();
+            let bytes = workspace.get(id).unwrap().bytes.clone();
+            workspace.remove(id, &mut log);
+            bytes
+        };
+        let at = |slot| Location { bank: 6, slot };
+        let mut ids = Vec::new();
+        for (class, slot) in [
+            (ObjectClass::Program, 0),
+            (ObjectClass::SetList, 0),
+            // Live refuses a write, so it must not reach the queue.
+            (ObjectClass::Live, 0),
+        ] {
+            ids.push(workspace.ingest(
+                format!("{}.ne5p", place(class, at(slot))),
+                Origin::Device {
+                    class,
+                    at: at(slot),
+                },
+                bytes.clone(),
+                &mut log,
+            ));
+        }
+        // Never off an instrument, so there is nowhere to send it back to.
+        ids.push(workspace.create(Fresh::Program, &mut log).unwrap());
+
+        let queued = grouped(&ids, &workspace);
+        let classes: Vec<ObjectClass> = queued.iter().map(|(class, _)| *class).collect();
+        assert_eq!(classes, vec![ObjectClass::Program, ObjectClass::SetList]);
+        assert!(queued.iter().all(|(_, items)| items.len() == 1));
+        // A folder holding nothing sendable queues nothing at all.
+        assert!(grouped(&ids[2..], &workspace).is_empty());
+    }
+
+    /// A double-click on a slot opens a view: a tab and a document, and no new row in
+    /// the list. Keeping it is what puts it there.
+    #[test]
+    fn opening_a_slot_does_not_put_it_on_this_computer() {
+        use crate::device::DeviceEvent;
+        use crate::workspace::{Fresh, Origin};
+
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut device = Device::new(ctx);
+        let mut log = crate::log::Log::default();
+        let mut tabs = Tabs::default();
+        let mut browser = Browser::default();
+        let bytes = {
+            let id = workspace.create(Fresh::Program, &mut log).unwrap();
+            let bytes = workspace.get(id).unwrap().bytes.clone();
+            workspace.remove(id, &mut log);
+            bytes
+        };
+        let at = Location { bank: 6, slot: 3 };
+        let origin = Origin::Device {
+            class: ObjectClass::Program,
+            at,
+        };
+
+        device.pretend(DeviceEvent::Got {
+            name: "Africa-Split.ne5p".into(),
+            origin,
+            bytes,
+            open: true,
+        });
+        device.poll(&mut log, &mut workspace, &mut tabs);
+
+        let id = tabs.active().expect("a view opens in a tab");
+        assert!(workspace.is_view(id));
+        assert_eq!(workspace.listed().count(), 0, "nothing joined the list");
+        // It is still a working copy in every other way: it knows the slot it came off,
+        // so Send back works from it.
+        assert_eq!(
+            workspace.get(id).unwrap().origin.slot(),
+            Some((ObjectClass::Program, at))
+        );
+
+        apply(
+            &mut browser,
+            vec![Act::Keep(id)],
+            &mut workspace,
+            &mut device,
+            &mut tabs,
+            &mut log,
+        );
+        assert!(!workspace.is_view(id));
+        assert_eq!(workspace.listed().count(), 1);
+    }
+
+    /// ⚠️ The editor opens on the name the folder actually has. Prefilling it with the
+    /// name `make` starts from, beside a folder already called that, is one Enter away
+    /// from two folders of one name — which is what `make` picked a different one to
+    /// avoid.
+    #[test]
+    fn a_new_folder_opens_its_editor_on_the_name_it_was_given() {
+        let (mut browser, mut workspace, mut device, mut tabs, mut log) = bench();
+        let mut new_folder = |browser: &mut Browser| {
+            apply(
+                browser,
+                vec![Act::NewFolder],
+                &mut workspace,
+                &mut device,
+                &mut tabs,
+                &mut log,
+            );
+            let rename = browser.rename.as_ref().expect("the editor is armed");
+            let Item::Folder(id) = rename.what else {
+                panic!("it is armed on the folder");
+            };
+            (id, rename.text.clone())
+        };
+
+        let (first, typed) = new_folder(&mut browser);
+        assert_eq!(typed, "New folder");
+        let (second, typed) = new_folder(&mut browser);
+        assert_eq!(typed, "New folder 2", "the name it actually has");
+        assert_eq!(browser.folders.name_of(second), Some(typed.as_str()));
+        assert_ne!(first, second);
+    }
+
+    /// A folder that goes while its name is being typed takes the editor with it: no row
+    /// will be drawn to close it, and the next folder to take its id would inherit it.
+    #[test]
+    fn removing_a_folder_mid_rename_takes_the_editor_with_it() {
+        let (mut browser, mut workspace, mut device, mut tabs, mut log) = bench();
+        let mut act = |browser: &mut Browser, act| {
+            apply(
+                browser,
+                vec![act],
+                &mut workspace,
+                &mut device,
+                &mut tabs,
+                &mut log,
+            )
+        };
+        act(&mut browser, Act::NewFolder);
+        let Some(Item::Folder(id)) = browser.rename.as_ref().map(|r| r.what) else {
+            panic!("a new folder arms its editor");
+        };
+
+        act(&mut browser, Act::RemoveFolder(id));
+        assert!(browser.rename.is_none(), "the editor went with it");
+        assert!(browser.selection.is_none());
+
+        // And the id `make` hands out again is a folder with no editor waiting on it.
+        act(&mut browser, Act::NewFolder);
+        let Some(Item::Folder(again)) = browser.rename.as_ref().map(|r| r.what) else {
+            panic!("the new one arms its own");
+        };
+        assert_eq!(again, id, "the id came back round");
+        assert_eq!(
+            browser.rename.as_ref().map(|r| r.text.as_str()),
+            Some("New folder")
+        );
+    }
+
+    /// ⚠️ One view per slot. A second read of a slot already being viewed would be two
+    /// working copies of one place — edited apart, both owed back to it, and both queued
+    /// into one batch, where the last written wins.
+    #[test]
+    fn opening_a_slot_that_is_already_open_activates_its_tab() {
+        use crate::device::DeviceEvent;
+        use crate::workspace::Origin;
+
+        let (mut browser, mut workspace, mut device, mut tabs, mut log) = bench();
+        let bytes = {
+            let id = workspace.create(Fresh::Program, &mut log).unwrap();
+            let bytes = workspace.get(id).unwrap().bytes.clone();
+            workspace.remove(id, &mut log);
+            bytes
+        };
+        let class = ObjectClass::Program;
+        let at = Location { bank: 6, slot: 3 };
+        device.pretend_scanned(class, 7, &["", "", "", "Africa Split"]);
+
+        device.pretend(DeviceEvent::Got {
+            name: "Africa-Split.ne5p".into(),
+            origin: Origin::Device { class, at },
+            bytes,
+            open: true,
+        });
+        device.poll(&mut log, &mut workspace, &mut tabs);
+        let first = tabs.active().expect("a view opened");
+
+        // Another double-click on the same slot.
+        tabs.close(first);
+        apply(
+            &mut browser,
+            vec![Act::Open(Item::Slot { class, at })],
+            &mut workspace,
+            &mut device,
+            &mut tabs,
+            &mut log,
+        );
+        assert!(device.queued().is_empty(), "nothing was read again");
+        assert_eq!(tabs.active(), Some(first), "its own tab came forward");
+        assert_eq!(workspace.entities().len(), 1, "and there is one copy");
+
+        // A slot with no view open is read, as it must be.
+        let elsewhere = Location { bank: 6, slot: 4 };
+        apply(
+            &mut browser,
+            vec![Act::Open(Item::Slot {
+                class,
+                at: elsewhere,
+            })],
+            &mut workspace,
+            &mut device,
+            &mut tabs,
+            &mut log,
+        );
+        assert_eq!(device.queued().len(), 1);
+    }
+
+    /// ⚠️ A write is a delete followed by a write, so a file the instrument turns out not
+    /// to want costs the occupant of the slot — and the New menu makes another model's
+    /// program one click away. It warns; it does not refuse, because nothing here has
+    /// watched an instrument refuse one.
+    #[test]
+    fn a_file_of_another_model_is_warned_about_and_not_refused() {
+        let held =
+            |tags: &[&str]| -> Vec<String> { tags.iter().map(|tag| tag.to_string()).collect() };
+        let warning = foreign_format("ns4p", &held(&["ne5p"])).expect("a Stage 4 file here");
+        assert!(
+            warning.contains("ns4p") && warning.contains("ne5p"),
+            "{warning}"
+        );
+        assert!(warning.contains("deletes"), "{warning}");
+
+        // What the folder is already holding raises nothing, whitespace and case included.
+        assert_eq!(foreign_format("ne5p", &held(&["ne5p"])), None);
+        assert_eq!(foreign_format(" ne5p ", &held(&["NE5P "])), None);
+        assert_eq!(foreign_format("ne5p", &held(&["ne5p", "ne5l"])), None);
+
+        // Not known is not the same as does not match: an unscanned folder says nothing,
+        // and neither does a file whose own tag could not be read.
+        assert_eq!(foreign_format("ns4p", &[]), None);
+        assert_eq!(
+            foreign_format("?", &held(&["ne5p"])),
+            None,
+            "no tag to judge"
+        );
+        assert_eq!(foreign_format("", &held(&["ne5p"])), None);
+    }
+
+    /// The warning reaches the modal a batch raises, once per format however many items
+    /// carry it — and it goes above the list of destinations, which is what the eye
+    /// slides past.
+    #[test]
+    fn the_modal_says_when_a_batch_is_of_another_model() {
+        use crate::workspace::Origin;
+
+        let (mut browser, mut workspace, mut device, _tabs, mut log) = bench();
+        let class = ObjectClass::Program;
+        device.pretend_scanned(class, 7, &["Africa Split", "Squabble B"]);
+
+        let mut ids = Vec::new();
+        for slot in 0..2 {
+            let stage = workspace.create(Fresh::Stage4Program, &mut log).unwrap();
+            let bytes = workspace.get(stage).unwrap().bytes.clone();
+            workspace.remove(stage, &mut log);
+            ids.push(workspace.ingest(
+                format!("stage-{slot}.ns4p"),
+                Origin::Device {
+                    class,
+                    at: Location { bank: 6, slot },
+                },
+                bytes,
+                &mut log,
+            ));
+        }
+
+        browser.ask_send(&workspace, &device, &ids, "Send?".into(), Act::SendAll);
+        let note = browser.ask.as_ref().and_then(|ask| ask.note.clone());
+        let note = note.expect("the modal has a note");
+        assert_eq!(note.matches("This file is ns4p").count(), 1, "{note}");
+        let warned = note.find("ns4p").expect("the warning is there");
+        let listed = note.find("replaces").expect("and so are the destinations");
+        assert!(warned < listed, "the warning comes first:\n{note}");
+    }
+
+    /// A jump opens whatever the slot is inside, selects it, and is spent. A jump at a
+    /// slot no walk has reached is spent too — otherwise it would hold a heading open
+    /// for as long as the instrument stayed attached.
+    #[test]
+    fn a_jump_lands_on_its_slot_and_is_spent_either_way() {
+        let ctx = egui::Context::default();
+        let workspace = Workspace::new(ctx.clone());
+        let mut device = Device::new(ctx.clone());
+        let mut browser = Browser::default();
+        let names: Vec<&str> = (0..50).map(|_| "Africa Split").collect();
+        device.pretend_scanned(ObjectClass::Program, 7, &names);
+        device.pretend_scanned(ObjectClass::Program, 8, &["Bass Manual"]);
+        let at = Location { bank: 7, slot: 0 };
+        device.pretend_focused(ObjectClass::Program, at);
+
+        let frame = |browser: &mut Browser| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::SidePanel::left("places").show(ctx, |ui| {
+                    let _ = browser.ui(ui, &workspace, &device);
+                });
+            });
+        };
+
+        browser.jump = Some((ObjectClass::Program, at));
+        frame(&mut browser);
+        assert!(browser.jump.is_none(), "the jump landed");
+        assert!(
+            browser.selection
+                == Some(Item::Slot {
+                    class: ObjectClass::Program,
+                    at
+                })
+        );
+
+        // Bank 12 was never read, so nothing will ever draw the row that clears this.
+        browser.jump = Some((ObjectClass::Program, Location { bank: 11, slot: 0 }));
+        frame(&mut browser);
+        assert!(browser.jump.is_none(), "and a jump to nowhere is spent");
+    }
+
+    /// One button for the whole column, and it asks for every folder.
+    #[test]
+    fn a_sync_reads_every_folder_again() {
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::new(ctx.clone());
+        let mut device = Device::new(ctx);
+        let mut log = crate::log::Log::default();
+        let mut tabs = Tabs::default();
+        let mut browser = Browser::default();
+        device.pretend_scanned(ObjectClass::Program, 7, &["Africa Split"]);
+
+        apply(
+            &mut browser,
+            vec![Act::Resync],
+            &mut workspace,
+            &mut device,
+            &mut tabs,
+            &mut log,
+        );
+        for class in BROWSED {
+            let progress = device.state.scan.progress(class);
+            assert!(
+                progress.is_some_and(|progress| progress.running),
+                "{}",
+                folder(class)
+            );
+        }
     }
 
     /// A folder holds exactly the kind named after it.

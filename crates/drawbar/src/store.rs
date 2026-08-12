@@ -29,11 +29,21 @@ const MAX_ENTITY: usize = 1024 * 1024;
 const BUDGET: usize = 3 * 1024 * 1024;
 
 /// Write the list. Called by eframe periodically and on the way out.
+///
+/// ⚠️ A view of a slot is written only when it holds changes. An untouched view is the
+/// instrument's own copy looked at in place, and persisting it would hand the operator a
+/// local copy they never asked to keep; an edited one is the **only** copy there is, and
+/// quitting with its tab open must not be how it goes.
+///
+/// What is written comes back kept — see [`load`].
 pub fn save(storage: &mut dyn eframe::Storage, workspace: &Workspace, log: &mut Log) {
     let mut out = format!("{VERSION}\n{}\n", workspace.next_id());
     let mut skipped = 0;
     let mut dropped = 0;
     for entity in workspace.entities() {
+        if !entity.kept && !crate::workspace::precious(entity) {
+            continue;
+        }
         if entity.bytes.len() > MAX_ENTITY {
             skipped += 1;
             continue;
@@ -72,6 +82,10 @@ fn plural(n: usize, tail: &str) -> String {
 }
 
 /// Read the list back, decoding and re-checking every asset on the way in.
+///
+/// Everything restored is on this computer. A view is a document with a tab over it and
+/// a slot under it, and at startup there is neither — so an edited view [`save`] kept
+/// comes back as the local asset it had already become in all but name.
 pub fn load(storage: &dyn eframe::Storage, workspace: &mut Workspace, log: &mut Log) {
     let Some(text) = storage.get_string(KEY) else {
         return;
@@ -269,6 +283,58 @@ mod tests {
         assert_eq!(
             after.export_name(id, ExportWhat::File).as_deref(),
             Some("Africa-Split.ne5p")
+        );
+    }
+
+    /// ⚠️ A view is the only copy of what it holds, so quitting with an edited one open
+    /// must not be how it goes. An untouched view is the instrument's own bytes and is
+    /// not written; an edited one is, and comes back as an asset on this computer,
+    /// because at startup there is no tab to view it from.
+    #[test]
+    fn an_edited_view_survives_a_session_and_an_untouched_one_does_not() {
+        use crate::workspace::Fresh;
+
+        let (mut before, mut log) = workspace();
+        let bytes = {
+            let id = before.create(Fresh::Program, &mut log).unwrap();
+            let bytes = before.get(id).unwrap().bytes.clone();
+            before.remove(id, &mut log);
+            bytes
+        };
+        let at = |slot| Location { bank: 6, slot };
+        let view = |workspace: &mut Workspace, slot, log: &mut Log| {
+            workspace.view(
+                format!("view-{slot}.ne5p"),
+                Origin::Device {
+                    class: ObjectClass::Program,
+                    at: at(slot),
+                },
+                bytes.clone(),
+                log,
+            )
+        };
+        let edited = view(&mut before, 0, &mut log);
+        let owed = view(&mut before, 1, &mut log);
+        let untouched = view(&mut before, 2, &mut log);
+        let held = before.get(edited).unwrap().bytes.clone();
+        before.replace_bytes(edited, [held, vec![0]].concat(), &mut log);
+        before.mark_pending(owed, true);
+
+        let mut store = Fake::default();
+        save(&mut store, &before, &mut log);
+        let (mut after, mut log) = workspace();
+        load(&store, &mut after, &mut log);
+
+        assert!(after.get(untouched).is_none(), "the slot still has it");
+        let restored: Vec<u64> = after.listed().map(|e| e.id).collect();
+        assert_eq!(restored, vec![edited, owed]);
+        assert_eq!(after.get(edited).unwrap().name, "view-0.ne5p");
+        // Restored is kept: there is no tab at startup, so nothing views anything.
+        assert!(!after.is_view(edited) && !after.is_view(owed));
+        // And the slot it came off is still recorded, so it can still go back.
+        assert_eq!(
+            after.get(owed).unwrap().origin.slot(),
+            Some((ObjectClass::Program, at(1)))
         );
     }
 

@@ -84,12 +84,17 @@ impl Link {
                     return;
                 }
             };
+            // ⚠️ The desktop reads the identity over vendor control transfers on
+            // endpoint 0. WebUSB can issue one, but nothing in `nord_usb`'s web
+            // transport does, so the browser build shows none of it rather than a guess
+            // at any of it.
             let card = DeviceCard {
-                // ⚠️ The desktop reads this over a vendor control transfer on endpoint 0.
-                // WebUSB can issue one, but nothing in `nord_usb`'s web transport does,
-                // so the browser build shows no firmware rather than a guess at one.
+                build: None,
                 firmware: None,
+                interface: None,
+                kind: None,
                 manufacturer: device.manufacturer_name(),
+                max_transfer: None,
                 product: device
                     .product_name()
                     .unwrap_or_else(|| "unnamed device".into()),

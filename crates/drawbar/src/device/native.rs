@@ -89,23 +89,28 @@ fn open() -> Result<(DeviceCard, UsbTransport), String> {
         .next()
         .ok_or("no Clavia device found — is the instrument awake and on a data cable?")?;
 
-    if !info.interfaces().any(|i| i.class() == 0xff) {
+    let Some(interface) = info.interfaces().find(|i| i.class() == 0xff) else {
         return Err(format!(
             "{} exposes no vendor interface; this tool cannot drive it",
             info.product_string().unwrap_or("the attached device"),
         ));
-    }
+    };
+    let interface = interface.interface_number();
 
     let transport = UsbTransport::open(&info).map_err(|e| e.to_string())?;
     // Endpoint 0, outside the bulk protocol and outside any session, so it is answerable
     // here and on an instrument that has stopped serving the protocol entirely. A device
     // that will not answer is still a device this app can drive, so a failure costs the
-    // version line and nothing else.
-    let firmware = transport.identity().ok().map(|id| id.firmware);
+    // identity lines and nothing else.
+    let identity = transport.identity().ok();
 
     let card = DeviceCard {
-        firmware,
+        build: identity.map(|id| id.build),
+        firmware: identity.map(|id| id.firmware),
+        interface: Some(interface),
+        kind: identity.map(|id| id.kind),
         manufacturer: info.manufacturer_string().map(str::to_string),
+        max_transfer: identity.map(|id| id.max_transfer),
         product: info
             .product_string()
             .unwrap_or("unnamed device")
