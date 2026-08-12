@@ -410,6 +410,9 @@ pub struct Panel {
     pub extern_midi_cc_number: Level,
     #[bits(1455..=1461)]
     pub extern_midi_cc_value: Level,
+    /// ⚠️ The three morph slots below name an `extern_midi_cc` this body does not declare,
+    /// so they bind to nothing. `extern_midi_cc_value` is the parameter beside them and
+    /// the likely one they move; inferred from placement, not confirmed on hardware.
     #[bits(1462..=1469)]
     pub extern_midi_cc_wheel: MorphTarget,
     #[bits(1470..=1477)]
