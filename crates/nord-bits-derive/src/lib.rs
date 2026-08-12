@@ -50,6 +50,13 @@
 //! **Paths.** A nested field registers its children under its own name:
 //! `center_panel.transpose`. A leaf registers under its own name alone.
 //!
+//! **Names carry two relations the type cannot.** A registered leaf named `x_wheel`,
+//! `x_aftertouch` or `x_ctrl_pedal` beside a registered `x` is that parameter's morph
+//! slot, and one named `…_N` is drawbar N of a register. Both are applied to the field's
+//! `ControlKind`, which honours whichever it has a use for and ignores the other — so a
+//! field named like one of these but typed as something else is unaffected, and a morph
+//! slot with no parameter beside it binds to nothing rather than to a guess.
+//!
 //! Only usable inside `nord-format`: generated code names `crate::bits`,
 //! `crate::cbin`, `crate::error`, `crate::layout` and `crate::fields`.
 
@@ -233,6 +240,33 @@ fn map_table(mut rows: Vec<MapRow>) -> Vec<String> {
     lines
 }
 
+/// The suffixes a morph slot's name ends in, one per performance control.
+const MORPH_SUFFIXES: [&str; 3] = ["_wheel", "_aftertouch", "_ctrl_pedal"];
+
+/// The parameter a slot named `x_wheel` morphs, when the body registers an `x`.
+///
+/// The convention is the formats' own and it is systematic, so binding here costs one
+/// pass over the field list and saves every caller a table of names. A slot whose
+/// parameter is not beside it binds to nothing rather than to a guess.
+fn morphed_parent<'a>(field: &str, registered: &[&'a str]) -> Option<&'a str> {
+    let stem = MORPH_SUFFIXES
+        .iter()
+        .find_map(|suffix| field.strip_suffix(suffix))?;
+    registered.iter().copied().find(|&name| name == stem)
+}
+
+/// The drawbar position a name ending in `_N` declares — 1 is the leftmost bar.
+///
+/// Applied to every leaf and honoured only by a drawbar, so a field that ends in a digit
+/// for some other reason keeps whatever its type said.
+fn trailing_ordinal(field: &str) -> Option<u8> {
+    let stem = field.trim_end_matches(|c: char| c.is_ascii_digit());
+    if !stem.ends_with('_') {
+        return None;
+    }
+    field[stem.len()..].parse().ok()
+}
+
 /// The ranges of `0..bits` no field claims.
 fn unclaimed(claimed: &[(u32, u32)], bits: u32) -> Vec<(u32, u32)> {
     let mut sorted = claimed.to_vec();
@@ -287,6 +321,19 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
             "a body must be a struct with named fields",
         ));
     };
+
+    // Every registered leaf's name, for the one relation a field's own declaration cannot
+    // state: which parameter a morph slot belongs to. A private field is not in the
+    // registry for a caller to resolve, and a nested body registers a path prefix rather
+    // than a value, so neither is a parameter anything can morph.
+    let registered: Vec<String> = named
+        .named
+        .iter()
+        .filter(|f| matches!(f.vis, syn::Visibility::Public(_)))
+        .filter(|f| f.attrs.iter().any(|a| a.path().is_ident("bits")))
+        .filter_map(|f| f.ident.as_ref().map(Ident::to_string))
+        .collect();
+    let registered: Vec<&str> = registered.iter().map(String::as_str).collect();
 
     let mut claimed: Vec<(u32, u32, &Ident)> = Vec::new();
     let mut rows: Vec<MapRow> = Vec::new();
@@ -454,13 +501,23 @@ fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
                 value: ::std::format!("{:?}", &self.#ident),
             });
         });
+        // What the type cannot know, taken from the field's own name and applied to the
+        // kinds that have a use for it — every other kind ignores the refinement.
+        let mut control = quote! { <#ty as crate::bits::Packed>::CONTROL };
+        if let Some(parent) = morphed_parent(&path, &registered) {
+            control = quote! { #control.morphing(#parent) };
+        }
+        if let Some(rank) = trailing_ordinal(&path) {
+            control = quote! { #control.ranked(#rank) };
+        }
+
         specs.push(quote! {
             out.push(crate::fields::FieldSpec {
                 name: #path.to_string(),
                 placement: #placement,
                 width: #width,
                 legal: || crate::fields::legal_values::<#ty>(#width),
-                control: <#ty as crate::bits::Packed>::CONTROL,
+                control: #control,
             });
         });
         // The parse is the type's, so a value it cannot hold fails here rather
@@ -670,6 +727,39 @@ mod tests {
                 "| `0x02` bits 4..0 | `19..=23` | — | *unclaimed* |",
             ],
         );
+    }
+
+    /// The binding is by name, and only to a parameter the body actually registers.
+    #[test]
+    fn a_morph_slot_binds_to_the_parameter_beside_it() {
+        let registered = ["organ_a_volume", "drawbar_1", "delay_tempo"];
+        assert_eq!(
+            morphed_parent("organ_a_volume_ctrl_pedal", &registered),
+            Some("organ_a_volume"),
+        );
+        assert_eq!(
+            morphed_parent("drawbar_1_wheel", &registered),
+            Some("drawbar_1")
+        );
+        // No such parameter in this body, and no suffix at all.
+        assert_eq!(morphed_parent("piano_a_volume_wheel", &registered), None);
+        assert_eq!(morphed_parent("delay_tempo", &registered), None);
+        // ⚠️ A mangled name is not a morph slot: the Stage 2 has a
+        // `…_wheel_o_delay_on` whose suffix is `_on`.
+        assert_eq!(
+            morphed_parent("delay_tempo_wheel_o_delay_on", &registered),
+            None
+        );
+    }
+
+    #[test]
+    fn an_ordinal_is_read_off_the_end_of_a_name() {
+        assert_eq!(trailing_ordinal("drawbar_1"), Some(1));
+        assert_eq!(trailing_ordinal("organ_a_drawbar_9"), Some(9));
+        assert_eq!(trailing_ordinal("b3_preset1_drawbars"), None);
+        assert_eq!(trailing_ordinal("b3_bass_bar1"), None);
+        assert_eq!(trailing_ordinal("kb_zones_1_2_split_point"), None);
+        assert_eq!(trailing_ordinal("gain"), None);
     }
 
     #[test]

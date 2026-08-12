@@ -15,7 +15,7 @@ use super::program::{
     SynthVibrato, SynthVoice,
 };
 use crate::cbin::{self, Cbin};
-use crate::components::{Frequency, Level, LibraryRef, MorphTarget, Rate, Time};
+use crate::components::{Frequency, Level, MorphTarget, Rate, SampleRef, Time};
 use crate::error::Error;
 use crate::types::{RangedU16, RangedU8};
 use std::io::{Read, Seek};
@@ -140,7 +140,7 @@ pub struct SynthPreset {
     #[bits(363..=364)]
     pub synth_amp_env_velocity: SynthAmpEnvVelocity,
     #[bits(365..=396)]
-    pub synth_sample_id: LibraryRef,
+    pub synth_sample_id: SampleRef,
     #[bits(397..=397)]
     pub synth_fast_attack: bool,
 }

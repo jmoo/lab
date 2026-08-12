@@ -34,25 +34,32 @@ pub type Bank = bank::Bank<Cbin<Song>, Location>;
 /// The container header is never transmitted over USB — the device sends only
 /// this body — so the version is echoed into bits the wire side can see. ⚠️ It
 /// must be the *read* version, never a constant: the eight factory demo songs
-/// are version 0, and stamping 1 here silently rewrites them.
+/// are version 0, and stamping 1 here silently rewrites them. It stays private
+/// for that reason: the header holds the same number, nothing but a read sets
+/// either, and a registry write would move one copy and not the other.
 #[nord_bits_derive::bitbody(18)]
 pub struct Song {
     #[bits(0..=15)]
     version: u16,
     #[bits(16..=24)]
-    a: program::Location,
+    pub program_1: program::Location,
     #[bits(25..=33)]
-    b: program::Location,
+    pub program_2: program::Location,
     #[bits(34..=42)]
-    c: program::Location,
+    pub program_3: program::Location,
     #[bits(43..=51)]
-    d: program::Location,
+    pub program_4: program::Location,
 }
 
 impl Song {
     /// The four programs the song plays, in panel order.
     pub fn programs(&self) -> [program::Location; PROGRAM_COUNT] {
-        [self.a, self.b, self.c, self.d]
+        [
+            self.program_1,
+            self.program_2,
+            self.program_3,
+            self.program_4,
+        ]
     }
 
     pub fn get(&self, slot: u16) -> program::Location {
@@ -61,10 +68,10 @@ impl Song {
 
     pub fn set(&mut self, slot: u16, location: program::Location) {
         match slot {
-            0 => self.a = location,
-            1 => self.b = location,
-            2 => self.c = location,
-            3 => self.d = location,
+            0 => self.program_1 = location,
+            1 => self.program_2 = location,
+            2 => self.program_3 = location,
+            3 => self.program_4 = location,
             _ => panic!("no slot {slot}: a song holds {PROGRAM_COUNT} programs"),
         }
     }
@@ -84,16 +91,16 @@ pub fn new(
     version: u32,
     programs: [program::Location; PROGRAM_COUNT],
 ) -> Cbin<Song> {
-    let [a, b, c, d] = programs;
+    let [program_1, program_2, program_3, program_4] = programs;
     Cbin {
         header: Header::new(FORMAT, location.inner(), version),
         body: Song {
             raw: [0; BODY_LEN],
             version: version as u16,
-            a,
-            b,
-            c,
-            d,
+            program_1,
+            program_2,
+            program_3,
+            program_4,
         },
     }
 }
@@ -197,6 +204,36 @@ mod tests {
             assert_eq!(back.header.version, version);
             assert_eq!(back.get(0), song.get(0));
         }
+        Ok(())
+    }
+
+    /// A set list is editable through the registry, like every other decoded body: the
+    /// four slots are fields, and a write through one lands in a file that reads back.
+    #[test]
+    fn a_slot_is_settable_by_path() -> Result<(), Error> {
+        let mut song = new((0, 1).try_into()?, 0, [(1, 2).try_into()?; PROGRAM_COUNT]);
+
+        let paths: Vec<String> = song.body.fields().into_iter().map(|f| f.path).collect();
+        assert_eq!(
+            paths,
+            ["program_1", "program_2", "program_3", "program_4"],
+            // ⚠️ The version echo is deliberately not among them — see `Song`.
+        );
+        assert_eq!(song.body.fields()[0].value, "(1, 2)");
+
+        song.body.set_field("program_3", "(5, 20)").unwrap();
+        assert_eq!(song.get(2), (5, 20));
+        // A location the bank space does not hold is refused, not wrapped.
+        assert!(song.body.set_field("program_3", "(8, 0)").is_err());
+
+        let mut bytes = Vec::new();
+        song.write_to(&mut Cursor::new(&mut bytes)).unwrap();
+        let back = read_from(&mut Cursor::new(&mut bytes)).unwrap();
+        assert_eq!(back.get(2), (5, 20));
+        // The write went through the field, so the version echo the device reads is
+        // still the one the file came in with.
+        assert_eq!(back.header.version, 0);
+        assert_eq!(u16::from_be_bytes(bytes[0x2c..0x2e].try_into().unwrap()), 0);
         Ok(())
     }
 
