@@ -48,14 +48,6 @@ lib'.composeManyExtensions [
         };
       });
 
-    nord-cli = prev.lib.addMetaAttrs { mainProgram = "nord"; } prev.nord-cli;
-
-    # Private repository of clavia nord files to test nord-format against
-    nord-corpus = builtins.fetchGit {
-      rev = "eeaede60043b236676c106931d8456c0de54a6e5";
-      url = "git+ssh://git@github.com/jmoo/nord-corpus.git";
-    };
-
     nudelta = inputs.nudelta.packages.${prev.stdenv.hostPlatform.system}.default;
 
     open-bamboo-networking = final.callPackage ./pkgs/open-bamboo-networking { };

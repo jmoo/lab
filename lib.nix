@@ -117,10 +117,9 @@ in
     # crates set `version.workspace = true`, which isn't a string).
     # Test-only Cargo features are declared by the crate itself, under
     # `[package.metadata.nix] testFeatures = [ … ]`, so adding a crate still needs no
-    # wiring here. This matters more than it looks: `nord-usb`'s golden replay tests are
-    # `#![cfg(feature = "replay")]` and `replay` is not a default feature, so without
-    # this the packaged build compiles them out and reports a green check having run
-    # none of them.
+    # wiring here. This matters more than it looks: a `#![cfg(feature = …)]` test suite
+    # whose feature is not a default would otherwise be compiled out, and the packaged
+    # build would report a green check having run none of it.
     mkRustCrate =
       pkgs: workspace: member: name:
       let

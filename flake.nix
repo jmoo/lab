@@ -1,14 +1,5 @@
 {
   inputs = {
-    # Rust toolchains with per-target std libraries. nixpkgs' rustc ships only the
-    # host target plus wasm32, which is not enough to cross-compile nord-usb to
-    # Windows/Linux. fenix exposes packages per-system, so this stays scoped to the
-    # Rust builds and never touches any host's overlay set.
-    fenix = {
-      inputs.nixpkgs.follows = "nixpkgs";
-      url = "github:nix-community/fenix";
-    };
-
     flake-parts.url = "github:hercules-ci/flake-parts";
 
     home-manager = {
@@ -57,24 +48,9 @@
         perSystem =
           { pkgs, ... }:
           {
-            # Test nord-format against real clavia nord files.
-            # This requires access to a private repository (jmoo/nord-corpus)
-            checks.nord-format-corpus = pkgs.nord-format.overrideAttrs (old: {
-              NORD_CORPUS_DIR = "${pkgs.nord-corpus}/ne5";
-              NORD_CORPUS_ROOT = "${pkgs.nord-corpus}";
-              cargoTestFlags = old.cargoTestFlags ++ [
-                "--features"
-                "corpus"
-              ];
-              doCheck = true;
-            });
-
             packages = {
               inherit (pkgs)
                 anki-tool
-                nord-cli
-                nord-format
-                nord-usb
                 open-bamboo-networking
                 ;
             };

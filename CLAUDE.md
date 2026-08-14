@@ -153,17 +153,7 @@ Applies to Rust, shell and nix alike.
 - Restating the next line.
 - Narrating the work: "now handle the edge case", "fixed the bug where…".
 
-**Mark provenance.** In the reverse-engineered crates (`crates/nord-*`) a guess presented as a fact costs hours downstream. Three states, three phrases:
-
-```rust
-// Confirmed on hardware.
-// Inferred from specimens; not confirmed on hardware.
-// Unexplained: real programs hold this, and the panel cannot produce it.
-```
-
-Never launder an inference into a statement by dropping the qualifier. Keep counts and dates out — the corpus grows and the comment silently goes wrong. Arithmetic that *shows* an encoding is not a measurement and is welcome: `// 43/127*10 = 3.39, and the panel reads 3.4`.
-
-**Don't reference the notes vault.** The RFCs and format notes are private; this repo is public, so `// see RFC-0001` is a dead pointer to every reader outside the vault. If a reader needs the fact, put the fact in the code. Public references — an upstream issue or discussion — are fine.
+**Don't reference the notes vault.** The vault is private; this repo is public, so a comment pointing at a vault note is a dead pointer to every reader outside it. If a reader needs the fact, put the fact in the code. Public references — an upstream issue or discussion — are fine.
 
 **`///` vs `//`**
 
