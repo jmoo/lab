@@ -191,8 +191,14 @@ in
     # hyprlock currently segfaults on asahi; use swaylock instead (see asahi.home).
     hyprlock.enable = false;
 
-    # Darwin-only feature.
+    # Darwin-only features.
     iterm2.enable = true;
+    mflux.enable = true;
+
+    ollama = {
+      enable = true;
+      models = [ "qwen3.8:27b-q8_0" ];
+    };
 
     shell.enable = true;
     source = "/home/jmoore/Repos/jmoo/lab";

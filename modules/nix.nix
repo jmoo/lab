@@ -3,7 +3,10 @@ let
   inherit (lib'.lab) mkHostModule;
 
   nix = {
-    nix.settings.experimental-features = "nix-command flakes";
+    nix.settings.experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
   };
 in
 {
