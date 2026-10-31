@@ -19,6 +19,7 @@ Playground for personal projects and NixOS / nix-darwin config for my machines.
 |---|------|-------------|
 | 🎴 | [anki-tool](crates/anki-tool/README.md) | CLI for querying AnkiConnect, designed for AI agent consumption |
 | 🧩 | [vscode-nix-extensions](pkgs/vscode-nix-extensions/README.md) | Generate VS Code extensions from Nix expressions |
+| 🏠 | [jmoo.io](sites/jmoo.io) | Personal home page |
 
 #### Graduated 
 
