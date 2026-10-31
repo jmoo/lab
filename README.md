@@ -34,6 +34,7 @@ the custom domain in Pages settings and do not require a `CNAME` file.
 |---|------|-------------|
 | 🎴 | [anki-tool](crates/anki-tool/README.md) | CLI for querying AnkiConnect, designed for AI agent consumption |
 | 🧩 | [vscode-nix-extensions](pkgs/vscode-nix-extensions/README.md) | Generate VS Code extensions from Nix expressions |
+| 🏠 | [jmoo.io](sites/jmoo.io) | Personal home page |
 
 #### Graduated 
 
