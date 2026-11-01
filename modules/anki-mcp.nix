@@ -42,7 +42,12 @@ in
 
       config = mkIf cfg.enable (
         forLinux (
-          { pkgs, utils, ... }:
+          {
+            config,
+            pkgs,
+            utils,
+            ...
+          }:
           let
             anki = pkgs.anki.withAddons [
               (pkgs.ankiAddons.anki-connect.withConfig {
@@ -185,6 +190,12 @@ in
                 };
                 wantedBy = [ "timers.target" ];
               };
+
+              # ⚠️ Unit conditions are checked before StateDirectory is created.
+              tmpfiles.rules = [
+                "d /etc/anki-mcp 0700 root root - -"
+                "d ${dataDirectory} 0700 ${user} ${config.users.users.${user}.group} - -"
+              ];
             };
           }
         )

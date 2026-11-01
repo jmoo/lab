@@ -46,13 +46,14 @@ runtime API key remain outside the repository and Nix store.
 These steps happen after deploying the configuration; building the flake does
 not create a tunnel, link a ChatGPT account, or sign in to AnkiWeb. Services skip
 startup until their provisioning files exist.
+The module creates `/var/lib/anki-headless` for the host user and
+`/etc/anki-mcp` for root, both with mode `0700`, during activation and boot.
 
 1. In lynx's desktop session, close any running Anki instance. Only one process
-   on the host can listen on port 8765. Create the service's private directory
-   as the logged-in host user:
+   on the host can listen on port 8765. Open the managed profile as the
+   logged-in host user:
 
    ```sh
-   sudo install -d -m 0700 -o "$USER" /var/lib/anki-headless
    anki -b /var/lib/anki-headless -p 'User 1'
    ```
 
@@ -81,7 +82,6 @@ startup until their provisioning files exist.
    key in command arguments, shell history, or chat:
 
    ```sh
-   sudo install -d -m 0700 /etc/anki-mcp
    sudo install -m 0600 /dev/null /etc/anki-mcp/api-key
    sudo install -m 0600 /dev/null /etc/anki-mcp/tunnel.env
    sudoedit /etc/anki-mcp/api-key /etc/anki-mcp/tunnel.env
