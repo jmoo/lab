@@ -18,6 +18,8 @@ in
       nvidia = true;
     };
 
+    nord.enable = true;
+
     obsidian.sync = {
       enable = true;
       vaults = [ "/home/jmoore/Repos/jmoo/notes" ];
