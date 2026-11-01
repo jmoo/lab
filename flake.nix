@@ -50,8 +50,10 @@
           {
             packages = {
               inherit (pkgs)
+                anki-mcp
                 anki-tool
                 open-bamboo-networking
+                tunnel-client
                 ;
             };
           };
