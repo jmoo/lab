@@ -32,6 +32,7 @@ struct RequiredDeck {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct LimitedDeck {
+    /// Exact Anki deck name, including parent decks. Omit for the collection.
     deck: Option<String>,
     /// Maximum cards, from 1 to 100. Defaults to 20.
     limit: Option<u32>,
@@ -79,6 +80,7 @@ enum Lens {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Hard {
+    /// Exact Anki deck name, including parent decks. Omit for the collection.
     deck: Option<String>,
     /// Auto uses retrievability on FSRS and recent failures on SM-2.
     by: Option<Lens>,
@@ -268,6 +270,22 @@ async fn read_limited(
     Ok(bytes)
 }
 
+async fn read_truncated(
+    mut reader: impl tokio::io::AsyncRead + Unpin,
+    max: usize,
+) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    (&mut reader)
+        .take(max as u64)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::io::copy(&mut reader, &mut tokio::io::sink())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(bytes)
+}
+
 async fn execute(
     program: &PathBuf,
     args: Vec<String>,
@@ -286,7 +304,7 @@ async fn execute(
         let stderr = child.stderr.take().unwrap();
         let (out, err, status) = tokio::try_join!(
             read_limited(stdout, MAX_OUTPUT),
-            read_limited(stderr, 16 * 1024),
+            read_truncated(stderr, 16 * 1024),
             async { child.wait().await.map_err(|e| e.to_string()) }
         )?;
         if !status.success() {
@@ -295,7 +313,12 @@ async fn execute(
                 String::from_utf8_lossy(&err)
             ));
         }
-        serde_json::from_slice(&out).map_err(|e| format!("anki-tool returned invalid JSON: {e}"))
+        serde_json::from_slice(&out).map_err(|e| {
+            format!(
+                "anki-tool returned invalid JSON: {e}; stderr: {}",
+                String::from_utf8_lossy(&err).trim()
+            )
+        })
     };
     tokio::time::timeout(deadline, work).await.map_err(|_| {
         "Anki query timed out; narrow the query and check Anki is responsive".to_string()
@@ -333,12 +356,11 @@ impl ServerHandler for AnkiServer {
     ) -> Result<CallToolResponse, ErrorData> {
         let args = command_args(&request.name, request.arguments.unwrap_or_default())
             .map_err(|e| ErrorData::invalid_params(e, None))?;
-        let Ok(_permit) = self.permit.try_acquire() else {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(
-                "Anki is busy; retry this query after the current call finishes",
-            )])
-            .into());
-        };
+        let _permit = self
+            .permit
+            .acquire()
+            .await
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         match execute(&self.program, args, TIMEOUT).await {
             Ok(value) => {
                 Ok(CallToolResult::success(vec![ContentBlock::text(value.to_string())]).into())
@@ -438,6 +460,7 @@ mod tests {
     async fn bounded_reads_reject_oversized_responses() {
         assert_eq!(read_limited(&b"1234"[..], 4).await.unwrap(), b"1234");
         assert!(read_limited(&b"12345"[..], 4).await.is_err());
+        assert_eq!(read_truncated(&b"12345"[..], 4).await.unwrap(), b"1234");
     }
 
     #[cfg(unix)]
@@ -454,10 +477,19 @@ mod tests {
             .await
             .unwrap_err()
             .contains("unavailable"));
-        assert!(run("printf not-json", TIMEOUT)
+        let invalid = run("printf why >&2; printf not-json", TIMEOUT)
             .await
-            .unwrap_err()
-            .contains("invalid JSON"));
+            .unwrap_err();
+        assert!(invalid.contains("invalid JSON") && invalid.contains("why"));
+        assert_eq!(
+            run(
+                "head -c 20000 /dev/zero | tr '\\0' x >&2; printf '{}'",
+                TIMEOUT
+            )
+            .await
+            .unwrap(),
+            json!({})
+        );
         assert!(run("exec sleep 30", Duration::from_millis(30))
             .await
             .unwrap_err()

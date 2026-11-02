@@ -23,9 +23,9 @@ in
           description = "Provisioned Anki profile under /var/lib/anki-headless";
           type = types.str;
         };
-        syncInterval = mkOption {
-          default = "5min";
-          description = "Interval between AnkiWeb syncs; null disables automatic syncing";
+        syncCalendar = mkOption {
+          default = "*:0/5";
+          description = "systemd calendar expression for AnkiWeb syncs; null disables automatic syncing";
           type = types.nullOr types.str;
         };
         tunnelApiKeyFile = mkOption {
@@ -79,9 +79,7 @@ in
           {
             environment.systemPackages = [
               anki
-              pkgs.anki-mcp
               pkgs.anki-tool
-              pkgs.tunnel-client
             ];
 
             systemd = {
@@ -95,12 +93,12 @@ in
                     QT_QPA_PLATFORM = "xcb";
                     QTWEBENGINE_CHROMIUM_FLAGS = "--disable-gpu";
                   };
+                  # ⚠️ Another Anki on 8765 would pass ExecStartPost against the wrong profile.
                   preStart = ''
-                    ${pkgs.python3}/bin/python - <<'PY'
-                    import socket
-                    with socket.socket() as listener:
-                        listener.bind(("127.0.0.1", 8765))
-                    PY
+                    if [ -n "$(${pkgs.iproute2}/bin/ss -Hltn 'sport = :8765')" ]; then
+                      echo 'Port 8765 is in use; close the other Anki instance' >&2
+                      exit 1
+                    fi
                   '';
                   serviceConfig = {
                     ExecStart = utils.escapeSystemdExecArgs [
@@ -129,7 +127,7 @@ in
                   wants = [ "network-online.target" ];
                 };
 
-                anki-headless-sync = mkIf (cfg.syncInterval != null) {
+                anki-headless-sync = mkIf (cfg.syncCalendar != null) {
                   after = [ "anki-headless.service" ];
                   description = "Sync the managed Anki profile with AnkiWeb";
                   requires = [ "anki-headless.service" ];
@@ -182,12 +180,9 @@ in
                 };
               };
 
-              timers.anki-headless-sync = mkIf (cfg.syncInterval != null) {
+              timers.anki-headless-sync = mkIf (cfg.syncCalendar != null) {
                 description = "Periodically sync the managed Anki profile";
-                timerConfig = {
-                  OnBootSec = "2min";
-                  OnUnitInactiveSec = cfg.syncInterval;
-                };
+                timerConfig.OnCalendar = cfg.syncCalendar;
                 wantedBy = [ "timers.target" ];
               };
 

@@ -13,8 +13,8 @@ anki-mcp --anki-tool /absolute/path/to/anki-tool
 Without `--anki-tool`, the adapter resolves `anki-tool` from `PATH`. Its stdout
 is reserved for MCP messages. Tool calls return the CLI's JSON as text, with
 Anki failures reported as MCP tool errors. Calls are serialized; simultaneous
-calls receive a retryable busy error. Each subprocess has a 90-second deadline,
-a 1 MiB stdout limit, and a 16 KiB stderr limit. Queries, card lists, lookbacks,
+calls wait for the current one. Each subprocess has a 90-second deadline and a
+1 MiB stdout limit; stderr is truncated at 16 KiB. Queries, card lists, lookbacks,
 and card counts are validated before spawning a process. Subprocesses are killed
 on timeout or cancellation. Card text is untrusted data.
 
@@ -28,11 +28,15 @@ on Linux. Lynx enables this feature.
   a dedicated base directory at `/var/lib/anki-headless`. It checks that port
   8765 is free, waits for AnkiConnect readiness, and restarts on failure.
 - `anki-headless-sync.timer` syncs with AnkiWeb every five minutes. Set
-  `anki-mcp.syncInterval = null` to disable it. Sync failures requiring a GUI
-  decision must be resolved interactively.
+  `anki-mcp.syncCalendar` to another systemd calendar expression, or `null` to
+  disable it. Sync failures requiring a GUI decision must be resolved
+  interactively.
 - `anki-mcp-tunnel.service` runs the tunnel client as a separate dynamic user,
   which launches the MCP adapter and can reach AnkiConnect on loopback. It cannot
-  read the Anki profile or the host user's home directory.
+  open the profile files or the host user's home directory, but AnkiConnect is
+  unauthenticated and executes every action, including file export and import,
+  as the host user. The read-only guarantee is the adapter's tool surface, not
+  an OS boundary around the collection.
 
 AnkiConnect listens only on `127.0.0.1:8765`, with browser origins disabled. No
 firewall ports are opened. The tunnel health/admin listener is restricted to
@@ -93,7 +97,6 @@ The module creates `/var/lib/anki-headless` for the host user and
    CONTROL_PLANE_TUNNEL_ID=<the complete tunnel ID from Platform>
    ```
 
-   Optional `CONTROL_PLANE_ORGANIZATION_ID` belongs in the same environment file.
    Override `anki-mcp.tunnelApiKeyFile` and `anki-mcp.tunnelEnvironmentFile` when
    using a different private provisioning mechanism. Do not run the creation
    commands again when rotating credentials; edit the existing files instead.
