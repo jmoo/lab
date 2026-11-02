@@ -37,11 +37,13 @@ let
   base = {
     imports = [
       inputs.nixos-apple-silicon.nixosModules.apple-silicon-support
-      inputs.home-manager-asahi.nixosModules.home-manager
+      inputs.home-manager.nixosModules.home-manager
     ];
 
+    hardware.asahi.enable = true;
+
     # stateVersion is stateful — pin to the host's install version (25.05),
-    # independent of the pinned 25.11 nixpkgs.
+    # independent of the pinned nixpkgs.
     system.stateVersion = mkDefault "25.05";
   };
 in
