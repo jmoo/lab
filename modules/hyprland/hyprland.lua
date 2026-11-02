@@ -194,7 +194,7 @@ end
 
 hl.bind(mod .. " + T", hl.dsp.exec_cmd(terminal))
 hl.bind(mod .. " + Q", hl.dsp.window.close())
-hl.bind(mod .. " + R", hl.dsp.reload_config())
+hl.bind(mod .. " + R", hl.dsp.exec_cmd("hyprctl reload"))
 hl.bind(modCtrl .. " + delete", hl.dsp.exec_cmd("uwsm stop"))
 hl.bind(modCtrl .. " + backspace", hl.dsp.exec_cmd("uwsm stop"))
 hl.bind(mod .. " + F", hl.dsp.window.fullscreen())
