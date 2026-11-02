@@ -49,6 +49,23 @@ in
       nixos.home = module;
     };
 
+    # A variable the hyprland config files reference, on every Linux platform:
+    # `$name` in asahi's hyprlang config, a lua local in nixos's. `value` takes
+    # the home-manager module args.
+    hyprVar =
+      name: value:
+      let
+        mk = wrap: final.setFunctionArgs (args: wrap (value args)) (final.functionArgs value);
+      in
+      {
+        asahi.home = mk (v: {
+          wayland.windowManager.hyprland.settings."\$${name}" = v;
+        });
+        nixos.home = mk (v: {
+          wayland.windowManager.hyprland.settings.${name}._var = v;
+        });
+      };
+
     mkScripts =
       pkgs: dir:
       let

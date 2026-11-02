@@ -1,14 +1,14 @@
 { lib', ... }:
 let
-  inherit (lib'.lab) mkHostModule homeLinux;
-  inherit (lib') mkEnableOption mkIf;
+  inherit (lib'.lab) mkHostModule homeLinux hyprVar;
+  inherit (lib') mkEnableOption mkIf mkMerge;
 in
 {
   options.lab.hosts = mkHostModule (
     { config, ... }:
     {
-      config = mkIf config.ulauncher.enable (
-        homeLinux (
+      config = mkIf config.ulauncher.enable (mkMerge [
+        (homeLinux (
           { pkgs, lib, ... }:
           let
             # uwsm-aware build so launched apps land in the right systemd scope.
@@ -30,13 +30,14 @@ in
                 PartOf = [ "graphical-session.target" ];
               };
             };
-
-            # $launcher keybind referenced by hyprland.conf.
-            wayland.windowManager.hyprland.settings."$launcher" =
-              "${lib.getExe pkgs.uwsm} app -- ${lib.getExe ulauncher}";
           }
-        )
-      );
+        ))
+
+        # `launcher` keybind in the hyprland config.
+        (hyprVar "launcher" (
+          { pkgs, lib, ... }: "${lib.getExe pkgs.uwsm} app -- ${lib.getExe pkgs.ulauncher-uwsm}"
+        ))
+      ]);
 
       options.ulauncher.enable = mkEnableOption "ulauncher application launcher";
     }
