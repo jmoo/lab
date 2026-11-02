@@ -28,10 +28,9 @@ let
       services.blueman.enable = true;
     };
 
-  # Home config for the hyprland session. `nvidia` adds GPU session variables;
-  # `lua` picks hyprland.lua over hyprland.conf.
+  # Home config for the hyprland session. `nvidia` adds GPU session variables.
   home =
-    { nvidia, lua }:
+    nvidia:
     {
       pkgs,
       lib,
@@ -64,7 +63,7 @@ let
         ]
       ];
 
-      # Variables the config files reference: `$name` in hyprlang, a local in lua.
+      # Locals hyprland.lua references.
       vars = {
         mod = "SUPER";
         modAlt = "SUPER+ALT";
@@ -72,23 +71,6 @@ let
         modShift = "SUPER+SHIFT";
         modShiftCtrl = "SUPER+SHIFT+CTRL";
         terminal = uwsm terminal;
-      };
-
-      hyprlang = {
-        extraConfig = builtins.readFile ./hyprland.conf;
-        settings = lib.mapAttrs' (name: lib.nameValuePair "\$${name}") vars // {
-          env = map (lib.concatStringsSep ",") env;
-        };
-      };
-
-      luaConfig = {
-        # ⚠️ Explicit: the default follows `home.stateVersion`, and below 26.05 that
-        # is hyprlang, which writes a hyprland.conf Hyprland ≥ 0.57 never reads.
-        configType = "lua";
-        extraConfig = builtins.readFile ./hyprland.lua;
-        settings = lib.mapAttrs (_: value: { _var = value; }) vars // {
-          env = map (pair: { _args = pair; }) env;
-        };
       };
     in
     {
@@ -112,12 +94,27 @@ let
       };
 
       wayland.windowManager.hyprland = {
+        # ⚠️ Explicit: the default follows `home.stateVersion`, and below 26.05 that
+        # is hyprlang, which writes a hyprland.conf Hyprland ≥ 0.57 never reads.
+        configType = "lua";
         enable = true;
+        extraConfig = builtins.readFile ./hyprland.lua;
+        settings = lib.mapAttrs (_: value: { _var = value; }) vars // {
+          env = map (pair: { _args = pair; }) env;
+          # Any other monitor; hosts override this with their own rules.
+          monitor = lib.mkDefault [
+            {
+              mode = "preferred";
+              output = "";
+              position = "auto";
+              scale = "auto";
+            }
+          ];
+        };
         # uwsm owns the systemd session, so disable home-manager's own unit.
         systemd.enable = false;
         xwayland.enable = true;
-      }
-      // (if lua then luaConfig else hyprlang);
+      };
 
       xdg = {
         mime.enable = true;
@@ -130,12 +127,8 @@ in
     { config, ... }:
     {
       config = mkIf config.hyprland.enable {
-        # Asahi's pinned Hyprland (and home-manager) predate lua config.
         asahi = {
-          home = home {
-            inherit (config.hyprland) nvidia;
-            lua = false;
-          };
+          home = home config.hyprland.nvidia;
           module = system;
         };
         # Companion desktop modules, on by default with hyprland.
@@ -143,10 +136,7 @@ in
         hyprlock.enable = mkDefault true;
         hyprpolkitagent.enable = mkDefault true;
         nixos = {
-          home = home {
-            inherit (config.hyprland) nvidia;
-            lua = true;
-          };
+          home = home config.hyprland.nvidia;
           module = system;
         };
         theme.enable = mkDefault true;

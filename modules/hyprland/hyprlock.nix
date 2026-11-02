@@ -1,31 +1,32 @@
 { lib', ... }:
 let
-  inherit (lib'.lab) mkHostModule homeLinux hyprVar;
-  inherit (lib') mkEnableOption mkIf mkMerge;
+  inherit (lib'.lab) mkHostModule homeLinux;
+  inherit (lib') mkEnableOption mkIf;
 in
 {
   options.lab.hosts = mkHostModule (
     { config, ... }:
     {
-      config = mkIf config.hyprlock.enable (mkMerge [
-        (homeLinux {
-          programs.hyprlock = {
-            enable = true;
-            extraConfig = builtins.readFile ./hyprlock.conf;
-          };
-        })
-
-        # `lock` keybind in the hyprland config.
-        (hyprVar "lock" (
+      config = mkIf config.hyprlock.enable (
+        homeLinux (
           {
             pkgs,
             lib,
             config,
             ...
           }:
-          "${lib.getExe pkgs.uwsm} app -- ${lib.getExe config.programs.hyprlock.package}"
-        ))
-      ]);
+          {
+            programs.hyprlock = {
+              enable = true;
+              extraConfig = builtins.readFile ./hyprlock.conf;
+            };
+
+            # `lock` keybind in hyprland.lua.
+            wayland.windowManager.hyprland.settings.lock._var =
+              "${lib.getExe pkgs.uwsm} app -- ${lib.getExe config.programs.hyprlock.package}";
+          }
+        )
+      );
 
       options.hyprlock.enable = mkEnableOption "hyprlock lock screen";
     }

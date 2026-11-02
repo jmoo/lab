@@ -70,7 +70,7 @@ in
 Push helpers (`lib.nix`): **system** → `forLinux` (nixos+asahi) / `forAll` (+darwin) set `.module`; **home** → `homeLinux` / `homeDarwin` set `.home`. For home on *all* platforms, set the host-level `home` option directly.
 
 Notes:
-- All `.home` for a platform merges into one home-manager eval, so modules compose — e.g. `ulauncher` and `hyprlock` each push their own `launcher`/`lock` variable into the `hyprland` module's settings via `lib.lab.hyprVar` (a lua local on nixos, a hyprlang `$name` on asahi, whose pinned Hyprland predates lua config). A feature can also default-enable companions (`hyprland` sets `waybar.enable = mkDefault true` etc.).
+- All `.home` for a platform merges into one home-manager eval, so modules compose — e.g. `ulauncher` and `hyprlock` each set their own `wayland.windowManager.hyprland.settings.launcher`/`.lock` lua local that the `hyprland` module's `hyprland.lua` references. A feature can also default-enable companions (`hyprland` sets `waybar.enable = mkDefault true` etc.).
 - Host-specific overrides go straight into the host's `home` / `<platform>.home` / `<platform>.module` — no `.common` indirection. One host, one user; no root.
 
 ### Directory layout
@@ -87,7 +87,7 @@ modules/               # flake-parts modules, auto-imported
   {nix,locale}.nix     #   always-on shared config (nix daemon; i18n/timezone)
   <feature>.nix        #   one file per feature toggle (ghostty, shell, …)
   <feature>/           #   multi-file features carry their non-.nix assets alongside
-                       #     (e.g. hyprland/ with its .lua/.conf/.json/.css)
+                       #     (e.g. hyprland/ with its .lua/.json/.css)
   devshell.nix         #   perSystem devShells.default (Rust toolchain for crates/)
   hosts/               #   one file per host (auto-imported like any module)
 keys/                  # ssh/nix pubkeys (builtins.readFile)
@@ -178,5 +178,5 @@ Format and protocol files legitimately run higher — the bytes genuinely need e
 ## Key details
 
 - **nixpkgs config + overlays** are top-level options (`nixpkgs.config` = `attrsOf anything`, `nixpkgs.overlays` = `listOf raw`) in `modules/nixpkgs.nix`, applied to every host platform **and** to `perSystem` pkgs/`legacyPackages` — one source of truth. (`overlays` must be `types.raw`: opaque, so the module system never forces the overlay functions, which would infinite-recurse via `option → pkgs → flake outputs → config → option`.) `allowUnfree = true` everywhere (incl. Asahi).
-- **Asahi** uses the pinned `nixos-apple-silicon` nixpkgs (25.11; intentionally not following nixpkgs). Its lib predates `lib.genAttrs'`, so the platform uses a dedicated era-matched `home-manager-asahi` input.
+- **Asahi** uses the pinned `nixos-apple-silicon` nixpkgs (intentionally not following nixpkgs: unstable kernel-panics on Apple Silicon).
 - **`system.stateVersion`** is stateful — pinned to `"25.05"` (install version), not the nixpkgs release. Don't bump casually.

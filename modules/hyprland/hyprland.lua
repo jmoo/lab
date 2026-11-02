@@ -1,6 +1,6 @@
--- Lua config for Hyprland on the nixos platform. `mod*`, `terminal` and (when
--- their modules are enabled) `launcher` / `lock` are locals that home-manager
--- emits ahead of this file.
+-- `mod*`, `terminal` and (when their modules are enabled) `launcher` / `lock`
+-- are locals that home-manager emits ahead of this file, alongside the host's
+-- `hl.monitor` rules.
 
 ----------------
 --- MONITORS ---
@@ -20,7 +20,6 @@ hl.monitor({
   position = "0x0",
   scale = "1",
 })
-hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })
 
 -------------------
 --- ENVIRONMENT ---
