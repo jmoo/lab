@@ -4,6 +4,7 @@ let
 in
 {
   lab.hosts.lynx = {
+    anki-mcp.enable = true;
     claude = {
       enable = true;
       skills.sensei = {
@@ -100,7 +101,6 @@ in
           };
 
           environment.systemPackages = with pkgs; [
-            anki
             brave
             btop
             dos2unix

@@ -1,5 +1,5 @@
 [workspace]
-members = ["anki-tool"]
+members = ["anki-mcp", "anki-tool"]
 resolver = "2"
 
 # Shared metadata for every crate in the monorepo. Individual crates inherit

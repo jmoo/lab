@@ -90,6 +90,8 @@ lib'.composeManyExtensions [
       })
     ];
 
+    tunnel-client = final.callPackage ./pkgs/tunnel-client { };
+
     ulauncher-uwsm = final.callPackage ./pkgs/ulauncher-uwsm { };
 
     vscode-extensions = prev.vscode-extensions // {

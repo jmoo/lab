@@ -2,6 +2,9 @@
 
 CLI for querying AnkiConnect, designed for AI agent consumption. All output is compact JSON to minimize token usage.
 
+For private ChatGPT access and a managed Anki instance on lynx, see
+[`anki-mcp`](../anki-mcp/README.md).
+
 > [!CAUTION]
 > ## 🚫 DO NOT USE THIS 🚫
 >
