@@ -33,25 +33,51 @@ in
 
           # HiDPI settings for retina display
           wayland.windowManager.hyprland.settings = {
-            "$lock" = "${lib.getExe pkgs.uwsm} app -- ${lib.getExe pkgs.swaylock}";
-
-            bindl = [
-              ",switch:on:Lid Switch,exec,systemctl suspend"
+            bind = [
+              {
+                _args = [
+                  "switch:on:Lid Switch"
+                  (lib.generators.mkLuaInline ''hl.dsp.exec_cmd("systemctl suspend")'')
+                  { locked = true; }
+                ];
+              }
             ];
 
-            env = [
-              "GDK_SCALE,2"
-              "QT_AUTO_SCREEN_SCALE_FACTOR,2"
-              "QT_ENABLE_HIGHDPI_SCALING,2"
-              "XCURSOR_SIZE,16"
-              "HYPRCURSOR_SIZE,16"
+            config.xwayland.force_zero_scaling = true;
+
+            env = map (pair: { _args = pair; }) [
+              [
+                "GDK_SCALE"
+                "2"
+              ]
+              [
+                "QT_AUTO_SCREEN_SCALE_FACTOR"
+                "2"
+              ]
+              [
+                "QT_ENABLE_HIGHDPI_SCALING"
+                "2"
+              ]
+              [
+                "XCURSOR_SIZE"
+                "16"
+              ]
+              [
+                "HYPRCURSOR_SIZE"
+                "16"
+              ]
             ];
+
+            lock._var = "${lib.getExe pkgs.uwsm} app -- ${lib.getExe pkgs.swaylock}";
 
             monitor = [
-              ", highres, auto, 2"
+              {
+                mode = "highres";
+                output = "";
+                position = "auto";
+                scale = "2";
+              }
             ];
-
-            xwayland.force_zero_scaling = true;
           };
 
           # Create global config files for chromium based apps

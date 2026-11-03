@@ -35,7 +35,6 @@ let
       pkgs,
       lib,
       config,
-      options,
       ...
     }:
     let
@@ -46,6 +45,33 @@ let
           lib.getExe config.programs.ghostty.package
         else
           lib.getExe pkgs.xterm;
+
+      env = [
+        [
+          "QT_QPA_PLATFORM"
+          "wayland"
+        ]
+      ]
+      ++ lib.optionals nvidia [
+        [
+          "LIBVA_DRIVER_NAME"
+          "nvidia"
+        ]
+        [
+          "__GLX_VENDOR_LIBRARY_NAME"
+          "nvidia"
+        ]
+      ];
+
+      # Locals hyprland.lua references.
+      vars = {
+        mod = "SUPER";
+        modAlt = "SUPER+ALT";
+        modCtrl = "SUPER+CTRL";
+        modShift = "SUPER+SHIFT";
+        modShiftCtrl = "SUPER+SHIFT+CTRL";
+        terminal = uwsm terminal;
+      };
     in
     {
       home.packages = with pkgs; [
@@ -68,37 +94,26 @@ let
       };
 
       wayland.windowManager.hyprland = {
+        # ⚠️ Explicit: the default follows `home.stateVersion`, and below 26.05 that
+        # is hyprlang, which writes a hyprland.conf Hyprland ≥ 0.57 never reads.
+        configType = "lua";
         enable = true;
-        extraConfig = builtins.readFile ./hyprland.conf;
-
-        settings = {
-          "$mod" = "SUPER";
-          "$modAlt" = "SUPER+ALT";
-          "$modCtrl" = "SUPER+CTRL";
-          "$modShift" = "SUPER+SHIFT";
-          "$modShiftCtrl" = "SUPER+SHIFT+CTRL";
-
-          "$terminal" = uwsm terminal;
-
-          env = [
-            "QT_QPA_PLATFORM,wayland"
-          ]
-          ++ lib.optionals nvidia [
-            "LIBVA_DRIVER_NAME,nvidia"
-            "__GLX_VENDOR_LIBRARY_NAME,nvidia"
+        extraConfig = builtins.readFile ./hyprland.lua;
+        settings = lib.mapAttrs (_: value: { _var = value; }) vars // {
+          env = map (pair: { _args = pair; }) env;
+          # Any other monitor; hosts override this with their own rules.
+          monitor = lib.mkDefault [
+            {
+              mode = "preferred";
+              output = "";
+              position = "auto";
+              scale = "auto";
+            }
           ];
         };
         # uwsm owns the systemd session, so disable home-manager's own unit.
         systemd.enable = false;
         xwayland.enable = true;
-      }
-      # ⚠️ Everything above is hyprlang, not lua: `extraConfig` is a `.conf` file and
-      # the `$var` settings are hyprlang syntax. Under `configType = "lua"` — the
-      # home-manager default from 26.05 on — both land in `hyprland.lua`, where
-      # neither is valid. Asahi's pinned home-manager predates the option, hence the
-      # presence check.
-      // lib.optionalAttrs (options.wayland.windowManager.hyprland ? configType) {
-        configType = "hyprlang";
       };
 
       xdg = {

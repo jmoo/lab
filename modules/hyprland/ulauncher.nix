@@ -31,8 +31,8 @@ in
               };
             };
 
-            # $launcher keybind referenced by hyprland.conf.
-            wayland.windowManager.hyprland.settings."$launcher" =
+            # `launcher` keybind in hyprland.lua.
+            wayland.windowManager.hyprland.settings.launcher._var =
               "${lib.getExe pkgs.uwsm} app -- ${lib.getExe ulauncher}";
           }
         )

@@ -21,8 +21,8 @@ in
               extraConfig = builtins.readFile ./hyprlock.conf;
             };
 
-            # $lock keybind referenced by hyprland.conf.
-            wayland.windowManager.hyprland.settings."$lock" =
+            # `lock` keybind in hyprland.lua.
+            wayland.windowManager.hyprland.settings.lock._var =
               "${lib.getExe pkgs.uwsm} app -- ${lib.getExe config.programs.hyprlock.package}";
           }
         )
